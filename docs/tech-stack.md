@@ -32,14 +32,17 @@
 
 ## 3. HTTP (仅 server side)
 
+> 2026-08-18: axum 0.7 → salvo 0.79 (宪法规格变更, 见 decision-log §12)
+
 | Crate | 版本 | 用途 |
 |---|---|---|
-| `axum` | 0.7 | HTTP server (跟 tonic 共享 tokio) |
-| `tower` | 0.5 | middleware |
-| `tower-http` | 0.6 | trace / cors / compression |
-| `hyper` | 1.x | (axum 传递依赖,不直接用) |
+| `salvo` | 0.79 | HTTP server (自带 hyper 1, 内置 OpenAPI 导出) |
+| ~~`axum`~~ | ❌ 不再使用 | 已被 salvo 替代, 见 decision-log §12 决策原因 |
+| ~~`tower`~~ | ❌ 不再使用 | salvo 自带 middleware, 不需要 tower |
+| ~~`tower-http`~~ | ❌ 不再使用 | trace / cors / compression 改用 salvo 中间件 |
+| ~~`hyper`~~ | (传递依赖) | salvo 内部用, 不直接依赖 |
 
-> **server 端**: axum 接 HTTP/1.1 + WebSocket (供将来 browser dashboard 用)
+> **server 端**: salvo 接 HTTP/1.1 + WebSocket (供将来 browser dashboard 用)
 > **client 端**: reqwest 0.12
 
 ---

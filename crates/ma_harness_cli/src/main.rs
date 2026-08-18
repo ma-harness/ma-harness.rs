@@ -1,7 +1,7 @@
 //! ma-harness CLI 入口 (`mah` 二进制)
 //!
 //! 7 个子命令 (Day 7-8 5 个 + Day 39 +2):
-//! - `start` — 起 server (tonic gRPC + axum HTTP)
+//! - `start` — 起 server (tonic gRPC + salvo HTTP)
 //! - `run` — 跑一次 agent (本地, 不连 server)
 //! - `plugins` — 列出已装载 plugin
 //! - `events` — 查 session 事件
@@ -37,7 +37,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// 启动 server (tonic gRPC + axum HTTP)
+    /// 启动 server (tonic gRPC + salvo HTTP)
     Start {
         /// gRPC 监听端口
         #[arg(long, default_value = "50051")]
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
     }
 }
 
-/// 真实起 server: tonic gRPC + axum HTTP, 后台 tokio 任务, ctrl-c 优雅退出
+/// 真实起 server: tonic gRPC + salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
 async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
     let log = EventLog::open_in_memory()?;
     let builder = ServerBuilder::with_stub(log);
@@ -129,7 +129,7 @@ async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
     let grpc_addr = format!("0.0.0.0:{}", grpc_port).parse()?;
     let http_addr = format!("0.0.0.0:{}", http_port).parse()?;
 
-    eprintln!("mah start: tonic gRPC on {}, axum HTTP on {}", grpc_addr, http_addr);
+    eprintln!("mah start: tonic gRPC on {}, salvo HTTP on {}", grpc_addr, http_addr);
 
     // tonic gRPC
     let grpc_server = tonic::transport::Server::builder()
@@ -137,9 +137,12 @@ async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
         .add_service(SessionServiceServer::new(session))
         .serve(grpc_addr);
 
-    // axum HTTP (Phase 1: /health + /version)
+    // salvo HTTP (Phase 1: /health + /version)
+    // TcpListener 异步 bind, acceptor 包成 Server::new(acceptor).serve(router)
+    use salvo::conn::TcpListener;
+    let acceptor = TcpListener::new(&http_addr).bind().await;
     let http_router = ma_harness_server::http::router();
-    let http_server = axum::Server::bind(&http_addr).serve(http_router.into_make_service());
+    let http_server = salvo::Server::new(acceptor).serve(http_router);
 
     // 并发跑两个 server, 等 ctrl-c
     tokio::select! {

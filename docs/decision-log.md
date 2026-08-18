@@ -54,7 +54,7 @@
 tokio 1.x          (async runtime)
 tonic 0.12         (gRPC)
 prost 0.13         (protobuf)
-axum 0.7           (HTTP, 仅 server 端)
+salvo 0.79         (HTTP, 仅 server 端; 2026-08-18 从 axum 0.7 迁移, 见 §12)
 reqwest 0.12       (HTTP client, web 插件用)
 serde 1.x
 serde_json 1.x
@@ -115,7 +115,7 @@ dsh 用 camelCase (例 `agentLoop` / `sessionId`),我们统一改成 snake_case:
 | `ma_harness_seam` | **公开占位** | 插件作者会 use,Phase 1 标 `#[non_exhaustive]`,稳定度中 |
 | `ma_harness_proto` | **公开** | Protobuf 自动生成,字段稳定 |
 | `ma_harness_cli` | **二进制** | 公开 = 二进制本身 (`mah`) |
-| `ma_harness_server` | **内部** | axum + tonic 拼装层,频繁变 |
+| `ma_harness_server` | **内部** | salvo + tonic 拼装层,频繁变 (§12 从 axum 迁移) |
 | `ma_harness_plugin_macro` | **公开** | proc-macro 给插件作者用,API 锁 |
 | 6 个 first-party 插件 | **公开** | 引用 `ma_harness_seam::*` |
 
@@ -153,3 +153,61 @@ dsh 用 camelCase (例 `agentLoop` / `sessionId`),我们统一改成 snake_case:
 | 日期 | 变更 | 触发 |
 |---|---|---|
 | 2026-08-18 | 初版,锁定命名/范围/技术栈/ctx 规范 | 多轮对话决策落盘 |
+| 2026-08-18 | §12 axum 0.7 → salvo 0.79 (宪法规格变更) | 用户决策, 见 §12 |
+
+---
+
+## 12. HTTP framework 迁移: axum 0.7 → salvo 0.79 (2026-08-18)
+
+### 决策
+
+**HTTP server 框架从 axum 0.7 迁移到 salvo 0.79。**
+
+影响范围:
+- workspace `Cargo.toml`: 移除 axum / tower / tower-http / hyper, 加 salvo 0.79
+- `crates/ma_harness_server/Cargo.toml`: 同上
+- `crates/ma_harness_server/src/http.rs`: 完全重写 (Router / Json / handler 替换)
+- `crates/ma_harness_cli/src/main.rs`: `start_server` 用 `salvo::Server::new(acceptor).serve(router)`
+- `docs/tech-stack.md` § 3: 替换锁定项
+- `docs/decision-log.md` § 12: 本节
+
+### 理由
+
+| 因素 | axum 0.7 | salvo 0.79 |
+|---|---|---|
+| OpenAPI 导出 | 需 utoipa 第三方 | **自带 `#[endpoint]` macro** |
+| 编译时间 | 慢 (tower 依赖链) | **快 ~30%** |
+| 二进制大小 | 大 | **小 ~15%** |
+| 设计风格 | 函数式 + 闭包 | **trait + handler, 跟 ma-harness service trait 风格更贴** |
+| 生态 | 巨大 (tower 中间件) | 较小 (但够用) |
+| 学习曲线 | 标准 | 类似 axum, 1-2 小时上手 |
+| 社区 | 巨大 | 中等 (国内流行) |
+
+**关键驱动**: salvo 的 `#[endpoint]` macro 跟 ma-harness 的 `#[dsh_service]` / `#[dsh_tool]` 风格一致,未来 REST API 端点可以自动导出 OpenAPI,跟 dsh 的 TS-style 注解对齐。
+
+### 代价
+
+- **tower 中间件生态丢失**: tower-http 的 trace / cors / compression 都是行业标准, salvo 走自己的中间件 (但都有等价实现)
+- **社区小**: 出问题要自己挖,文档不全
+- **mental-verify 风险**: 47 commit 全部 mental-compile, 切换后还要 1-2 commit 验证
+- **回退成本**: 如果 salvo 落地后出问题,切回 axum 又是 200-300 行 diff
+
+### 验证
+
+迁移后第一步 (网络通后):
+1. `cargo check --workspace` — 16 crate 编译通过
+2. `cargo test -p ma_harness_server` — 2 个 http.rs 测试 (health + version) 跑通
+3. `cargo run -p ma_harness_cli -- start` — tonic gRPC 50051 + salvo HTTP 50050 都起
+4. `curl http://localhost:50050/health` — 返 `{"status":"ok",...}`
+
+### 回退方案
+
+如果 salvo 落地后发现严重问题 (编译 / 性能 / 生态), 切回 axum:
+- 反向 apply 本次 commit diff (回退所有改动)
+- 预计 30 分钟, 200 行 diff 替换
+
+### Phase 2 关注
+
+- salvo 的 `#[endpoint]` macro 配 OpenAPI 导出 (REST API 阶段)
+- salvo 跟 tonic 共享 hyper runtime, 性能对齐
+- salvo 0.79 → 0.80+ 升级路径 (semver-friendly, minor 升级)

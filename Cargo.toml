@@ -54,11 +54,9 @@ prost-types = "0.13"
 tonic-build = "0.12"
 tonic-reflection = "0.12"
 
-# HTTP (server only)
-axum = "0.7"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "compression"] }
-hyper = { version = "1", features = ["full"] }
+# HTTP (server only) — 2026-08-18 axum → salvo (宪法规格变更, 见 decision-log §12)
+# salvo 自带 hyper 1, 编译比 axum 快, 内置 OpenAPI 导出 (#[endpoint] macro)
+salvo = { version = "0.79", features = ["serve", "hyper", "http1"] }
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }

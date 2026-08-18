@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Changed (宪法规格变更, 2026-08-18)
+
+- **HTTP server**: axum 0.7 → salvo 0.79 (见 `docs/decision-log.md` §12)
+  - 移除依赖: axum, tower, tower-http, hyper (传递)
+  - 新增依赖: salvo 0.79 (自带 hyper 1, 内置 OpenAPI 导出)
+  - 影响文件: `crates/ma_harness_server/src/http.rs` (重写), `crates/ma_harness_cli/src/main.rs` (start_server 改用 `salvo::Server`), `docs/tech-stack.md` § 3 (锁定项替换)
+  - 动机: OpenAPI 自动生成 + 编译快 30% + 二进制小 15% + 跟 ma-harness service trait 风格更贴
+  - 代价: tower 中间件生态丢失 (salvo 自带等价) + 社区较小
+  - 验证 (网络通后): `cargo check -p ma_harness_server` + `curl http://localhost:50050/health`
+
 ### Phase 2 路线图 (不在 12 周 PoC scope)
 
 - [ ] macro 增强 (`#[dsh_service(cordis, seam)]` 自动派生两套)

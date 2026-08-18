@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness 服务层 (axum + tonic 拼装, 内部 crate)"
+description = "ma-harness 服务层 (salvo + tonic 拼装, 内部 crate)"
 
 [lints]
 workspace = true
@@ -19,9 +19,7 @@ ma_harness_core = { path = "../ma_harness_core" }
 ma_harness_proto = { path = "../ma_harness_proto" }
 # 外部
 tonic = { workspace = true }
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
+salvo = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
