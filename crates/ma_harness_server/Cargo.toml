@@ -13,4 +13,29 @@ description = "ma-harness 服务层 (axum + tonic 拼装, 内部 crate)"
 workspace = true
 
 [dependencies]
-# Week 7-9 加 axum + tonic
+# 内部
+ma_harness_cordis = { path = "../ma_harness_cordis" }
+ma_harness_core = { path = "../ma_harness_core" }
+ma_harness_proto = { path = "../ma_harness_proto" }
+# 外部
+tonic = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-stream = "0.3"
+futures = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = { workspace = true }

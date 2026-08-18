@@ -17,4 +17,17 @@ name = "mah"
 path = "src/main.rs"
 
 [dependencies]
-# Week 7-9 加 clap + 引用 server
+# 内部
+ma_harness_cordis = { path = "../ma_harness_cordis" }
+ma_harness_core = { path = "../ma_harness_core" }
+ma_harness_seam = { path = "../ma_harness_seam" }
+ma_harness_proto = { path = "../ma_harness_proto" }
+ma_harness_plugin_hello = { path = "../../plugins/ma_harness_plugin_hello" }
+# 外部
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
