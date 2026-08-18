@@ -1,0 +1,15 @@
+schema_version: 1
+name: subagent
+version: 0.1.0
+description: 派生 ctx 跑子 agent (递归调用)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::SubagentPlugin
+seam:
+  tools: [spawn_agent]
+  services: [SubagentService]
+  listeners: [SessionStart, RunStart]
+  commands: []
+  handlers: []
+sandbox: {}

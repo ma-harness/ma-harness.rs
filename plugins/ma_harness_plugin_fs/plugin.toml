@@ -1,0 +1,22 @@
+schema_version: 1
+name: fs
+version: 0.1.0
+description: 文件系统读 / 写 (受 sandbox 限制)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::FsPlugin
+seam:
+  tools: [read_file, write_file, list_dir]
+  services: [FsService]
+  listeners: []
+  commands: []
+  handlers: []
+sandbox:
+  exec:
+    enabled: false
+  fs:
+    read: []
+    write: []
+  net:
+    egress: false

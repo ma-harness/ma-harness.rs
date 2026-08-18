@@ -1,0 +1,23 @@
+schema_version: 1
+name: bash
+version: 0.1.0
+description: 执行 shell 命令 (受 sandbox 限制)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::BashPlugin
+seam:
+  tools: [run_command]
+  services: [BashService]
+  listeners: []
+  commands: []
+  handlers: []
+sandbox:
+  exec:
+    enabled: true
+    max_runtime_ms: 30000
+  fs:
+    read: []
+    write: []
+  net:
+    egress: false

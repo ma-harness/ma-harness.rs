@@ -1,0 +1,21 @@
+schema_version: 1
+name: skill
+version: 0.1.0
+description: 加载 .skill/ 目录的 skill 描述 (扩展 LLM 能力)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::SkillPlugin
+seam:
+  tools: [load_skill, list_skills]
+  services: [SkillService]
+  listeners: [SessionStart]
+  commands: []
+  handlers: []
+sandbox:
+  exec:
+    enabled: false
+  fs:
+    read: []
+  net:
+    egress: false

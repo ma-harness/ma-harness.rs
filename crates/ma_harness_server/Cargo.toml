@@ -1,0 +1,16 @@
+[package]
+name = "ma_harness_server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 服务层 (axum + tonic 拼装, 内部 crate)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Week 7-9 加 axum + tonic

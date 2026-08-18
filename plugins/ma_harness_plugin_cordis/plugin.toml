@@ -1,0 +1,21 @@
+schema_version: 1
+name: cordis
+version: 0.1.0
+description: meta 插件, 暴露 ctx 自身能力 (调试 / 自省用)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::CordisPlugin
+seam:
+  tools: [list_services, list_listeners, list_disposables]
+  services: [CordisInspector]
+  listeners: []
+  commands: [inspect, ctx_tree]
+  handlers: []
+sandbox:
+  exec:
+    enabled: false
+  fs:
+    read: []
+  net:
+    egress: false

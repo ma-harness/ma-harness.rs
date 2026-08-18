@@ -1,0 +1,16 @@
+[package]
+name = "ma_harness_cordis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 元框架 (Cordis-rs, 内部 crate, API 频繁变)"
+
+[lints]
+workspace = true
+
+# Week 1 末加依赖 (先空)
+[dependencies]

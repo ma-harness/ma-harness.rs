@@ -1,0 +1,16 @@
+[package]
+name = "ma_harness_core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 核心: agent loop / session / event (内部 crate)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Week 1-2 加

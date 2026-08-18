@@ -1,0 +1,24 @@
+[package]
+name = "ma_harness_plugin_macro"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 插件 proc-macro crate (公开, API 锁: #[dsh_service/listener/tool/command/handler])"
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# 占位也需要 syn/proc-macro2 来产 compile_error!, 真实 macro 落地后会再加 quote/schemars/serde_json
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+# quote = { workspace = true }            # Week 2-3 加
+# schemars = { workspace = true }         # Week 2-3 加
+# serde_json = { workspace = true }       # Week 2-3 加

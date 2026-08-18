@@ -1,0 +1,18 @@
+[package]
+name = "ma_harness_proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳定)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 实际依赖 Week 2 加, 先空避免 tonic-build 未配时 build fail
+# tonic = { workspace = true }
+# prost = { workspace = true }

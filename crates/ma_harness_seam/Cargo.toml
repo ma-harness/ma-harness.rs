@@ -1,0 +1,16 @@
+[package]
+name = "ma_harness_seam"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 插件抽象层 (公开占位, #[non_exhaustive], 插件作者 use 这个)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Week 2 加, 公开 API 给插件作者 use

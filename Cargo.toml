@@ -1,0 +1,111 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ma_harness_cordis",
+    "crates/ma_harness_core",
+    "crates/ma_harness_seam",
+    "crates/ma_harness_proto",
+    "crates/ma_harness_cli",
+    "crates/ma_harness_server",
+    "crates/ma_harness_plugin_macro",
+    "plugins/ma_harness_plugin_bash",
+    "plugins/ma_harness_plugin_fs",
+    "plugins/ma_harness_plugin_web",
+    "plugins/ma_harness_plugin_subagent",
+    "plugins/ma_harness_plugin_skill",
+    "plugins/ma_harness_plugin_cordis",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://gitee.com/yifenma/ma-harness.rs"
+authors = ["ma-harness contributors"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# 一些我们暂时不能修的, 留给 Phase 2 收
+# module_name_repetitions = "allow"
+# similar_names = "allow"
+
+# 集中管理依赖版本, 子 crate 用 workspace = true 引用
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Protobuf / gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+tonic-build = "0.12"
+tonic-reflection = "0.12"
+
+# HTTP (server only)
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "compression"] }
+hyper = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+schemars = "0.8"
+
+# 错误
+thiserror = "1"
+anyhow = "1"
+
+# 可观测
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# 存储
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Sandbox
+landlock = "0.4"
+nix = { version = "0.29", default-features = false, features = ["fs", "process"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "wrap_help"] }
+indicatif = "0.17"
+console = "0.15"
+
+# 测试
+proptest = "1"
+mockall = "0.13"
+insta = { version = "1", features = ["yaml", "redactions"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+pretty_assertions = "1"
+wiremock = "0.6"
+
+# 并发
+dashmap = "6"
+parking_lot = "0.12"
+arc-swap = "1.7"
+
+# proc-macro
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

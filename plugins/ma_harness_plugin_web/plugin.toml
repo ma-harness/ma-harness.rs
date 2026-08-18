@@ -1,0 +1,22 @@
+schema_version: 1
+name: web
+version: 0.1.0
+description: HTTP / HTTPS 请求 (受 sandbox 限制)
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::WebPlugin
+seam:
+  tools: [http_get, http_post]
+  services: [WebService]
+  listeners: []
+  commands: []
+  handlers: []
+sandbox:
+  exec:
+    enabled: false
+  fs:
+    read: []
+    write: []
+  net:
+    egress: true
