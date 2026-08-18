@@ -1,0 +1,115 @@
+// ma-harness session.proto
+// 描述: 会话元信息 + 生命周期
+// 锁定: Phase 1 初版, 2026-08-18
+
+syntax = "proto3";
+
+package ma_harness.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 会话状态
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_CREATED = 1;     // 已创建, 还没第一次 run
+  SESSION_STATE_ACTIVE = 2;      // 正在跑
+  SESSION_STATE_PAUSED = 3;      // 暂停 (用户主动)
+  SESSION_STATE_CLOSED = 4;      // 正常结束
+  SESSION_STATE_ERRORED = 5;     // 错误终止
+  SESSION_STATE_CANCELLED = 6;   // 用户取消
+}
+
+// 操作系统
+enum OperatingMode {
+  OPERATING_MODE_UNSPECIFIED = 0;
+  OPERATING_MODE_DEFAULT = 1;    // 默认, 全功能
+  OPERATING_MODE_MINIMAL = 2;    // 不加载插件 (Phase 2 区分)
+  // OPERATING_MODE_PTC = 3;        // Code Mode, Phase 2
+  // OPERATING_MODE_CREATOR = 4;    // 生成代码, Phase 3
+}
+
+// Session 主体
+message Session {
+  string id = 1;                            // UUID v4
+  string name = 2;                          // 用户给的名字
+  SessionState state = 3;
+  OperatingMode mode = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  google.protobuf.Timestamp closed_at = 7;
+  SessionMetadata metadata = 8;
+  SessionStats stats = 9;
+  repeated string enabled_plugins = 10;     // plugin.name 列表
+  string user_id = 11;                      // 预留, Phase 2 多用户
+}
+
+// Session 元信息
+message SessionMetadata {
+  string agents_md_path = 1;                // 解析到的 AGENTS.md 路径
+  string working_directory = 2;             // cwd
+  string profile = 3;                       // ~/.ma-harness/profiles/<name>.toml
+  map<string, string> custom = 4;           // 用户自定义
+}
+
+// Session 统计
+message SessionStats {
+  uint32 run_count = 1;                     // 跑了几次
+  uint32 message_count = 2;
+  uint64 total_prompt_tokens = 3;
+  uint64 total_completion_tokens = 4;
+  uint64 total_tokens = 5;
+  uint32 tool_call_count = 6;
+  google.protobuf.Timestamp last_active_at = 7;
+}
+
+// ============================================================================
+// CRUD
+// ============================================================================
+
+message CreateSessionRequest {
+  string name = 1;                          // 可选, 默认 "session-<timestamp>"
+  OperatingMode mode = 2;
+  SessionMetadata metadata = 3;
+  repeated string enabled_plugins = 4;      // 留空 = 全部 first-party
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string id = 1;
+}
+
+message ListSessionsRequest {
+  uint32 page = 1;                          // 1-based
+  uint32 page_size = 2;                     // 默认 20, 最大 100
+  SessionState state_filter = 3;            // 0 = 不过滤
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  uint32 total = 2;
+  uint32 page = 3;
+  uint32 page_size = 4;
+}
+
+message CloseSessionRequest {
+  string id = 1;
+  SessionState final_state = 2;             // 默认 CLOSED
+}
+
+message CloseSessionResponse {
+  Session session = 1;
+}
+
+// ============================================================================
+// gRPC service
+// ============================================================================
+
+service SessionService {
+  rpc Create(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc Get(GetSessionRequest) returns (Session);
+  rpc List(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc Close(CloseSessionRequest) returns (CloseSessionResponse);
+}

@@ -1,0 +1,176 @@
+// ma-harness agent.proto
+// 描述: agent loop 的核心消息 (model ↔ runtime)
+// 命名: snake_case (Protobuf Rust 默认)
+// 锁定: Phase 1 初版, 2026-08-18
+
+syntax = "proto3";
+
+package ma_harness.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// 核心枚举
+// ============================================================================
+
+// Agent loop 当前状态
+enum AgentState {
+  AGENT_STATE_UNSPECIFIED = 0;
+  AGENT_STATE_IDLE = 1;             // 空闲, 等用户输入
+  AGENT_STATE_THINKING = 2;          // 调 LLM
+  AGENT_STATE_AWAITING_TOOL = 3;     // LLM 返回 tool_call, 等工具结果
+  AGENT_STATE_FINISHED = 4;          // 跑完, finish_reason=stop
+  AGENT_STATE_ERRORED = 5;           // 出错
+  AGENT_STATE_CANCELLED = 6;         // 用户取消
+}
+
+// LLM 返回的停止原因
+enum FinishReason {
+  FINISH_REASON_UNSPECIFIED = 0;
+  FINISH_REASON_STOP = 1;            // 正常完成
+  FINISH_REASON_LENGTH = 2;          // 超过 max_tokens
+  FINISH_REASON_TOOL_CALLS = 3;      // 要求调用工具
+  FINISH_REASON_CONTENT_FILTER = 4;  // 内容过滤
+  FINISH_REASON_ERROR = 5;           // 错误
+}
+
+// 模型 adapter 名字
+enum ModelAdapter {
+  MODEL_ADAPTER_UNSPECIFIED = 0;
+  MODEL_ADAPTER_OPENAI = 1;          // OpenAI Chat Completions
+  // Phase 2: ANTHROPIC / DEEPSEEK / CUSTOM
+}
+
+// 工具调用角色
+enum ToolRole {
+  TOOL_ROLE_UNSPECIFIED = 0;
+  TOOL_ROLE_SYSTEM = 1;              // 系统提示
+  TOOL_ROLE_USER = 2;                // 用户输入
+  TOOL_ROLE_ASSISTANT = 3;           // LLM 回复
+  TOOL_ROLE_TOOL = 4;                // 工具结果
+}
+
+// ============================================================================
+// 内容块 (用于多模态 / tool_call, Phase 2 扩展)
+// ============================================================================
+
+message ContentBlock {
+  oneof content {
+    TextBlock text = 1;
+    ToolUseBlock tool_use = 2;
+    ToolResultBlock tool_result = 3;
+  }
+}
+
+message TextBlock {
+  string text = 1;
+}
+
+message ToolUseBlock {
+  string id = 1;                      // 工具调用 ID, LLM 生成
+  string name = 2;                    // 工具名 (snake_case)
+  string arguments_json = 3;          // 参数, JSON 字符串
+}
+
+message ToolResultBlock {
+  string tool_use_id = 1;             // 对应 ToolUseBlock.id
+  string content = 2;                 // 工具返回的文本
+  bool is_error = 3;                  // 是否错误
+}
+
+// ============================================================================
+// 消息
+// ============================================================================
+
+// 一条对话消息
+message Message {
+  string id = 1;                      // UUID v4
+  ToolRole role = 2;
+  repeated ContentBlock content = 3;
+  google.protobuf.Timestamp created_at = 4;
+  string session_id = 5;              // 所属 session
+}
+
+// ============================================================================
+// Agent run 请求 / 响应
+// ============================================================================
+
+// 启动 / 继续一个 agent run
+message AgentRunRequest {
+  string session_id = 1;              // 必填
+  Message input = 2;                  // 用户消息 (role=USER)
+  ModelConfig model_config = 3;       // 模型配置
+  RunOptions options = 4;             // 运行选项
+}
+
+message AgentRunResponse {
+  string run_id = 1;                  // 本次 run 的 ID
+  AgentState final_state = 2;
+  FinishReason finish_reason = 3;
+  repeated Message messages = 4;      // run 期间产生的所有消息
+  string session_id = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp finished_at = 7;
+  uint32 prompt_tokens = 8;           // 累计
+  uint32 completion_tokens = 9;
+  uint32 total_tokens = 10;
+}
+
+// 模型配置
+message ModelConfig {
+  ModelAdapter adapter = 1;           // 必填
+  string model = 2;                   // 模型 ID, 例 "gpt-4o"
+  float temperature = 3;              // 0.0 - 2.0
+  uint32 max_tokens = 4;              // 单次回复上限
+  string system_prompt = 5;           // 系统提示
+  // 高级: top_p / frequency_penalty / 等 (Phase 2)
+}
+
+// 运行选项
+message RunOptions {
+  bool stream = 1;                    // 是否流式 (Phase 2 实现)
+  uint32 max_iterations = 2;          // tool_call 最大循环次数, 防死锁
+  uint32 timeout_ms = 3;              // 单次 run 最长跑多久
+  bool enable_tools = 4;              // 是否允许工具调用
+}
+
+// ============================================================================
+// gRPC service 定义
+// ============================================================================
+
+service AgentService {
+  // 启动 / 继续一个 agent run (同步)
+  rpc Run(AgentRunRequest) returns (AgentRunResponse);
+
+  // 流式响应 (Phase 2)
+  rpc RunStream(AgentRunRequest) returns (stream AgentStreamEvent);
+
+  // 取消正在进行的 run
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+
+  // 查 run 状态
+  rpc GetRun(GetRunRequest) returns (AgentRunResponse);
+}
+
+message AgentStreamEvent {
+  // Phase 2 详细定义
+  string run_id = 1;
+  oneof event {
+    Message message = 2;
+    AgentState state_change = 3;
+    string error = 4;
+  }
+}
+
+message CancelRequest {
+  string run_id = 1;
+}
+
+message CancelResponse {
+  bool cancelled = 1;
+  string error = 2;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}

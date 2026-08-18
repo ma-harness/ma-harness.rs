@@ -1,0 +1,158 @@
+// ma-harness event.proto
+// 描述: append-only SessionEvent 日志的事件类型
+// 锁定: Phase 1 初版, 2026-08-18
+//
+// 重要不变量 (见 docs/ma-harness-arch-map.md §4):
+// "model-visible means logged"
+//   任何 model context 里能看到的字符串, 都必须在 SessionEvent 日志里有对应事件.
+//   EventType.model_visible() 返回 true 的事件, 在写入时强制落库 (sync),
+//   落库失败 → panic.
+
+syntax = "proto3";
+
+package ma_harness.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 事件类型 (枚举, 对应 arch-map §4 各种事件)
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+
+  // Session 生命周期
+  EVENT_TYPE_SESSION_START = 100;        // model_visible = true
+  EVENT_TYPE_SESSION_END = 101;          // model_visible = true
+
+  // Agent run
+  EVENT_TYPE_RUN_START = 200;            // model_visible = true
+  EVENT_TYPE_RUN_END = 201;              // model_visible = true
+
+  // Model 调用
+  EVENT_TYPE_MODEL_REQUEST = 300;        // model_visible = true (含 prompt)
+  EVENT_TYPE_MODEL_RESPONSE = 301;       // model_visible = true (含 response)
+  EVENT_TYPE_MODEL_ERROR = 302;          // model_visible = false (内部)
+
+  // Tool 调用
+  EVENT_TYPE_TOOL_CALL = 400;            // model_visible = true
+  EVENT_TYPE_TOOL_RESULT = 401;          // model_visible = true
+  EVENT_TYPE_TOOL_ERROR = 402;           // model_visible = true (error 给 model 看)
+
+  // Listener 触发
+  EVENT_TYPE_LISTENER_FIRED = 500;       // model_visible = false (内部)
+
+  // Listener 内部异常
+  EVENT_TYPE_LISTENER_ERROR = 501;       // model_visible = false
+
+  // User 主动动作
+  EVENT_TYPE_USER_INPUT = 600;           // model_visible = true
+  EVENT_TYPE_USER_CANCEL = 601;          // model_visible = true
+
+  // Sandbox
+  EVENT_TYPE_SANDBOX_VIOLATION = 700;    // model_visible = true (warning 给 model)
+  EVENT_TYPE_SANDBOX_CONFIG = 701;       // model_visible = false (内部)
+
+  // Plugin 生命周期
+  EVENT_TYPE_PLUGIN_LOAD = 800;          // model_visible = false
+  EVENT_TYPE_PLUGIN_ERROR = 801;         // model_visible = false
+
+  // 内部 / 调试
+  EVENT_TYPE_DEBUG = 900;                // model_visible = false
+  EVENT_TYPE_TRACE = 901;                // model_visible = false
+}
+
+// 严重级别
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_DEBUG = 1;
+  SEVERITY_INFO = 2;
+  SEVERITY_WARN = 3;
+  SEVERITY_ERROR = 4;
+  SEVERITY_FATAL = 5;
+}
+
+// ============================================================================
+// 事件主体
+// ============================================================================
+
+message SessionEvent {
+  // 必填
+  uint64 seq = 1;                         // 单调递增, 单 session 内
+  string session_id = 2;
+  EventType type = 3;
+  google.protobuf.Timestamp ts = 4;
+  Severity severity = 5;
+
+  // 选填
+  string run_id = 6;                      // 所属 run (如适用)
+  string plugin_name = 7;                 // 触发该事件的插件
+  string payload_json = 8;                // 事件 payload, JSON 字符串
+  string error_message = 9;               // 如果 severity >= ERROR
+
+  // model-visible 不变量字段 (写时校验)
+  //   model_visible == true 的事件: payload_json 必须非空
+  //   落库失败时 (含 payload 校验失败) → panic
+  bool model_visible = 10;
+
+  reserved 11 to 20;                      // 留给 Phase 2
+}
+
+// ============================================================================
+// 查询 / 过滤
+// ============================================================================
+
+message EventQuery {
+  string session_id = 1;                  // 必填
+  uint64 seq_from = 2;                    // 包含
+  uint64 seq_to = 3;                      // 包含
+  repeated EventType types = 4;           // 过滤
+  bool model_visible_only = 5;            // 只取 model 看的
+  uint32 limit = 6;                       // 最多多少条
+  uint32 offset = 7;
+}
+
+message EventPage {
+  repeated SessionEvent events = 1;
+  uint64 total_in_range = 2;
+  bool has_more = 3;
+}
+
+// ============================================================================
+// 写时校验 helper (客户端工具, 不参与 wire 协议)
+// ============================================================================
+//
+// 业务方应该用 helper 函数而不是直接构造:
+//   pub fn emit(ctx: &Context, event: NewEvent) -> Result<()> {
+//       let event = event.build_with_invariant_check()?;
+//       ctx.log().append(event)?;
+//       Ok(())
+//   }
+//
+// "model_visible means logged" 强制点见 SessionEvent.model_visible 字段.
+
+// ============================================================================
+// gRPC service
+// ============================================================================
+
+service EventService {
+  // 追加事件 (内部用, 大多数情况走 ctx.emit)
+  rpc Append(AppendEventRequest) returns (AppendEventResponse);
+
+  // 查询
+  rpc Query(EventQuery) returns (EventPage);
+
+  // 取 session 的所有 model-visible 事件 (用于 replay 到新 run 的 model context)
+  rpc GetModelVisible(GetModelVisibleRequest) returns (EventPage);
+}
+
+message AppendEventRequest {
+  SessionEvent event = 1;
+}
+
+message AppendEventResponse {
+  uint64 seq = 1;                         // 分配到的 seq
+  google.protobuf.Timestamp ts = 2;        // 实际写入时间
+}
+
+message GetModelVisibleRequest {
+  string session_id = 1;
+  uint64 seq_from = 2;                    // 从哪里开始, 默认 0 = 全部
+}
