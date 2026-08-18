@@ -1,4 +1,4 @@
-//! Cordis 错误类型
+﻿//! Cordis 错误类型
 //!
 //! 公开 `CordisError` (ctx 内部错误) + `BoxedError` (Service::Error 的 box newtype).
 //!
@@ -120,28 +120,29 @@ mod tests {
 
     #[test]
     fn boxed_error_from_concrete() {
-        let e: BoxedError = DummyErr("oops").into();
+        let e = BoxedError::new(DummyErr("oops"));
         assert_eq!(e.to_string(), "oops");
     }
 
     #[test]
     fn boxed_error_debug_display() {
-        let e: BoxedError = DummyErr("hi").into();
+        let e = BoxedError::new(DummyErr("hi"));
         assert!(format!("{:?}", e).contains("BoxedError"));
         assert_eq!(e.to_string(), "hi");
     }
 
     #[test]
     fn boxed_error_source() {
-        let e: BoxedError = DummyErr("root").into();
-        let src = e.source().unwrap();
+        let e = BoxedError::new(DummyErr("root"));
+        // BoxedError::source 转发到 inner
+        let src = std::error::Error::source(&e).unwrap();
         assert_eq!(src.to_string(), "root");
     }
 
     #[test]
     fn boxed_error_from_boxed_inner() {
         let inner: Box<dyn std::error::Error + Send + Sync> = Box::new(DummyErr("inner"));
-        let e: BoxedError = inner.into();
+        let e = BoxedError(inner);
         assert_eq!(e.to_string(), "inner");
     }
 
@@ -153,13 +154,13 @@ mod tests {
 
     #[test]
     fn cordis_error_plugin_not_found() {
-        let e = CordisError::PluginNotFound("bash");
+        let e = CordisError::PluginNotFound("bash".to_string());
         assert!(e.to_string().contains("bash"));
     }
 
     #[test]
     fn cordis_error_plugin_already_registered() {
-        let e = CordisError::PluginAlreadyRegistered("bash");
+        let e = CordisError::PluginAlreadyRegistered("bash".to_string());
         assert!(e.to_string().contains("bash"));
     }
 }

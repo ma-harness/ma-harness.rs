@@ -149,10 +149,10 @@ mod tests {
 
     #[test]
     fn service_greet_uses_live_template() {
-        // 直接?service + ctx, 不走 plugin
+        // 直接?service + ctx, 不走 plugin (用 fully-qualified 消歧义)
         let ctx = Context::new();
         ctx.set(GREETING_TEMPLATE, DEFAULT_TEMPLATE.to_string());
-        let svc = HelloService::install(&ctx).unwrap();
+        let svc = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
 
         // 默认
         assert_eq!(svc.greet(&ctx, "World"), "Hello, World!");

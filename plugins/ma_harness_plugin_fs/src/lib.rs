@@ -38,15 +38,16 @@ pub static WRITE_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("
 /// Fs plugin 错误
 #[derive(Debug, Error)]
 pub enum FsError {
-    /// 路径不在白名?    #[error("path {path:?} not in {list:?} allow list")]
+    /// 路径不在白名单
+    #[error("path {path:?} not in {list:?} allow list")]
     NotInAllowList {
         /// 路径
         path: String,
-        /// 白名单名?("read" / "write")
+        /// 白名单名 ("read" / "write")
         list: &'static str,
     },
 
-    /// 路径包含 ".." (防穿?
+    /// 路径包含 ".." (防穿越)
     #[error("path {0:?} contains '..' (forbidden)")]
     PathTraversal(String),
 
@@ -63,12 +64,14 @@ pub enum FsError {
 // Entry / DirEntry
 // ============================================================================
 
-/// 目录?#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 目录条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirEntry {
-    /// 文件 / 目录?    pub name: String,
+    /// 文件 / 目录名
+    pub name: String,
     /// 是否目录
     pub is_dir: bool,
-    /// 文件大小 (bytes, 目录?0)
+    /// 文件大小 (bytes, 目录则为 0)
     pub size: u64,
 }
 
@@ -76,7 +79,8 @@ pub struct DirEntry {
 // FsService
 // ============================================================================
 
-/// Fs service ?沙箱文件?/ ?pub struct FsService;
+/// Fs service — 沙箱文件读/写
+pub struct FsService;
 
 impl FsService {
     /// 读文?(路径必须以白名单任一前缀开?
@@ -117,13 +121,16 @@ impl FsService {
         Ok(entries)
     }
 
-    /// 路径消毒: 阻止 "..", 解析到绝对路?    fn sanitize_path(&self, _ctx: &Context, path: &Path, op: &str) -> Result<PathBuf, FsError> {
+    /// 路径消毒: 阻止 "..", 解析到绝对路径
+    fn sanitize_path(&self, _ctx: &Context, path: &Path, op: &str) -> Result<PathBuf, FsError> {
         let s = path.to_string_lossy().to_string();
-        // 防穿?        if s.contains("..") {
+        // 防穿越
+        if s.contains("..") {
             return Err(FsError::PathTraversal(s));
         }
-        // Phase 1: 简?path 拼接, 假设 caller 传相对或绝对路径
-        // Phase 2: 强制 relative + ?ctx.cwd() ?        tracing::debug!(path = %s, op, "path sanitized");
+        // Phase 1: 简单 path 拼接, 假设 caller 传相对或绝对路径
+        // Phase 2: 强制 relative + 用 ctx.cwd() 锚定
+        tracing::debug!(path = %s, op, "path sanitized");
         Ok(PathBuf::from(path))
     }
 

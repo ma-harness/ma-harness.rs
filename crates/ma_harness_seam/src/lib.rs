@@ -300,7 +300,7 @@ mod tests {
 
     impl Service for MyService {
         type Ctx = Context;
-        type Error = Box<dyn std::error::Error + Send + Sync>;
+        type Error = ma_harness_cordis::BoxedError;
         fn install(_ctx: &Context) -> Result<Self, Self::Error> {
             Ok(MyService {
                 greeting: "hi".to_string(),
@@ -337,8 +337,11 @@ mod tests {
         let ctx = Context::new();
         let s = MyService::install(&ctx).unwrap();
         let cordis_svc = CordisService::new(s);
-        // CordisService impl ma_harness_cordis::Service, 调 name
-        assert_eq!(cordis_svc.name(), "my_service");
+        // CordisService impl ma_harness_cordis::Service, 调 name (用 fully-qualified 消歧义)
+        assert_eq!(
+            <CordisService<MyService> as ma_harness_cordis::Service>::name(&cordis_svc),
+            "my_service"
+        );
     }
 
     #[test]

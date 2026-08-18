@@ -52,7 +52,8 @@ mod tests {
         let resp = TestClient::get("http://localhost/health")
             .send(&service)
             .await;
-        assert_eq!(resp.status_code(), salvo::http::StatusCode::OK);
+        // salvo::Response 字段是 status_code (Option<StatusCode>)
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
     }
 
     #[tokio::test]
@@ -61,6 +62,6 @@ mod tests {
         let resp = TestClient::get("http://localhost/version")
             .send(&service)
             .await;
-        assert_eq!(resp.status_code(), salvo::http::StatusCode::OK);
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
     }
 }

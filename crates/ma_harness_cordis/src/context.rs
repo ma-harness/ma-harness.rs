@@ -1,4 +1,4 @@
-//! Context — DI 容器 + typed key storage + plugin registry
+﻿//! Context — DI 容器 + typed key storage + plugin registry
 //!
 //! 整个 ma-harness 运行时核心. 所有 service / tool / listener 都从 ctx 取数据.
 //!
@@ -383,11 +383,13 @@ mod tests {
     static SESSION_ID: CtxKey<String> = CtxKey::new("session_id");
     static MAX_TOKENS: CtxKey<u32> = CtxKey::new("max_tokens");
 
+    #[derive(Debug)]
     struct GreetingService;
 
     impl Service for GreetingService {
-        type Error = anyhow::Error;
-        fn install(_ctx: &Context) -> anyhow::Result<Self> {
+        type Ctx = Context;
+        type Error = crate::error::BoxedError;
+        fn install(_ctx: &Context) -> Result<Self, Self::Error> {
             Ok(GreetingService)
         }
         fn name(&self) -> &str {
@@ -630,7 +632,7 @@ mod tests {
         let msg_received = Arc::new(parking_lot::Mutex::new(String::new()));
         let m2 = Arc::clone(&msg_received);
 
-        ctx.on::<TestEvent, _>(Arc::new(move |_ctx, ev| {
+        ctx.on::<TestEvent, _>(Arc::new(move |_ctx: &Context, ev: &TestEvent| {
             c2.fetch_add(1, Ordering::SeqCst);
             *m2.lock() = ev.msg.clone();
         }));
@@ -650,10 +652,10 @@ mod tests {
         let a2 = Arc::clone(&a);
         let b2 = Arc::clone(&b);
 
-        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+        ctx.on::<TestEvent, _>(Arc::new(move |_: &Context, _: &TestEvent| {
             a2.fetch_add(1, Ordering::SeqCst);
         }));
-        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+        ctx.on::<TestEvent, _>(Arc::new(move |_: &Context, _: &TestEvent| {
             b2.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -672,10 +674,10 @@ mod tests {
         let cc = Arc::clone(&counter_called);
         let oc = Arc::clone(&other_called);
 
-        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+        ctx.on::<TestEvent, _>(Arc::new(move |_: &Context, _: &TestEvent| {
             cc.fetch_add(1, Ordering::SeqCst);
         }));
-        ctx.on::<OtherTestEvent, _>(Arc::new(move |_, _| {
+        ctx.on::<OtherTestEvent, _>(Arc::new(move |_: &Context, _: &OtherTestEvent| {
             oc.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -690,9 +692,9 @@ mod tests {
     fn listener_count_reflects_subscriptions() {
         let ctx = Context::new();
         assert_eq!(ctx.listener_count::<TestEvent>(), 0);
-        ctx.on::<TestEvent, _>(Arc::new(|_, _| {}));
+        ctx.on::<TestEvent, _>(Arc::new(|_: &Context, _: &TestEvent| {}));
         assert_eq!(ctx.listener_count::<TestEvent>(), 1);
-        ctx.on::<TestEvent, _>(Arc::new(|_, _| {}));
+        ctx.on::<TestEvent, _>(Arc::new(|_: &Context, _: &TestEvent| {}));
         assert_eq!(ctx.listener_count::<TestEvent>(), 2);
     }
 
@@ -705,7 +707,7 @@ mod tests {
         let captured = Arc::new(parking_lot::Mutex::new(String::new()));
         let cap2 = Arc::clone(&captured);
 
-        ctx.on::<TestEvent, _>(Arc::new(move |ctx, _ev| {
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, _ev: &TestEvent| {
             let id = ctx.get(SESSION_ID).unwrap_or_default();
             *cap2.lock() = id;
         }));
@@ -720,7 +722,7 @@ mod tests {
     #[should_panic(expected = "reentrant emit")]
     fn reentrant_emit_panics() {
         let ctx = Context::new();
-        ctx.on::<TestEvent, _>(Arc::new(move |ctx, _ev| {
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, _ev: &TestEvent| {
             // listener 内 emit: reentrancy → panic
             ctx.emit(OtherTestEvent);
         }));
@@ -730,8 +732,6 @@ mod tests {
     }
 
     // === Disposable / Scope ===
-
-    use std::sync::atomic::AtomicUsize;
 
     struct CountingResource {
         count: Arc<AtomicUsize>,

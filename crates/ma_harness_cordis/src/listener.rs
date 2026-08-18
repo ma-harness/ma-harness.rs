@@ -1,4 +1,4 @@
-//! Listener — 事件订阅
+﻿//! Listener — 事件订阅
 //!
 //! Week 1 Day 5 实现: 强类型事件 + 闭包式 listener + 同步 dispatch.
 //!
@@ -149,7 +149,7 @@ mod tests {
         let called = Arc::new(AtomicUsize::new(0));
         let called_clone = Arc::clone(&called);
 
-        reg.on::<CounterEvent>(Arc::new(move |_ctx, ev| {
+        reg.on::<CounterEvent>(Arc::new(move |_ctx: &Context, ev: &CounterEvent| {
             assert_eq!(ev.delta, 5);
             called_clone.fetch_add(1, Ordering::SeqCst);
         }));
@@ -173,10 +173,10 @@ mod tests {
         let a2 = Arc::clone(&a);
         let b2 = Arc::clone(&b);
 
-        reg.on::<CounterEvent>(Arc::new(move |_, _| {
+        reg.on::<CounterEvent>(Arc::new(move |_: &Context, _: &CounterEvent| {
             a2.fetch_add(1, Ordering::SeqCst);
         }));
-        reg.on::<CounterEvent>(Arc::new(move |_, _| {
+        reg.on::<CounterEvent>(Arc::new(move |_: &Context, _: &CounterEvent| {
             b2.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -193,10 +193,10 @@ mod tests {
         let cc = Arc::clone(&counter_called);
         let oc = Arc::clone(&other_called);
 
-        reg.on::<CounterEvent>(Arc::new(move |_, _| {
+        reg.on::<CounterEvent>(Arc::new(move |_: &Context, _: &CounterEvent| {
             cc.fetch_add(1, Ordering::SeqCst);
         }));
-        reg.on::<OtherEvent>(Arc::new(move |_, _| {
+        reg.on::<OtherEvent>(Arc::new(move |_: &Context, _: &OtherEvent| {
             oc.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -212,9 +212,9 @@ mod tests {
     fn count_returns_listener_count() {
         let reg = ListenerRegistry::new();
         assert_eq!(reg.count::<CounterEvent>(), 0);
-        reg.on::<CounterEvent>(Arc::new(|_, _| {}));
+        reg.on::<CounterEvent>(Arc::new(|_: &Context, _: &CounterEvent| {}));
         assert_eq!(reg.count::<CounterEvent>(), 1);
-        reg.on::<CounterEvent>(Arc::new(|_, _| {}));
+        reg.on::<CounterEvent>(Arc::new(|_: &Context, _: &CounterEvent| {}));
         assert_eq!(reg.count::<CounterEvent>(), 2);
     }
 }

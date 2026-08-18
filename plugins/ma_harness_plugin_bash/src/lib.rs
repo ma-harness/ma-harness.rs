@@ -1,4 +1,4 @@
-//! ma_harness_plugin_bash ?first-party plugin: 执行 shell 命令
+﻿//! ma_harness_plugin_bash ?first-party plugin: 执行 shell 命令
 //!
 //! **设计**: seam 公开 API 风格, impl cordis::Service/Plugin ?ctx 内部对接.
 //!
@@ -242,7 +242,7 @@ mod tests {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
         let out = svc
-            .run_command(&ctx, echo_cmd("hello world"))
+            .run_command(&ctx, &echo_cmd("hello world"))
             .await
             .unwrap();
         assert!(out.is_success(), "echo 应成? stderr: {}", out.stderr);
@@ -261,7 +261,7 @@ mod tests {
         let svc = BashService;
         // false ?Unix 退?1, Windows 没有 false ?exit 1 通过 cmd /C "exit 1"
         let out = svc
-            .run_command(&ctx, false_cmd())
+            .run_command(&ctx, &false_cmd())
             .await
             .unwrap(); // ?panic, exit 0 也是成功命令
         assert_eq!(out.exit_code, 1, "false 应退?1, got: {}", out.exit_code);
@@ -274,7 +274,7 @@ mod tests {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
         let out = svc
-            .run_command(&ctx, stderr_cmd("oops"))
+            .run_command(&ctx, &stderr_cmd("oops"))
             .await
             .unwrap();
         // 命令本身退?0, ?stderr 有内?        assert!(out.is_success());
@@ -291,7 +291,7 @@ mod tests {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
         let result = svc
-            .run_command_with_timeout(sleep_cmd("5"), Duration::from_millis(100))
+            .run_command_with_timeout(&sleep_cmd("5"), Duration::from_millis(100))
             .await;
         assert!(matches!(result, Err(BashError::Timeout(100))));
     }
@@ -302,7 +302,7 @@ mod tests {
         let ctx = Context::new();
         ctx.set(MAX_RUNTIME_MS, 100u32); // 100ms
         let svc = BashService;
-        let result = svc.run_command(&ctx, sleep_cmd("5")).await;
+        let result = svc.run_command(&ctx, &sleep_cmd("5")).await;
         assert!(matches!(result, Err(BashError::Timeout(_))));
     }
 
