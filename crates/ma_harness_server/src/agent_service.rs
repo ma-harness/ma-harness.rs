@@ -18,17 +18,17 @@ use tonic::{Request, Response, Status};
 fn run_response_to_proto(r: AgentRunResponse) -> ProtoAgentRunResponse {
     ProtoAgentRunResponse {
         run_id: r.run_id,
-        final_state: ProtoAgentState::AgentStateFinished as i32,
+        final_state: ProtoAgentState::Finished as i32,
         finish_reason: match r.model_response.finish_reason {
-            ma_harness_core::FinishReason::Stop => ProtoFinishReason::FinishReasonStop as i32,
-            ma_harness_core::FinishReason::Length => ProtoFinishReason::FinishReasonLength as i32,
+            ma_harness_core::FinishReason::Stop => ProtoFinishReason::Stop as i32,
+            ma_harness_core::FinishReason::Length => ProtoFinishReason::Length as i32,
             ma_harness_core::FinishReason::ToolCalls => {
-                ProtoFinishReason::FinishReasonToolCalls as i32
+                ProtoFinishReason::ToolCalls as i32
             }
             ma_harness_core::FinishReason::ContentFilter => {
-                ProtoFinishReason::FinishReasonContentFilter as i32
+                ProtoFinishReason::ContentFilter as i32
             }
-            ma_harness_core::FinishReason::Error => ProtoFinishReason::FinishReasonError as i32,
+            ma_harness_core::FinishReason::Error => ProtoFinishReason::Error as i32,
         },
         messages: vec![], // Phase 1 不返 messages 列表
         session_id: r.session_id,
@@ -62,6 +62,9 @@ type RunStream = Pin<Box<dyn futures::Stream<Item = Result<ma_harness_proto::ma_
 
 #[tonic::async_trait]
 impl AgentService for AgentServiceImpl {
+    type RunStreamStream = RunStream;
+
+
     async fn run(
         &self,
         request: Request<ma_harness_proto::ma_harness::v1::AgentRunRequest>,
@@ -92,7 +95,7 @@ impl AgentService for AgentServiceImpl {
             .unwrap_or_else(|| "stub".to_string());
         let temperature = model_config.map(|c| c.temperature).unwrap_or(0.7);
         let max_tokens = model_config.map(|c| c.max_tokens).unwrap_or(1024);
-        let system_prompt = model_config.and_then(|c| c.system_prompt.clone());
+        let system_prompt = model_config.map(|c| c.system_prompt.clone());
 
         let core_req = AgentRunRequest {
             session_id: session_id.clone(),
@@ -119,7 +122,7 @@ impl AgentService for AgentServiceImpl {
     async fn run_stream(
         &self,
         _request: Request<ma_harness_proto::ma_harness::v1::AgentRunRequest>,
-    ) -> Result<Response<RunStream>, Status> {
+    ) -> Result<Response<Self::RunStreamStream>, Status> {
         Err(Status::unimplemented("RunStream 留 Phase 2"))
     }
 
@@ -157,7 +160,7 @@ mod tests {
             session_id: "s1".to_string(),
             input: Some(ma_harness_proto::ma_harness::v1::Message {
                 id: "m1".to_string(),
-                role: ma_harness_proto::ma_harness::v1::ToolRole::ToolRoleUser as i32,
+                role: ma_harness_proto::ma_harness::v1::ToolRole::User as i32,
                 content: vec![ma_harness_proto::ma_harness::v1::ContentBlock {
                     content: Some(
                         ma_harness_proto::ma_harness::v1::content_block::Content::Text(
@@ -171,11 +174,11 @@ mod tests {
                 session_id: "s1".to_string(),
             }),
             model_config: Some(ma_harness_proto::ma_harness::v1::ModelConfig {
-                adapter: ma_harness_proto::ma_harness::v1::ModelAdapter::ModelAdapterOpenai as i32,
+                adapter: ma_harness_proto::ma_harness::v1::ModelAdapter::Openai as i32,
                 model: "stub".to_string(),
                 temperature: 0.0,
                 max_tokens: 100,
-                system_prompt: None,
+                system_prompt: "".to_string(),
             }),
             options: None,
         };
@@ -186,7 +189,7 @@ mod tests {
             .unwrap();
         let resp = result.into_inner();
         assert!(!resp.run_id.is_empty());
-        assert_eq!(resp.final_state, ProtoAgentState::AgentStateFinished as i32);
+        assert_eq!(resp.final_state, ProtoAgentState::Finished as i32);
 
         // 日志验证: 4 个 model-visible 事件
         let page = log.get_model_visible("s1").unwrap();
@@ -204,7 +207,7 @@ mod tests {
             session_id: "s1".to_string(),
             input: Some(ma_harness_proto::ma_harness::v1::Message {
                 id: "m1".to_string(),
-                role: ma_harness_proto::ma_harness::v1::ToolRole::ToolRoleUser as i32,
+                role: ma_harness_proto::ma_harness::v1::ToolRole::User as i32,
                 content: vec![ma_harness_proto::ma_harness::v1::ContentBlock {
                     content: Some(
                         ma_harness_proto::ma_harness::v1::content_block::Content::Text(

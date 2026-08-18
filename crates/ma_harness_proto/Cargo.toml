@@ -13,11 +13,8 @@ description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳
 workspace = true
 
 [build-dependencies]
-# 2026-08-18: ma_harness_proto 临时禁用, 整个 crate 注释掉 (workspace members 也注释了)
-# 等 protoc 编译问题解决再恢复
-# tonic-build = { workspace = true }
-# protobuf-src = "1"
-# anyhow = { workspace = true }
+# 2026-08-18 (Day 52): 用本地 vendor/protoc (npmmirror 镜像下载), 不走 protoc-prebuilt
+tonic-build = { workspace = true }
 
 [dependencies]
 # tonic / prost 运行时 (生成代码引用)

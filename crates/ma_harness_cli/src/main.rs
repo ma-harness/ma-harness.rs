@@ -18,13 +18,12 @@ use ma_harness_conformance::{
     fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat, ReportWriter,
 };
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
-// 2026-08-18: ma_harness_proto 临时禁用, gRPC service import 注释
-// use ma_harness_proto::ma_harness::v1::{
-//     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
-// };
+// 2026-08-18 (Day 52): ma_harness_proto 恢复 (用本地 vendor/protoc), gRPC service 恢复
+use ma_harness_proto::ma_harness::v1::{
+    agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
+};
 use ma_harness_seam::PluginRegistry;
-// 2026-08-18: ma_harness_server 临时禁用 gRPC (依赖 ma_harness_proto), HTTP 部分保留
-// use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
+use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
 
 #[derive(Parser, Debug)]
 #[command(name = "mah", about = "ma-harness AI agent orchestrator")]
@@ -121,20 +120,44 @@ async fn main() -> Result<()> {
     }
 }
 
-/// 真实起 server: salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
-///
-/// 2026-08-18: tonic gRPC 临时禁用 (依赖 ma_harness_proto), 只起 salvo HTTP
-async fn start_server(_grpc_port: u16, http_port: u16) -> Result<()> {
-    eprintln!(
-        "mah start: stub mode (gRPC + HTTP server 临时禁用, ma_harness_proto 编译问题未解)"
-    );
-    eprintln!("Phase 1 用 `mah run --message <text>` 直接跑 agent, 无需 server");
-    eprintln!("  -- http port requested: {}", http_port);
+/// 真实起 server: tonic gRPC + salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
+async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
+    let log = EventLog::open_in_memory()?;
+    eprintln!("mah start: tonic gRPC on 0.0.0.0:{} + salvo HTTP on 0.0.0.0:{}", grpc_port, http_port);
 
-    // 2026-08-18: 临时 stub
-    // salvo 0.79 TcpListener::bind() API 变了 (no .bind method, 用别的)
-    // ma_harness_server crate 整体注释 (依赖 ma_harness_proto)
-    // 完整实装等 P2 (protoc 编译通了再恢复)
+    let builder = ServerBuilder::with_stub(log);
+
+    // tonic gRPC server
+    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()
+        .with_context(|| format!("invalid grpc_port: {}", grpc_port))?;
+    let agent_svc = builder.build_agent_service();
+    let session_svc = builder.build_session_service();
+    let grpc_server = tonic::transport::Server::builder()
+        .add_service(AgentServiceServer::new(agent_svc))
+        .add_service(SessionServiceServer::new(session_svc))
+        .serve(grpc_addr);
+
+    // salvo HTTP server
+    // 2026-08-18 (Day 52): TcpAcceptor::try_from(tokio::net::TcpListener) — salvo 0.79 API
+    use salvo::conn::tcp::TcpAcceptor;
+    let http_addr = format!("0.0.0.0:{}", http_port);
+    let http_addr_parse: std::net::SocketAddr = http_addr.parse()
+        .with_context(|| format!("invalid http_port: {}", http_port))?;
+    let http_router = ma_harness_server::http::router();
+    let tokio_listener = tokio::net::TcpListener::bind(http_addr_parse).await
+        .with_context(|| format!("bind http {}", http_addr))?;
+    let acceptor = TcpAcceptor::try_from(tokio_listener)
+        .map_err(|e| anyhow::anyhow!("TcpAcceptor::try_from failed: {}", e))?;
+    let http_server = salvo::Server::new(acceptor).serve(http_router);
+
+    // 并发跑 gRPC + HTTP server, 等 ctrl-c
+    tokio::select! {
+        _ = grpc_server => eprintln!("grpc server exited"),
+        _ = http_server => eprintln!("http server exited"),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("mah: received ctrl-c, shutting down");
+        }
+    }
     Ok(())
 }
 

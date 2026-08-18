@@ -41,7 +41,7 @@ impl SessionService for SessionServiceImpl {
         let session = ProtoSession {
             id: id.clone(),
             name,
-            state: ProtoSessionState::SessionStateCreated as i32,
+            state: ProtoSessionState::Created as i32,
             mode: req.mode,
             created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
             updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
@@ -92,7 +92,7 @@ impl SessionService for SessionServiceImpl {
         let req = request.into_inner();
         let id = req.id;
         let final_state = if req.final_state == 0 {
-            ProtoSessionState::SessionStateClosed as i32
+            ProtoSessionState::Closed as i32
         } else {
             req.final_state
         };
@@ -124,7 +124,7 @@ mod tests {
         let resp = svc
             .create(Request::new(CreateSessionRequest {
                 name: "test".to_string(),
-                mode: OperatingMode::OperatingModeDefault as i32,
+                mode: OperatingMode::Default as i32,
                 metadata: None,
                 enabled_plugins: vec![],
             }))
@@ -132,7 +132,7 @@ mod tests {
             .unwrap();
         let session = resp.into_inner().session.unwrap();
         assert_eq!(session.name, "test");
-        assert_eq!(session.state, ProtoSessionState::SessionStateCreated as i32);
+        assert_eq!(session.state, ProtoSessionState::Created as i32);
     }
 
     #[tokio::test]
@@ -214,6 +214,6 @@ mod tests {
             .await
             .unwrap();
         let session = close_resp.into_inner().session.unwrap();
-        assert_eq!(session.state, ProtoSessionState::SessionStateClosed as i32);
+        assert_eq!(session.state, ProtoSessionState::Closed as i32);
     }
 }

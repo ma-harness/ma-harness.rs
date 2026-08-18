@@ -16,8 +16,7 @@ workspace = true
 # 内部
 ma_harness_cordis = { path = "../ma_harness_cordis" }
 ma_harness_core = { path = "../ma_harness_core" }
-# 2026-08-18: 临时禁用 ma_harness_proto (protoc 编译在 Windows 不通)
-# ma_harness_proto = { path = "../ma_harness_proto" }
+ma_harness_proto = { path = "../ma_harness_proto" }  # 2026-08-18 (Day 52): 恢复
 # 外部
 tonic = { workspace = true }
 salvo = { workspace = true }

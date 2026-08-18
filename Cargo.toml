@@ -4,7 +4,7 @@ members = [
     "crates/ma_harness_cordis",
     "crates/ma_harness_core",
     "crates/ma_harness_seam",
-    # "crates/ma_harness_proto",  # 2026-08-18: 临时禁用, protoc 编译在 Windows 不通 (autotools 缺 aux files, protoc-prebuilt 走 GitHub 被墙)
+    "crates/ma_harness_proto",  # 2026-08-18 (Day 52): 恢复, 用本地 vendor/protoc
     "crates/ma_harness_cli",
     "crates/ma_harness_server",
     "crates/ma_harness_plugin_macro",

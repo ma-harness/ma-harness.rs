@@ -1,4 +1,4 @@
-# Rust / Cargo
+﻿# Rust / Cargo
 /target/
 **/*.rs.bk
 Cargo.lock.bak
@@ -42,3 +42,6 @@ desktop.ini
 # Phase 2 才用得到 (留占位)
 # /wasm-bindgen-target/
 # /wasm32-wasi/
+
+# vendor (本地 protoc 镜像)
+vendor/
