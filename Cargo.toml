@@ -101,6 +101,13 @@ dashmap = "6"
 parking_lot = "0.12"
 arc-swap = "1.7"
 
+# 时间 / ID
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# 测试临时文件
+tempfile = "3"
+
 # proc-macro
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"

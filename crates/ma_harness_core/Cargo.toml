@@ -7,10 +7,24 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness 核心: agent loop / session / event (内部 crate)"
+description = "ma-harness 核心: SessionEvent / agent loop / 日志 (内部 crate)"
 
 [lints]
 workspace = true
 
 [dependencies]
-# Week 1-2 加
+# 内部依赖
+ma_harness_cordis = { path = "../ma_harness_cordis" }
+# 外部
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+rusqlite = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
