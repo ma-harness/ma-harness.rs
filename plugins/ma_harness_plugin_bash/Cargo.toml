@@ -1,4 +1,4 @@
-ï»¿[package]
+[package]
 name = "ma_harness_plugin_bash"
 version.workspace = true
 edition.workspace = true
@@ -7,10 +7,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "æ‰§è¡Œ shell å‘½ä»¤ (å— sandbox é™åˆ¶)"
+description = "ma-harness first-party plugin 'bash' (Ö´ĞĞ shell ÃüÁî (ÊÜ sandbox ÏŞÖÆ, Day 5-6 Êµ×°))"
 
 [lints]
 workspace = true
 
 [dependencies]
-# Week 5-6 åŠ  (æŒ‰ plugin å®é™…éœ€è¦)
+# ¹«¿ª API (seam) + ÄÚ²¿ (cordis Ğ´ typed key)
+ma_harness_seam = { path = "../../crates/ma_harness_seam" }
+ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
+ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
+anyhow = { workspace = true }

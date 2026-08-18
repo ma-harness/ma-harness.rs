@@ -1,4 +1,4 @@
-ï»¿[package]
+[package]
 name = "ma_harness_plugin_cordis"
 version.workspace = true
 edition.workspace = true
@@ -7,10 +7,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "meta æ’ä»¶, æš´éœ² ctx è‡ªèº«èƒ½åŠ› (è°ƒè¯•ç”¨)"
+description = "ma-harness first-party plugin 'cordis' (meta ²å¼ş, ±©Â¶ ctx ×ÔÉíÄÜÁ¦ (Day 5-6 Êµ×°))"
 
 [lints]
 workspace = true
 
 [dependencies]
-# Week 5-6 åŠ  (æŒ‰ plugin å®é™…éœ€è¦)
+# ¹«¿ª API (seam) + ÄÚ²¿ (cordis Ğ´ typed key)
+ma_harness_seam = { path = "../../crates/ma_harness_seam" }
+ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
+ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
+anyhow = { workspace = true }
