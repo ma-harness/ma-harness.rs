@@ -2,7 +2,7 @@
 //!
 //! **公开 crate** (2026-08-18 锁定). proc-macro, API 锁.
 //!
-//! 提供 5 个 attribute / derive macro + 1 个 macro_rules!:
+//! 提供 5 个 attribute / derive macro:
 //!
 //! | Macro | 形态 | 作用 | 复杂度 |
 //! |---|---|---|---|
@@ -11,7 +11,8 @@
 //! | `#[dsh_tool]` | attribute | 注册 model-callable 工具, 生成 schema | 重头 |
 //! | `#[dsh_command]` | attribute | 注册 CLI 指令, 集成 clap | 重头 |
 //! | `#[dsh_handler]` | attribute | 注册 model adapter | 重头 |
-//! | `ctx_key!()` | macro_rules! | 编译期校验 snake_case + 构造 CtxKey | 编译期 |
+//!
+//! `ctx_key!` macro_rules! 移到 `ma_harness_seam` (proc-macro crate 不能 export macro_rules!).
 //!
 //! 详细设计见 `docs/macro-design.md`.
 
@@ -24,26 +25,12 @@ use quote::quote;
 use syn::{parse_macro_input, DeriveInput, ItemFn};
 
 // ============================================================================
-// ctx_key! — 编译期 snake_case 校验
+// ctx_key! — 已移到 ma_harness_seam (proc-macro crate 不允许 export macro_rules!)
 // ============================================================================
-
-/// 构造一个 [`ma_harness_cordis::CtxKey`], 编译期 reject 非 snake_case 名字.
-///
-/// 用法见 macro-design.md §4.6
-#[macro_export]
-macro_rules! ctx_key {
-    ($name:expr) => {{
-        const __NAME: &str = $name;
-        const __IS_VALID: bool = $crate::__is_snake_case(__NAME);
-        const _: () = [()][(!__IS_VALID) as usize];
-        ::ma_harness_cordis::CtxKey::new_unchecked(__NAME)
-    }};
-}
-
-#[doc(hidden)]
-pub const fn __is_snake_case(s: &str) -> bool {
-    ma_harness_cordis::is_snake_case(s)
-}
+//
+// 使用方式:
+//   use ma_harness_seam::ctx_key;
+//   static MY_KEY: CtxKey<String> = ctx_key!("my_key");
 
 // ============================================================================
 // #[dsh_service] — derive
@@ -202,7 +189,7 @@ pub fn dsh_tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         if let syn::FnArg::Typed(pat_type) = input {
             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
                 param_names.push(&pat_ident.ident);
-                param_types.push(&pat_type.elem);
+                param_types.push(&pat_type.ty);
             }
         }
     }
@@ -213,7 +200,8 @@ pub fn dsh_tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let register_fn_name = quote::format_ident!("{}_register", fn_name);
 
     // 参数 schema 字段 (Phase 1: 全当 string)
-    let param_schema_fields = param_names.iter().zip(param_types.iter()).map(|(name, _ty)| {
+    // 2026-08-18: 用 collect() 避免后面重复使用 iterator 时 moved 错
+    let param_schema_fields: Vec<_> = param_names.iter().zip(param_types.iter()).map(|(name, _ty)| {
         quote! {
             serde_json::json!({
                 "name": stringify!(#name),
@@ -221,7 +209,7 @@ pub fn dsh_tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 "description": "",
             })
         }
-    });
+    }).collect();
 
     let params_json_value = quote! {
         serde_json::Value::Array(vec![#(#param_schema_fields),*])

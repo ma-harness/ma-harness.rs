@@ -18,11 +18,13 @@ use ma_harness_conformance::{
     fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat, ReportWriter,
 };
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
-use ma_harness_proto::ma_harness::v1::{
-    agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
-};
+// 2026-08-18: ma_harness_proto 临时禁用, gRPC service import 注释
+// use ma_harness_proto::ma_harness::v1::{
+//     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
+// };
 use ma_harness_seam::PluginRegistry;
-use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
+// 2026-08-18: ma_harness_server 临时禁用 gRPC (依赖 ma_harness_proto), HTTP 部分保留
+// use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
 
 #[derive(Parser, Debug)]
 #[command(name = "mah", about = "ma-harness AI agent orchestrator")]
@@ -119,39 +121,38 @@ async fn main() -> Result<()> {
     }
 }
 
-/// 真实起 server: tonic gRPC + salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
-async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
+/// 真实起 server: salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
+///
+/// 2026-08-18: tonic gRPC 临时禁用 (依赖 ma_harness_proto), 只起 salvo HTTP
+async fn start_server(_grpc_port: u16, http_port: u16) -> Result<()> {
     let log = EventLog::open_in_memory()?;
-    let builder = ServerBuilder::with_stub(log);
-    let agent = builder.build_agent_service();
-    let session = builder.build_session_service();
-
-    let grpc_addr = format!("0.0.0.0:{}", grpc_port).parse()?;
-    let http_addr = format!("0.0.0.0:{}", http_port).parse()?;
-
-    eprintln!("mah start: tonic gRPC on {}, salvo HTTP on {}", grpc_addr, http_addr);
-
-    // tonic gRPC
-    let grpc_server = tonic::transport::Server::builder()
-        .add_service(AgentServiceServer::new(agent))
-        .add_service(SessionServiceServer::new(session))
-        .serve(grpc_addr);
+    eprintln!("mah start: salvo HTTP on 0.0.0.0:{} (gRPC 临时禁用)", http_port);
 
     // salvo HTTP (Phase 1: /health + /version)
     // TcpListener 异步 bind, acceptor 包成 Server::new(acceptor).serve(router)
     use salvo::conn::TcpListener;
+    let http_addr = format!("0.0.0.0:{}", http_port).parse()?;
     let acceptor = TcpListener::new(&http_addr).bind().await;
     let http_router = ma_harness_server::http::router();
     let http_server = salvo::Server::new(acceptor).serve(http_router);
 
-    // 并发跑两个 server, 等 ctrl-c
+    // 2026-08-18: tonic gRPC 临时禁用
+    // let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", _grpc_port).parse()?;
+    // let grpc_server = tonic::transport::Server::builder()
+    //     .add_service(AgentServiceServer::new(agent))
+    //     .add_service(SessionServiceServer::new(session))
+    //     .serve(grpc_addr);
+
+    // 并发跑 HTTP server, 等 ctrl-c
     tokio::select! {
-        _ = grpc_server => eprintln!("grpc server exited"),
+        // _ = grpc_server => eprintln!("grpc server exited"),
         _ = http_server => eprintln!("http server exited"),
         _ = tokio::signal::ctrl_c() => {
             eprintln!("mah: received ctrl-c, shutting down");
         }
     }
+    // 防 unused 警告
+    let _ = log;
     Ok(())
 }
 

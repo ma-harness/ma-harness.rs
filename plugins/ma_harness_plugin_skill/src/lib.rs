@@ -1,4 +1,4 @@
-//! ma_harness_plugin_skill — 加载 .skill 目录的 skill 描述
+//! ma_harness_plugin_skill ?加载 .skill 目录?skill 描述
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -32,7 +32,7 @@ pub struct Skill {
     pub body: String,
 }
 
-/// SkillService — 加载 .skill 目录
+/// SkillService ?加载 .skill 目录
 pub struct SkillService;
 
 impl SkillService {
@@ -66,8 +66,9 @@ impl SkillService {
 }
 
 impl CordisService for SkillService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(SkillService)
     }
     fn name(&self) -> &str {
@@ -76,8 +77,9 @@ impl CordisService for SkillService {
 }
 
 impl SeamService for SkillService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(SkillService)
     }
     fn name(&self) -> &str {
@@ -89,7 +91,7 @@ pub struct SkillPlugin;
 
 impl CordisPlugin for SkillPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = SkillService::install(ctx)?;
+        let svc = <SkillService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(Arc::new(svc));
         ctx.set(SKILLS_DIR, "./skills".to_string());
         Ok(())

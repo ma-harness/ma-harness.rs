@@ -25,5 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
+# 2026-08-18: EventLog::open_in_memory 走 rusqlite, SubagentError::EventLog variant
+rusqlite = { workspace = true }
 
 [dev-dependencies]

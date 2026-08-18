@@ -1,7 +1,7 @@
-//! ma_harness_plugin_subagent — 派生 ctx 跑子 agent
+//! ma_harness_plugin_subagent ?派生 ctx 跑子 agent
 //!
-//! **Week 5-6 实装**: spawn_agent(message) 用 ctx.fork() 派生 sub ctx + 跑 sub AgentLoop
-//! (走 StubModelAdapter). 演示 cordis fork API 实战.
+//! **Week 5-6 实装**: spawn_agent(message) ?ctx.fork() 派生 sub ctx + ?sub AgentLoop
+//! (?StubModelAdapter). 演示 cordis fork API 实战.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -25,6 +25,8 @@ pub enum SubagentError {
     MaxDepthExceeded(u32),
     #[error("agent run failed: {0}")]
     AgentRun(#[from] anyhow::Error),
+    #[error("event log open failed: {0}")]
+    EventLog(#[from] rusqlite::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,11 +36,11 @@ pub struct SpawnResult {
     pub content: String,
 }
 
-/// SubagentService — 派生 sub ctx + 跑 sub agent
+/// SubagentService ?派生 sub ctx + ?sub agent
 pub struct SubagentService;
 
 impl SubagentService {
-    /// spawn_agent: 在 parent ctx 下派生 sub agent, 跑一个 prompt
+    /// spawn_agent: ?parent ctx 下派?sub agent, 跑一?prompt
     pub async fn spawn_agent(
         &self,
         parent_ctx: &Context,
@@ -52,15 +54,15 @@ impl SubagentService {
 
         // 派生 sub ctx (继承 parent service 引用)
         let sub_ctx = parent_ctx.fork();
-        // 写 typed key: sub_depth = current_depth + 1 (递归保护)
+        // ?typed key: sub_depth = current_depth + 1 (递归保护)
         sub_ctx.set(MAX_DEPTH, current_depth + 1);
 
-        // 跑 AgentLoop (用 StubModelAdapter 演示)
+        // ?AgentLoop (?StubModelAdapter 演示)
         let log = EventLog::open_in_memory()?;
         let adapter: Arc<dyn ModelAdapter> = Arc::new(StubModelAdapter);
         let agent = AgentLoop::new(log, adapter);
 
-        // sub session_id 跟 parent 不同 (Phase 1 简化: 用 uuid 后缀)
+        // sub session_id ?parent 不同 (Phase 1 简? ?uuid 后缀)
         let uuid_short = uuid::Uuid::new_v4().to_string();
         let short = &uuid_short[..8];
         let sub_session_id = format!("sub-{}-{}", short, current_depth + 1);
@@ -84,8 +86,9 @@ impl SubagentService {
 }
 
 impl CordisService for SubagentService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(SubagentService)
     }
     fn name(&self) -> &str {
@@ -94,8 +97,9 @@ impl CordisService for SubagentService {
 }
 
 impl SeamService for SubagentService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(SubagentService)
     }
     fn name(&self) -> &str {
@@ -107,7 +111,7 @@ pub struct SubagentPlugin;
 
 impl CordisPlugin for SubagentPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = SubagentService::install(ctx)?;
+        let svc = <SubagentService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(Arc::new(svc));
         ctx.set(MAX_DEPTH, DEFAULT_MAX_DEPTH);
         Ok(())
@@ -145,7 +149,7 @@ mod tests {
     async fn spawn_respects_max_depth() {
         let parent = Context::new();
         parent.set(MAX_DEPTH, 3u32);
-        parent.set(MAX_DEPTH, 3u32); // current = max → 应该拒绝
+        parent.set(MAX_DEPTH, 3u32); // current = max ?应该拒绝
         let svc = SubagentService;
         let result = svc.spawn_agent(&parent, "hi").await;
         assert!(matches!(result, Err(SubagentError::MaxDepthExceeded(_))));

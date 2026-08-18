@@ -1,4 +1,4 @@
-//! ma_harness_plugin_cordis — meta 插件, 暴露 ctx 自身能力
+//! ma_harness_plugin_cordis ?meta 插件, 暴露 ctx 自身能力
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -29,7 +29,7 @@ pub struct CtxSnapshot {
     pub is_disposed: bool,
 }
 
-/// CordisService — 暴露 ctx 反射能力
+/// CordisService ?暴露 ctx 反射能力
 pub struct CordisService;
 
 impl CordisService {
@@ -51,8 +51,9 @@ impl CordisService {
 }
 
 impl CordisServiceTrait for CordisService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(CordisService)
     }
     fn name(&self) -> &str {
@@ -61,8 +62,9 @@ impl CordisServiceTrait for CordisService {
 }
 
 impl SeamService for CordisService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(CordisService)
     }
     fn name(&self) -> &str {
@@ -74,7 +76,8 @@ pub struct CordisPlugin;
 
 impl CordisPluginTrait for CordisPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = CordisService::install(ctx)?;
+        // 2026-08-18: fully-qualified 消歧义 (CordisService + SeamService 都有同名 install)
+        let svc = <CordisService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(Arc::new(svc));
         ctx.set(INSPECT_DEPTH, DEFAULT_INSPECT_DEPTH);
         Ok(())

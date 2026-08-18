@@ -1,14 +1,14 @@
-//! ma_harness_plugin_bash — first-party plugin: 执行 shell 命令
+//! ma_harness_plugin_bash ?first-party plugin: 执行 shell 命令
 //!
-//! **设计**: seam 公开 API 风格, impl cordis::Service/Plugin 跟 ctx 内部对接.
+//! **设计**: seam 公开 API 风格, impl cordis::Service/Plugin ?ctx 内部对接.
 //!
-//! **Week 5-6 实装**: BashService 跑 subprocess (tokio::process::Command) +
+//! **Week 5-6 实装**: BashService ?subprocess (tokio::process::Command) +
 //! 捕获 stdout/stderr/exit_code + timeout via MAX_RUNTIME_MS.
 //!
-//! **Phase 1 简化**:
-//! - 没有 landlock sandbox (见 docs/code-mode-deferred.md 风格, Phase 2 加)
-//! - 没有白名单命令 (业务方通过 plugin.toml seam.sandbox.exec 配, Phase 2)
-//! - Windows / Linux / macOS 跨平台测试 (用 shell 内置命令验证)
+//! **Phase 1 简?*:
+//! - 没有 landlock sandbox (?docs/code-mode-deferred.md 风格, Phase 2 ?
+//! - 没有白名单命?(业务方通过 plugin.toml seam.sandbox.exec ? Phase 2)
+//! - Windows / Linux / macOS 跨平台测?(?shell 内置命令验证)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -29,10 +29,10 @@ use tokio::time::timeout;
 // 公开 typed key
 // ============================================================================
 
-/// shell 命令最大执行时间 (ms)
+/// shell 命令最大执行时?(ms)
 pub static MAX_RUNTIME_MS: ma_harness_cordis::CtxKey<u32> = ctx_key!("max_runtime_ms");
 
-/// 默认最大执行时间: 30 秒
+/// 默认最大执行时间 (ms)
 pub const DEFAULT_MAX_RUNTIME_MS: u32 = 30_000;
 
 // ============================================================================
@@ -46,11 +46,11 @@ pub enum BashError {
     #[error("command timed out after {0}ms")]
     Timeout(u32),
 
-    /// 命令启动失败 (command not found 等)
+    /// 命令启动失败 (command not found ?
     #[error("failed to spawn command: {0}")]
     Spawn(#[from] std::io::Error),
 
-    /// 命令退出码非 0
+    /// 命令退出码?0
     #[error("command exited with code {code}: {stderr}")]
     NonZeroExit {
         /// 退出码
@@ -61,7 +61,7 @@ pub enum BashError {
 }
 
 // ============================================================================
-// CommandOutput — 命令执行结果
+// CommandOutput ?命令执行结果
 // ============================================================================
 
 /// 命令输出
@@ -88,14 +88,14 @@ impl CommandOutput {
 // BashService
 // ============================================================================
 
-/// Bash service — 跑 shell 命令
+/// Bash service ?shell 命令
 ///
-/// **关键设计**: service 自身**不存** timeout, 每次 run 时从 ctx 读 MAX_RUNTIME_MS.
-/// 业务方 set 这个 key 立刻生效 (跟 hello plugin 的 "活的 ctx" 设计一致).
+/// **关键设计**: service 自身**不存** timeout, 每次 run 时从 ctx ?MAX_RUNTIME_MS.
+/// 业务?set 这个 key 立刻生效 (?hello plugin ?"活的 ctx" 设计一?.
 pub struct BashService;
 
 impl BashService {
-    /// 跑 shell 命令 (跨平台: Linux/macOS 用 sh, Windows 用 cmd)
+    /// ?shell 命令 (跨平? Linux/macOS ?sh, Windows ?cmd)
     ///
     /// # Examples
     ///
@@ -114,7 +114,7 @@ impl BashService {
             .await
     }
 
-    /// 跑 shell 命令, 显式指定 timeout
+    /// ?shell 命令, 显式指定 timeout
     pub async fn run_command_with_timeout(
         &self,
         cmd: &str,
@@ -122,7 +122,7 @@ impl BashService {
     ) -> Result<CommandOutput, BashError> {
         let start = std::time::Instant::now();
 
-        // 跨平台: 用 sh -c (Unix) 或 cmd /C (Windows)
+        // 跨平? ?sh -c (Unix) ?cmd /C (Windows)
         let mut command = build_shell_command(cmd);
         command
             .stdout(Stdio::piped())
@@ -136,8 +136,8 @@ impl BashService {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return Err(BashError::Spawn(e)),
             Err(_elapsed) => {
-                // 超时: child 已被 drop (wait_with_output 是 self-consuming)
-                // 实际子进程可能仍在跑 (在 Unix 是 zombie), 但 tokio 杀进程
+                // 超时: child 已被 drop (wait_with_output ?self-consuming)
+                // 实际子进程可能仍在跑 (?Unix ?zombie), ?tokio 杀进程
                 tracing::warn!(cmd = %cmd, timeout_ms = max_runtime.as_millis(), "command timed out");
                 return Err(BashError::Timeout(max_runtime.as_millis() as u32));
             }
@@ -172,8 +172,9 @@ fn build_shell_command(cmd: &str) -> Command {
 }
 
 impl CordisService for BashService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(BashService)
     }
     fn name(&self) -> &str {
@@ -182,8 +183,9 @@ impl CordisService for BashService {
 }
 
 impl SeamService for BashService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(BashService)
     }
     fn name(&self) -> &str {
@@ -195,14 +197,14 @@ impl SeamService for BashService {
 // Plugin: BashPlugin
 // ============================================================================
 
-/// Bash plugin — install 时注入 BashService + 写默认 typed key
+/// Bash plugin ?install 时注?BashService + 写默?typed key
 pub struct BashPlugin;
 
 impl CordisPlugin for BashPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = BashService::install(ctx)?;
+        let svc = <BashService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(std::sync::Arc::new(svc));
-        // 默认 timeout (业务方可以覆盖)
+        // 默认 timeout (业务方可以覆?
         ctx.set(MAX_RUNTIME_MS, DEFAULT_MAX_RUNTIME_MS);
         Ok(())
     }
@@ -221,7 +223,7 @@ impl SeamPlugin for BashPlugin {
 }
 
 // ============================================================================
-// 单元测试 (跨平台, 用 shell 内置命令)
+// 单元测试 (跨平? ?shell 内置命令)
 // ============================================================================
 
 #[cfg(test)]
@@ -234,7 +236,7 @@ mod tests {
         ctx
     }
 
-    /// 跨平台: 简单 echo 命令
+    /// 跨平? 简?echo 命令
     #[tokio::test]
     async fn run_echo_command() {
         let ctx = ctx_with_default_timeout();
@@ -243,7 +245,7 @@ mod tests {
             .run_command(&ctx, echo_cmd("hello world"))
             .await
             .unwrap();
-        assert!(out.is_success(), "echo 应成功, stderr: {}", out.stderr);
+        assert!(out.is_success(), "echo 应成? stderr: {}", out.stderr);
         assert!(
             out.stdout.contains("hello world"),
             "stdout 应含 'hello world', got: {}",
@@ -252,21 +254,21 @@ mod tests {
         assert_eq!(out.exit_code, 0);
     }
 
-    /// 跨平台: false / non-zero exit
+    /// 跨平? false / non-zero exit
     #[tokio::test]
     async fn run_failing_command_returns_nonzero() {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
-        // false 在 Unix 退出 1, Windows 没有 false 但 exit 1 通过 cmd /C "exit 1"
+        // false ?Unix 退?1, Windows 没有 false ?exit 1 通过 cmd /C "exit 1"
         let out = svc
             .run_command(&ctx, false_cmd())
             .await
-            .unwrap(); // 不 panic, exit 0 也是成功命令
-        assert_eq!(out.exit_code, 1, "false 应退出 1, got: {}", out.exit_code);
+            .unwrap(); // ?panic, exit 0 也是成功命令
+        assert_eq!(out.exit_code, 1, "false 应退?1, got: {}", out.exit_code);
         assert!(!out.is_success());
     }
 
-    /// 跨平台: 捕获 stderr
+    /// 跨平? 捕获 stderr
     #[tokio::test]
     async fn run_captures_stderr() {
         let ctx = ctx_with_default_timeout();
@@ -275,8 +277,7 @@ mod tests {
             .run_command(&ctx, stderr_cmd("oops"))
             .await
             .unwrap();
-        // 命令本身退出 0, 但 stderr 有内容
-        assert!(out.is_success());
+        // 命令本身退?0, ?stderr 有内?        assert!(out.is_success());
         assert!(
             out.stderr.contains("oops"),
             "stderr 应含 'oops', got: {}",
@@ -284,7 +285,7 @@ mod tests {
         );
     }
 
-    /// 跨平台: timeout (Phase 1 测试用 sleep)
+    /// 跨平? timeout (Phase 1 测试?sleep)
     #[tokio::test]
     async fn run_respects_timeout() {
         let ctx = ctx_with_default_timeout();
@@ -295,7 +296,7 @@ mod tests {
         assert!(matches!(result, Err(BashError::Timeout(100))));
     }
 
-    /// 业务方覆盖默认 timeout
+    /// 业务方覆盖默?timeout
     #[tokio::test]
     async fn run_uses_ctx_overridden_timeout() {
         let ctx = Context::new();
@@ -306,7 +307,7 @@ mod tests {
     }
 
     // ========================================================================
-    // 跨平台 helper
+    // 跨平?helper
     // ========================================================================
 
     #[cfg(target_family = "unix")]
@@ -346,7 +347,7 @@ mod tests {
 
     #[cfg(target_family = "windows")]
     fn sleep_cmd(secs: &str) -> String {
-        // Windows 没有 sleep 内置, 用 ping -n 凑合
+        // Windows 没有 sleep 内置, ?ping -n 凑合
         format!("ping -n {} 127.0.0.1 > nul", secs.to_string().parse::<u32>().unwrap_or(5) + 1)
     }
 }

@@ -1,14 +1,12 @@
-//! ma_harness_plugin_fs — first-party plugin: 文件系统读 / 写
-//!
+﻿//! ma_harness_plugin_fs ?first-party plugin: 文件系统?/ ?//!
 //! **设计**: seam 公开 API 风格.
 //!
-//! **Week 5-6 实装**: 3 个核心方法 (read_file / write_file / list_dir) + 路径白名单
-//! (READ_ALLOW_LIST / WRITE_ALLOW_LIST typed key,业务方 set 控制 sandbox).
+//! **Week 5-6 实装**: 3 个核心方?(read_file / write_file / list_dir) + 路径白名?//! (READ_ALLOW_LIST / WRITE_ALLOW_LIST typed key,业务?set 控制 sandbox).
 //!
-//! **Phase 1 简化**:
-//! - 白名单用 typed key (Vec<String> 路径前缀),**不** 写 landlock syscall
-//! - 没有 symlink 防绕过 (Phase 2 加)
-//! - 路径不允许绝对 (相对 cwd, Phase 2 加绝对路径白名单)
+//! **Phase 1 简?*:
+//! - 白名单用 typed key (Vec<String> 路径前缀),**?* ?landlock syscall
+//! - 没有 symlink 防绕?(Phase 2 ?
+//! - 路径不允许绝?(相对 cwd, Phase 2 加绝对路径白名单)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -27,10 +25,10 @@ use tokio::fs;
 // 公开 typed key
 // ============================================================================
 
-/// 允许读的路径白名单 (前缀匹配, 业务方 set)
+/// 允许读的路径白名?(前缀匹配, 业务?set)
 pub static READ_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("read_allow_list");
 
-/// 允许写的路径白名单 (前缀匹配)
+/// 允许写的路径白名?(前缀匹配)
 pub static WRITE_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("write_allow_list");
 
 // ============================================================================
@@ -40,16 +38,15 @@ pub static WRITE_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("
 /// Fs plugin 错误
 #[derive(Debug, Error)]
 pub enum FsError {
-    /// 路径不在白名单
-    #[error("path {path:?} not in {list:?} allow list")]
+    /// 路径不在白名?    #[error("path {path:?} not in {list:?} allow list")]
     NotInAllowList {
         /// 路径
         path: String,
-        /// 白名单名字 ("read" / "write")
+        /// 白名单名?("read" / "write")
         list: &'static str,
     },
 
-    /// 路径包含 ".." (防穿越)
+    /// 路径包含 ".." (防穿?
     #[error("path {0:?} contains '..' (forbidden)")]
     PathTraversal(String),
 
@@ -66,14 +63,12 @@ pub enum FsError {
 // Entry / DirEntry
 // ============================================================================
 
-/// 目录项
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 目录?#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirEntry {
-    /// 文件 / 目录名
-    pub name: String,
+    /// 文件 / 目录?    pub name: String,
     /// 是否目录
     pub is_dir: bool,
-    /// 文件大小 (bytes, 目录为 0)
+    /// 文件大小 (bytes, 目录?0)
     pub size: u64,
 }
 
@@ -81,11 +76,10 @@ pub struct DirEntry {
 // FsService
 // ============================================================================
 
-/// Fs service — 沙箱文件读 / 写
-pub struct FsService;
+/// Fs service ?沙箱文件?/ ?pub struct FsService;
 
 impl FsService {
-    /// 读文件 (路径必须以白名单任一前缀开头)
+    /// 读文?(路径必须以白名单任一前缀开?
     pub async fn read_file(&self, ctx: &Context, path: &Path) -> Result<String, FsError> {
         let safe = self.sanitize_path(ctx, path, "read")?;
         self.check_allow_list(ctx, &safe, "read")?;
@@ -93,7 +87,7 @@ impl FsService {
         Ok(content)
     }
 
-    /// 写文件 (覆盖, 路径必须在写白名单)
+    /// 写文?(覆盖, 路径必须在写白名?
     pub async fn write_file(
         &self,
         ctx: &Context,
@@ -123,16 +117,13 @@ impl FsService {
         Ok(entries)
     }
 
-    /// 路径消毒: 阻止 "..", 解析到绝对路径
-    fn sanitize_path(&self, _ctx: &Context, path: &Path, op: &str) -> Result<PathBuf, FsError> {
+    /// 路径消毒: 阻止 "..", 解析到绝对路?    fn sanitize_path(&self, _ctx: &Context, path: &Path, op: &str) -> Result<PathBuf, FsError> {
         let s = path.to_string_lossy().to_string();
-        // 防穿越
-        if s.contains("..") {
+        // 防穿?        if s.contains("..") {
             return Err(FsError::PathTraversal(s));
         }
-        // Phase 1: 简单 path 拼接, 假设 caller 传相对或绝对路径
-        // Phase 2: 强制 relative + 跟 ctx.cwd() 拼
-        tracing::debug!(path = %s, op, "path sanitized");
+        // Phase 1: 简?path 拼接, 假设 caller 传相对或绝对路径
+        // Phase 2: 强制 relative + ?ctx.cwd() ?        tracing::debug!(path = %s, op, "path sanitized");
         Ok(PathBuf::from(path))
     }
 
@@ -147,7 +138,7 @@ impl FsService {
             }),
         };
         if allows.is_empty() {
-            // Phase 1: 白名单空 = 拒绝所有 (fail-closed)
+            // Phase 1: 白名单空 = 拒绝所?(fail-closed)
             return Err(FsError::NotInAllowList {
                 path: path.to_string_lossy().to_string(),
                 list,
@@ -167,8 +158,9 @@ impl FsService {
 }
 
 impl CordisService for FsService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(FsService)
     }
     fn name(&self) -> &str {
@@ -177,8 +169,9 @@ impl CordisService for FsService {
 }
 
 impl SeamService for FsService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(FsService)
     }
     fn name(&self) -> &str {
@@ -195,9 +188,9 @@ pub struct FsPlugin;
 
 impl CordisPlugin for FsPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = FsService::install(ctx)?;
+        let svc = <FsService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(std::sync::Arc::new(svc));
-        // 默认白名单空 (fail-closed, 业务方必须显式 set)
+        // 默认白名单空 (fail-closed, 业务方必须显?set)
         ctx.set(READ_ALLOW_LIST, Vec::<String>::new());
         ctx.set(WRITE_ALLOW_LIST, Vec::<String>::new());
         Ok(())
@@ -227,7 +220,7 @@ mod tests {
 
     fn ctx_with_temp_allow_list(tmp: &tempfile::TempDir) -> Context {
         let ctx = Context::new();
-        // 白名单 = temp 目录绝对路径
+        // 白名?= temp 目录绝对路径
         let tmp_path = tmp.path().to_string_lossy().to_string();
         ctx.set(READ_ALLOW_LIST, vec![tmp_path.clone()]);
         ctx.set(WRITE_ALLOW_LIST, vec![tmp_path]);
@@ -266,7 +259,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = ctx_with_temp_allow_list(&tmp);
         let svc = FsService;
-        // 试图读 /etc/passwd (不在白名单)
+        // 试图?/etc/passwd (不在白名?
         let path = std::path::Path::new("/etc/passwd");
         let result = svc.read_file(&ctx, path).await;
         assert!(matches!(result, Err(FsError::NotInAllowList { .. })));

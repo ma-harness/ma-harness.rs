@@ -40,31 +40,27 @@ async fn version() -> Json<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
+    // 2026-08-18: 用 salvo::test::TestClient 标准 API
+    // 之前 mental commit 写 `router().into_service()` + `salvo::hyper::Body::empty()` 都错.
+    // 正确做法: `TestClient::get(url).send(service)` 一行.
     use super::*;
-    use salvo::http::StatusCode;
+    use salvo::test::TestClient;
 
     #[tokio::test]
     async fn health_returns_ok() {
-        // 走 in-process Service, 不真起 server (跟 axum 的 oneshot 等价)
-        let service = router().into_service();
-        let req = salvo::hyper::Request::builder()
-            .method("GET")
-            .uri("/health")
-            .body(salvo::hyper::Body::empty())
-            .unwrap();
-        let resp = service.handle(req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        let service = Service::new(router());
+        let resp = TestClient::get("http://localhost/health")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code(), salvo::http::StatusCode::OK);
     }
 
     #[tokio::test]
     async fn version_returns_ok() {
-        let service = router().into_service();
-        let req = salvo::hyper::Request::builder()
-            .method("GET")
-            .uri("/version")
-            .body(salvo::hyper::Body::empty())
-            .unwrap();
-        let resp = service.handle(req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
+        let service = Service::new(router());
+        let resp = TestClient::get("http://localhost/version")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code(), salvo::http::StatusCode::OK);
     }
 }

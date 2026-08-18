@@ -1,14 +1,13 @@
-//! ma_harness_plugin_web — first-party plugin: HTTP / HTTPS 请求
+//! ma_harness_plugin_web ?first-party plugin: HTTP / HTTPS 请求
 //!
 //! **设计**: seam 公开 API 风格.
 //!
-//! **Week 5-6 实装**: 2 个核心方法 (http_get / http_post) + URL 白名单
-//! (EGRESS_ALLOW_LIST) + 超时 (TIMEOUT_MS).
+//! **Week 5-6 实装**: 2 个核心方?(http_get / http_post) + URL 白名?//! (EGRESS_ALLOW_LIST) + 超时 (TIMEOUT_MS).
 //!
-//! **Phase 1 简化**:
+//! **Phase 1 简?*:
 //! - URL 白名单用字符串前缀 (Phase 2 加更严格匹配)
-//! - 没有 DNS 防泄漏 (Phase 2)
-//! - 没有 cookie 持久化 (Phase 2)
+//! - 没有 DNS 防泄?(Phase 2)
+//! - 没有 cookie 持久?(Phase 2)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -26,13 +25,13 @@ use thiserror::Error;
 // 公开 typed key
 // ============================================================================
 
-/// 出站 URL 白名单 (前缀匹配, 业务方 set)
+/// 出站 URL 白名?(前缀匹配, 业务?set)
 pub static EGRESS_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("egress_allow_list");
 
 /// HTTP 请求超时 (ms)
 pub static TIMEOUT_MS: ma_harness_cordis::CtxKey<u32> = ctx_key!("timeout_ms");
 
-/// 默认超时: 30 秒
+/// 默认超时 (ms)
 pub const DEFAULT_TIMEOUT_MS: u32 = 30_000;
 
 // ============================================================================
@@ -73,9 +72,9 @@ pub enum WebError {
 pub struct HttpResponse {
     /// HTTP 状态码
     pub status: u16,
-    /// 响应头 (Content-Type 等)
+    /// 响应?(Content-Type ?
     pub content_type: String,
-    /// 响应 body (字符串, 业务方按需 parse)
+    /// 响应 body (字符? 业务方按需 parse)
     pub body: String,
 }
 
@@ -90,13 +89,13 @@ impl HttpResponse {
 // WebService
 // ============================================================================
 
-/// Web service — 受 sandbox 限制的 HTTP client
+/// Web service ?sandbox 限制?HTTP client
 pub struct WebService {
     client: reqwest::Client,
 }
 
 impl WebService {
-    /// 构造 (Phase 1: 默认 client, Phase 2 加 connection pool / proxy)
+    /// 构?(Phase 1: 默认 client, Phase 2 ?connection pool / proxy)
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .user_agent("ma-harness/0.1.0")
@@ -163,7 +162,7 @@ impl WebService {
         })
     }
 
-    /// 检查 URL 是否在白名单
+    /// 检?URL 是否在白名单
     fn check_allow_list(&self, ctx: &Context, url: &str) -> Result<(), WebError> {
         let allows = ctx.get(EGRESS_ALLOW_LIST).unwrap_or_default();
         if allows.is_empty() {
@@ -183,7 +182,7 @@ impl WebService {
         })
     }
 
-    /// 读 ctx.TIMEOUT_MS, fallback default
+    /// ?ctx.TIMEOUT_MS, fallback default
     fn get_timeout(&self, ctx: &Context) -> Duration {
         Duration::from_millis(ctx.get(TIMEOUT_MS).unwrap_or(DEFAULT_TIMEOUT_MS) as u64)
     }
@@ -196,8 +195,9 @@ impl Default for WebService {
 }
 
 impl CordisService for WebService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(WebService::new())
     }
     fn name(&self) -> &str {
@@ -206,8 +206,9 @@ impl CordisService for WebService {
 }
 
 impl SeamService for WebService {
-    type Error = anyhow::Error;
-    fn install(_ctx: &Context) -> anyhow::Result<Self> {
+    type Ctx = Context;
+    type Error = ma_harness_cordis::BoxedError;
+    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(WebService::new())
     }
     fn name(&self) -> &str {
@@ -223,7 +224,7 @@ pub struct WebPlugin;
 
 impl CordisPlugin for WebPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        let svc = WebService::install(ctx)?;
+        let svc = <WebService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(std::sync::Arc::new(svc));
         ctx.set(EGRESS_ALLOW_LIST, Vec::<String>::new());
         ctx.set(TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
@@ -244,7 +245,7 @@ impl SeamPlugin for WebPlugin {
 }
 
 // ============================================================================
-// 单元测试 (用 wiremock 模拟 server)
+// 单元测试 (?wiremock 模拟 server)
 // ============================================================================
 
 #[cfg(test)]
