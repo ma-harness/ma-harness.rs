@@ -35,7 +35,8 @@ ma-harness.rs/
 │   ├── ma_harness_proto/    ← Protobuf 定义 + Prost codegen
 │   ├── ma_harness_cli/      ← `mah` 二进制入口
 │   └── ma_harness_server/   ← axum + tonic 起的服务
-├── plugins/                 ← first-party 插件 (6 个)
+├── plugins/                 ← first-party 插件 (6 个) + hello demo
+│   ├── ma_harness_plugin_hello/   ← 端到端 demo (Week 1 Day 4, 验证 cordis 链路)
 │   ├── ma_harness_plugin_bash/
 │   ├── ma_harness_plugin_fs/
 │   ├── ma_harness_plugin_web/
@@ -151,7 +152,9 @@ dsh 用 camelCase (`agentLoop` / `sessionId`),**我们统一 snake_case**:
 | Week | 目标 |
 |---|---|
 | 1-2 | workspace 初始化 + Cordis-rs 最小可用 |
-| 3-4 | Cordis-rs 完整 API (ctx / service / listener) |
+| 3 | ctx.extend + typed key 强化 + ctx_key! macro |
+| 4 | hello-world plugin 端到端 (✓ 11 commit) |
+| 5 | Cordis-rs 完整 API (listener / command / disposable / fork / dispose) |
 | 5-6 | 6 个 first-party 插件 |
 | 7-9 | 端到端 demo (Default 模式跑通) |
 | 10-12 | conformance test + benchmark 对齐 |

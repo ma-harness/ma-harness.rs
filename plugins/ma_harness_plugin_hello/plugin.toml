@@ -1,0 +1,21 @@
+schema_version: 1
+name: hello
+version: 0.1.0
+description: 端到端 demo plugin (Week 1 Day 4). 演示 ctx 注入 service + typed key 读写.
+authors:
+  - ma-harness contributors
+license: MIT
+entry: lib::HelloPlugin
+seam:
+  tools: []
+  services: [HelloService]
+  listeners: []
+  commands: []
+  handlers: []
+sandbox:
+  exec:
+    enabled: false
+  fs:
+    read: []
+  net:
+    egress: false

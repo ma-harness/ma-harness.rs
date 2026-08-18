@@ -8,6 +8,7 @@ members = [
     "crates/ma_harness_cli",
     "crates/ma_harness_server",
     "crates/ma_harness_plugin_macro",
+    "plugins/ma_harness_plugin_hello",
     "plugins/ma_harness_plugin_bash",
     "plugins/ma_harness_plugin_fs",
     "plugins/ma_harness_plugin_web",
