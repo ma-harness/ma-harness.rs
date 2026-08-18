@@ -25,3 +25,11 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 # 测试用, 暂不引外部 crate
+
+# bench 用
+criterion = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "core"
+harness = false
