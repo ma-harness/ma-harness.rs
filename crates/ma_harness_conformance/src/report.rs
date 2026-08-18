@@ -305,7 +305,8 @@ mod tests {
         assert!(md.contains("# Conformance Report"));
         assert!(md.contains("pass_one"));
         assert!(md.contains("fail_one"));
-        assert!(md.contains("MissingField"));
+        // Diff::summary 输出 "[#1] missing field: result" (lowercase m)
+        assert!(md.contains("missing field"));
         assert!(md.contains("result"));
     }
 }

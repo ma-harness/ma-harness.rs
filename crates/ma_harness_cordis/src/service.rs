@@ -9,7 +9,9 @@
 //! - `install(ctx)` 用户实现, 通过 ctx 构造自身
 //! - `Self: Sized` 限制: 不支持 dyn Service (Phase 1 简化, Phase 2 加 trait object 注册)
 
+use std::any::Any;
 
+use crate::Context;
 
 /// Service trait (内部视角)
 ///
@@ -19,7 +21,10 @@
 ///
 /// 2026-08-18: 删 `type Ctx = ...` 默认 (stable 不支持 associated_type_defaults),
 /// impl 必须显式 `type Ctx = Context;` + `type Ctx = ...` bound 在使用方
-pub trait Service: Send + Sync + 'static {
+///
+/// 2026-08-18 (Day 53): 加 `Any` bound, 让 Arc<S> 能 coerce 到 Arc<dyn Any + Send + Sync>
+/// (Context::inject / service 需要 downcast Any 拿具体 type)
+pub trait Service: Send + Sync + Any + 'static {
     /// 关联的 ctx 类型 (impl 必须显式指定 `type Ctx = Context;`)
     type Ctx;
 
@@ -42,7 +47,9 @@ pub trait Service: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Context;
+    use std::any::Any;
+
+use crate::Context;
     use std::fmt;
 
     struct MyService {

@@ -119,9 +119,12 @@ impl Context {
     // Service inject / fetch
     // ========================================================================
 
-    /// 注入一个 service (用户自己 `MyService::install(&ctx)?` 拿到实例, 调这个塞)
-    pub fn inject<S: Service>(&self, service: Arc<S>) {
-        self.services.insert(TypeId::of::<S>(), service);
+        /// 注入一个 service (用户自己 `MyService::install(&ctx)?` 拿到实例, 调这个塞)
+    ///
+    /// 2026-08-18 (Day 53) 修复: 加 `S: Any` bound, 让 Arc<S> 能 coerce 到 Arc<dyn Any + Send + Sync>
+    pub fn inject<S: Service + Any>(&self, service: Arc<S>) {
+        let erased: Arc<dyn Any + Send + Sync> = service;
+        self.services.insert(TypeId::of::<S>(), erased);
     }
 
     /// 注入一个由 install 构造的 service (便捷方法)
@@ -147,10 +150,14 @@ impl Context {
     }
 
     /// 取一个 service (克隆 Arc, 不消耗原注册)
-    pub fn service<S: Service>(&self) -> Option<Arc<S>> {
-        self.services
-            .get(&TypeId::of::<S>())
-            .and_then(|entry| entry.downcast_ref::<Arc<S>>().cloned())
+    ///
+    /// 2026-08-18 (Day 53) 修复: 用 `Arc::downcast` 替代 `downcast_ref` (后者 downcast `&Arc<dyn Any>`
+    /// 到 `&Arc<S>`, 跟 outer Arc wrapper 错位, 永远 None). 改 downcast inner `dyn Any` 通过 `Arc::downcast`
+    pub fn service<S: Service + Any>(&self) -> Option<Arc<S>> {
+        let arc_any: Arc<dyn Any + Send + Sync> =
+            self.services.get(&TypeId::of::<S>())?.value().clone();
+        // Arc::downcast 消费 Arc<dyn Any>, 返 Result<Arc<T>, Arc<dyn Any>>
+        Arc::downcast::<S>(arc_any).ok()
     }
 
     /// 取一个 service, 找不到时返回错误
@@ -274,7 +281,7 @@ impl Context {
             );
         }
         // RAII guard: 即使 listener panic, guard drop 时会 set 回 false
-        let _guard = EmitGuard;
+        let _guard = EmitGuard::new();
         self.listeners.emit(self, &event);
     }
 
@@ -358,7 +365,16 @@ thread_local! {
 }
 
 /// RAII guard: drop 时把 IN_EMIT set 回 false (即使 panic unwinding 也跑)
+///
+/// 2026-08-18 (Day 53) 修复: new() 也 set IN_EMIT=true, 不然 emit 检查永远 false
 struct EmitGuard;
+
+impl EmitGuard {
+    fn new() -> Self {
+        IN_EMIT.with(|b| b.set(true));
+        EmitGuard
+    }
+}
 
 impl Drop for EmitGuard {
     fn drop(&mut self) {

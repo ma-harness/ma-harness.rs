@@ -17,6 +17,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use tracing::warn;
 
+/// 当前子 agent 嵌套深度 (parent fork 出来的 ctx 写 0, sub fork 出 sub-sub 写 1, ...)
+pub static SUBAGENT_DEPTH: ma_harness_cordis::CtxKey<u32> = ctx_key!("subagent_depth");
+
+/// 最大嵌套深度限制 (业务方配置, 默认 3)
 pub static MAX_DEPTH: ma_harness_cordis::CtxKey<u32> = ctx_key!("max_depth");
 pub const DEFAULT_MAX_DEPTH: u32 = 3;
 
@@ -47,7 +51,7 @@ impl SubagentService {
         parent_ctx: &Context,
         message: &str,
     ) -> Result<SpawnResult, SubagentError> {
-        let current_depth = parent_ctx.get(MAX_DEPTH).unwrap_or(0);
+        let current_depth = parent_ctx.get(SUBAGENT_DEPTH).unwrap_or(0);
         let max_depth = parent_ctx.get(MAX_DEPTH).unwrap_or(DEFAULT_MAX_DEPTH);
         if current_depth >= max_depth {
             return Err(SubagentError::MaxDepthExceeded(max_depth));
@@ -56,7 +60,7 @@ impl SubagentService {
         // 派生 sub ctx (继承 parent service 引用)
         let sub_ctx = parent_ctx.fork();
         // ?typed key: sub_depth = current_depth + 1 (递归保护)
-        sub_ctx.set(MAX_DEPTH, current_depth + 1);
+        sub_ctx.set(SUBAGENT_DEPTH, current_depth + 1);
 
         // ?AgentLoop (?StubModelAdapter 演示)
         let log = EventLog::open_in_memory()?;
@@ -115,6 +119,7 @@ impl CordisPlugin for SubagentPlugin {
         let svc = <SubagentService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(Arc::new(svc));
         ctx.set(MAX_DEPTH, DEFAULT_MAX_DEPTH);
+        // SUBAGENT_DEPTH 不设 (parent ctx 深度 0)
         Ok(())
     }
     fn name(&self) -> &str {
@@ -138,7 +143,8 @@ mod tests {
     #[tokio::test]
     async fn spawn_subagent_succeeds() {
         let parent = Context::new();
-        parent.set(MAX_DEPTH, 0u32);
+        // parent 深度 0, max 3 → 应该成功 spawn sub agent (深度变 1)
+        parent.set(SUBAGENT_DEPTH, 0u32);
         parent.set(MAX_DEPTH, 3u32);
         let svc = SubagentService;
         let result = svc.spawn_agent(&parent, "hello").await.unwrap();
@@ -149,8 +155,9 @@ mod tests {
     #[tokio::test]
     async fn spawn_respects_max_depth() {
         let parent = Context::new();
+        // current = 3, max = 3 → 应该拒绝 (3 >= 3)
+        parent.set(SUBAGENT_DEPTH, 3u32);
         parent.set(MAX_DEPTH, 3u32);
-        parent.set(MAX_DEPTH, 3u32); // current = max ?应该拒绝
         let svc = SubagentService;
         let result = svc.spawn_agent(&parent, "hi").await;
         assert!(matches!(result, Err(SubagentError::MaxDepthExceeded(_))));

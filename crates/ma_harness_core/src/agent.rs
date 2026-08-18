@@ -340,18 +340,20 @@ mod tests {
         let result = agent.run(req).await;
         assert!(result.is_err());
 
-        // 日志应该有 2 个事件: RunStart + ModelError (前 2 个成功落库, 后续 panic 不会)
+        // 日志应该有 3 个事件: RunStart + ModelRequest + ModelError
+        // (ModelRequest 永远先于 complete(), 即使 complete() 失败)
         // RunEnd 没 emit (错误路径早返回)
         let count = log.count("s1").unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 3, "error path 应 emit RunStart + ModelRequest + ModelError");
 
         let all = log.query(&crate::log::EventQuery {
             session_id: "s1".to_string(),
             ..Default::default()
         }).unwrap();
         assert_eq!(all.events[0].event.event_type, EventType::RunStart);
-        assert_eq!(all.events[1].event.event_type, EventType::ModelError);
-        assert!(!all.events[1].event.model_visible, "ModelError 不是 model-visible");
+        assert_eq!(all.events[1].event.event_type, EventType::ModelRequest);
+        assert_eq!(all.events[2].event.event_type, EventType::ModelError);
+        assert!(!all.events[2].event.model_visible, "ModelError 不是 model-visible");
     }
 
     #[tokio::test]

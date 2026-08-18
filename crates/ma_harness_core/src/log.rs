@@ -444,6 +444,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // 用 unix chmod 0o444 模拟只读, Windows 文件权限模型不同跳过
     #[should_panic(expected = "落库失败")]
     fn append_panics_on_db_failure() {
         // 用一个只读连接模拟落库失败
