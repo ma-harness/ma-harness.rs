@@ -1,12 +1,22 @@
 //! ma-harness CLI 入口 (`mah` 二进制)
 //!
-//! Week 7-8 实现: 5 子命令 + server 真实起 (tonic + axum).
+//! 7 个子命令 (Day 7-8 5 个 + Day 39 +2):
+//! - `start` — 起 server (tonic gRPC + axum HTTP)
+//! - `run` — 跑一次 agent (本地, 不连 server)
+//! - `plugins` — 列出已装载 plugin
+//! - `events` — 查 session 事件
+//! - `conformance` — 跑 conformance fixture (验证 ma-harness 跟 dsh 行为等价)
+//! - `bench` — benchmark 信息 / 跑 cargo bench 提示
+//! - `version` — 打印版本
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use ma_harness_conformance::{
+    fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat, ReportWriter,
+};
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
 use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
@@ -54,6 +64,32 @@ enum Commands {
         /// Session ID
         session: String,
     },
+    /// 跑 conformance fixture, 比对实际事件 vs 期望, 出报告
+    ///
+    /// 例子:
+    ///   mah conformance --fixtures fixtures/smoke.jsonl --output target/
+    ///   mah conformance --fixtures fixtures/dsh/ --dsh --output target/
+    Conformance {
+        /// Fixture 路径 (文件 .jsonl 或目录)
+        #[arg(long)]
+        fixtures: PathBuf,
+        /// 视为 dsh 风格 fixture (走 dsh_format 转换层)
+        #[arg(long)]
+        dsh: bool,
+        /// 报告输出目录 (写 .md + .json)
+        #[arg(long, default_value = "target/")]
+        output: PathBuf,
+        /// verbose (打印每条 fixture 跑的过程)
+        #[arg(long, short)]
+        verbose: bool,
+    },
+    /// Benchmark 信息 / 跑 cargo bench 提示
+    ///
+    /// 不真跑 (criterion 自己跑), 只打印命令 + 报告路径
+    Bench {
+        /// 单 crate (e.g. ma_harness_cordis) 不传跑全部
+        crate_name: Option<String>,
+    },
     /// 版本
     Version,
 }
@@ -72,6 +108,10 @@ async fn main() -> Result<()> {
         }
         Commands::Plugins => list_plugins(),
         Commands::Events { session } => list_events(&session),
+        Commands::Conformance { fixtures, dsh, output, verbose } => {
+            run_conformance(&fixtures, dsh, &output, verbose)
+        }
+        Commands::Bench { crate_name } => print_bench_info(crate_name.as_deref()),
         Commands::Version => {
             println!("mah {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -157,5 +197,102 @@ fn list_events(session: &str) -> Result<()> {
             e.seq, e.event.event_type, e.event.severity
         );
     }
+    Ok(())
+}
+
+/// 跑 conformance fixture, 出报告
+fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose: bool) -> Result<()> {
+    // 1. 加载 fixture
+    let fixtures: Vec<Fixture> = if dsh {
+        // dsh 风格: 先 read 整个文件, 用 dsh_format::parse_dsh_jsonl
+        let content = std::fs::read_to_string(fixtures_path)
+            .with_context(|| format!("read dsh fixtures: {}", fixtures_path.display()))?;
+        ma_harness_conformance::dsh_format::parse_dsh_jsonl(&content)
+            .map_err(|e| anyhow::anyhow!("parse dsh jsonl: {e}"))?
+    } else if fixtures_path.is_dir() {
+        // ma-harness 风格: 目录里所有 .jsonl
+        FixtureLoader::from_dir(fixtures_path)
+            .map_err(|e| anyhow::anyhow!("load fixtures from dir: {e}"))?
+    } else {
+        // ma-harness 风格: 单文件
+        FixtureLoader::from_jsonl(fixtures_path)
+            .map_err(|e| anyhow::anyhow!("load fixtures from file: {e}"))?
+    };
+
+    if fixtures.is_empty() {
+        eprintln!("No fixtures loaded from {}", fixtures_path.display());
+        return Ok(());
+    }
+    eprintln!("Loaded {} fixtures from {}", fixtures.len(), fixtures_path.display());
+
+    // 2. 跑
+    let mut runner = ConformanceRunner::new();
+    if verbose {
+        runner = runner.verbose();
+    }
+    let results: Vec<ConformanceResult> = runner.run_all(&fixtures);
+
+    // 3. 汇总
+    let summary = runner.build_summary(&results);
+
+    eprintln!(
+        "Conformance: {} / {} passed ({:.1}%) in {}ms",
+        summary.passed,
+        summary.total,
+        summary.pass_rate * 100.0,
+        summary.total_duration_ms
+    );
+    if !summary.meets_target() {
+        eprintln!(
+            "WARNING: pass rate {:.1}% < 95% target (see report for diffs)",
+            summary.pass_rate * 100.0
+        );
+    }
+
+    // 4. 写报告
+    std::fs::create_dir_all(output)
+        .with_context(|| format!("create output dir: {}", output.display()))?;
+
+    let report = ReportWriter::build(&results, summary);
+    let md_path = output.join("conformance-report.md");
+    let json_path = output.join("conformance-report.json");
+
+    ReportWriter::write_markdown(&report, &md_path)
+        .with_context(|| format!("write markdown: {}", md_path.display()))?;
+    ReportWriter::write_json(&report, &json_path)
+        .with_context(|| format!("write json: {}", json_path.display()))?;
+
+    println!("Markdown: {}", md_path.display());
+    println!("JSON:     {}", json_path.display());
+    println!("Format:   {:?}", ReportFormat::Markdown);
+
+    Ok(())
+}
+
+/// 打印 benchmark 信息 (不真跑, criterion 走 cargo bench)
+fn print_bench_info(crate_name: Option<&str>) -> Result<()> {
+    println!("ma-harness bench info");
+    println!("=====================");
+    println!();
+    println!("Benchmark 实际跑用 cargo bench (criterion 0.5 驱动).");
+    println!();
+    println!("跑法:");
+    if let Some(c) = crate_name {
+        println!("  cargo bench -p {c}");
+    } else {
+        println!("  cargo bench --workspace");
+    }
+    println!();
+    println!("单 bench:");
+    if let Some(c) = crate_name {
+        println!("  cargo bench -p {c} -- <bench_name>");
+    } else {
+        println!("  cargo bench -p ma_harness_cordis -- ctx_set_typed_key");
+    }
+    println!();
+    println!("HTML 报告:");
+    println!("  target/criterion/<crate>/<bench_name>/report/index.html");
+    println!();
+    println!("详细 bench 列表见 docs/benchmark-design.md § 3 + docs/benchmark-report-week11.md");
     Ok(())
 }

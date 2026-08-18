@@ -23,6 +23,7 @@ ma_harness_core = { path = "../ma_harness_core" }
 ma_harness_seam = { path = "../ma_harness_seam" }
 ma_harness_proto = { path = "../ma_harness_proto" }
 ma_harness_server = { path = "../ma_harness_server" }
+ma_harness_conformance = { path = "../ma_harness_conformance" }
 ma_harness_plugin_hello = { path = "../../plugins/ma_harness_plugin_hello" }
 # 外部
 clap = { workspace = true }
