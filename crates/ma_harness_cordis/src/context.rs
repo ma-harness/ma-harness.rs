@@ -33,7 +33,9 @@ use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
+use crate::disposable::{Disposable, DisposableEntry, Scope};
 use crate::key::CtxKey;
+use crate::listener::{Listener, ListenerEvent, ListenerRegistry};
 use crate::plugin::{Plugin, PluginRegistry};
 use crate::service::Service;
 use crate::CordisError;
@@ -55,6 +57,12 @@ pub struct Context {
     services: ServiceMap,
     /// plugin registry
     plugins: PluginRegistry,
+    /// listener registry (Week 1 Day 5 加)
+    listeners: ListenerRegistry,
+    /// disposable list (Week 1 Day 5 加, 跟 scope 共享)
+    disposables: Arc<parking_lot::Mutex<Vec<DisposableEntry>>>,
+    /// ctx 是否已 dispose
+    disposed: std::sync::atomic::AtomicBool,
 }
 
 impl Context {
@@ -209,6 +217,137 @@ impl Context {
             self.services.insert(type_id, arc);
         }
     }
+
+    // ========================================================================
+    // Listener / Emit (Week 1 Day 5)
+    // ========================================================================
+
+    /// 订阅事件 E
+    ///
+    /// listener 可以是闭包 `|ctx, ev| { ... }` 或 impl `Listener<E>` 的 struct.
+    /// 闭包形式 `Fn(&Context, &E) + Send + Sync + 'static` 自动 impl Listener<E>.
+    ///
+    /// # 重复订阅
+    ///
+    /// 同一 E 类型可以注册多个 listener, 触发时按注册顺序同步 dispatch.
+    /// 同一 listener (Arc ptr_eq) 重复注册会**追加**, 不去重.
+    pub fn on<E: ListenerEvent, L: Listener<E>>(&self, listener: Arc<L>) {
+        self.listeners.on(listener);
+    }
+
+    /// 触发事件
+    ///
+    /// 同步 dispatch 给所有订阅 E 的 listener.
+    /// 失败由 listener 内部处理 (不返回 Result, Phase 2 加).
+    ///
+    /// # Reentrancy (Phase 1 不允许)
+    ///
+    /// listener 不能 emit 另一个 event. 这避免循环触发 + 栈溢出.
+    /// Phase 1 实现: emit 时检查 thread-local "in emit" 标记, 已 true 则 panic.
+    ///
+    /// # Panic 安全
+    ///
+    /// IN_EMIT thread-local 标志用 RAII guard 包装, 即使 listener panic
+    /// 也会在 unwinding 时恢复, 下次 emit 不会卡死.
+    pub fn emit<E: ListenerEvent>(&self, event: E) {
+        if IN_EMIT.with(|b| b.get()) {
+            panic!(
+                "reentrant emit detected for event type {}. \
+                 Phase 1 不支持 listener 内 emit. Phase 2 加 deferred queue.",
+                std::any::type_name::<E>()
+            );
+        }
+        // RAII guard: 即使 listener panic, guard drop 时会 set 回 false
+        let _guard = EmitGuard;
+        self.listeners.emit(self, &event);
+    }
+
+    /// 列出订阅 E 的 listener 数量 (调试)
+    pub fn listener_count<E: ListenerEvent>(&self) -> usize {
+        self.listeners.count::<E>()
+    }
+
+    // ========================================================================
+    // Disposable / Scope (Week 1 Day 5)
+    // ========================================================================
+
+    /// 创建一个 RAII scope
+    ///
+    /// scope drop 时, 注册的 disposable 按 LIFO 顺序释放.
+    /// 业务方也可主动 `scope.dispose()` 提前释放.
+    pub fn scope(&self) -> Scope {
+        Scope::new(Arc::clone(&self.disposables))
+    }
+
+    /// 直接注册 disposable (不进 scope, ctx.dispose 时统一释放)
+    pub fn on_dispose<D: Disposable>(&self, d: Arc<D>) {
+        let mut disposables = self.disposables.lock();
+        disposables.push(DisposableEntry::new(d));
+    }
+
+    /// 主动释放 ctx 所有 disposable
+    ///
+    /// LIFO 顺序. 失败时收集, 返回第一个错误.
+    /// 多次调用 idempotent (disposed AtomicBool).
+    pub fn dispose(&self) -> anyhow::Result<()> {
+        use std::sync::atomic::Ordering;
+        if self
+            .disposed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let mut disposables = self.disposables.lock();
+            let mut first_err: Option<anyhow::Error> = None;
+            while let Some(e) = disposables.pop() {
+                if let Err(err) = e.dispose() {
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
+            }
+            match first_err {
+                Some(e) => Err(e),
+                None => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// ctx 是否已 dispose
+    pub fn is_disposed(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.disposed.load(Ordering::SeqCst)
+    }
+
+    // ========================================================================
+    // Fork (Week 1 Day 5, 派生 sub ctx)
+    // ========================================================================
+
+    /// 派生子 ctx, 共享 service 引用
+    ///
+    /// 跟 `extend_from` 类似, 但**新建**一个 ctx (不是已有 ctx extend).
+    /// typed key / plugin / disposable / listener 都不继承 (子 ctx 自己装).
+    /// service (Arc) 继承 — 跟 dsh fork 行为一致 (live 引用, 不是 snapshot).
+    pub fn fork(&self) -> Context {
+        let child = Context::new();
+        child.extend_from(self);
+        child
+    }
+}
+
+// Reentrancy guard (Phase 1 简化: thread-local bool + RAII guard 防止 panic 泄漏)
+thread_local! {
+    static IN_EMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard: drop 时把 IN_EMIT set 回 false (即使 panic unwinding 也跑)
+struct EmitGuard;
+
+impl Drop for EmitGuard {
+    fn drop(&mut self) {
+        IN_EMIT.with(|b| b.set(false));
+    }
 }
 
 impl std::fmt::Debug for Context {
@@ -217,6 +356,7 @@ impl std::fmt::Debug for Context {
             .field("storage_keys", &self.storage.len())
             .field("services", &self.services.len())
             .field("plugins", &self.plugins.list())
+            .field("disposed", &self.is_disposed())
             .finish()
     }
 }
@@ -441,5 +581,274 @@ mod tests {
         // 不应有副作用
         assert_eq!(child.get(SESSION_ID), Some("child_value".to_string()));
         assert!(child.plugins().is_empty());
+    }
+
+    // =========================================================================
+    // Week 1 Day 5 新增测试: listener / emit / scope / fork / dispose
+    // =========================================================================
+
+    use crate::listener::ListenerEvent;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug, Clone)]
+    struct TestEvent {
+        msg: String,
+    }
+    impl ListenerEvent for TestEvent {}
+
+    #[derive(Debug, Clone)]
+    struct OtherTestEvent;
+    impl ListenerEvent for OtherTestEvent {}
+
+    #[test]
+    fn emit_with_no_listener_noop() {
+        let ctx = Context::new();
+        ctx.emit(TestEvent {
+            msg: "hi".to_string(),
+        }); // 不 panic
+    }
+
+    #[test]
+    fn on_and_emit_calls_listener() {
+        let ctx = Context::new();
+        let called = Arc::new(AtomicUsize::new(0));
+        let c2 = Arc::clone(&called);
+        let msg_received = Arc::new(parking_lot::Mutex::new(String::new()));
+        let m2 = Arc::clone(&msg_received);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |_ctx, ev| {
+            c2.fetch_add(1, Ordering::SeqCst);
+            *m2.lock() = ev.msg.clone();
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "hello".to_string(),
+        });
+        assert_eq!(called.load(Ordering::SeqCst), 1);
+        assert_eq!(*msg_received.lock(), "hello");
+    }
+
+    #[test]
+    fn multiple_listeners_all_called() {
+        let ctx = Context::new();
+        let a = Arc::new(AtomicUsize::new(0));
+        let b = Arc::new(AtomicUsize::new(0));
+        let a2 = Arc::clone(&a);
+        let b2 = Arc::clone(&b);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+            a2.fetch_add(1, Ordering::SeqCst);
+        }));
+        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+            b2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "x".to_string(),
+        });
+        assert_eq!(a.load(Ordering::SeqCst), 1);
+        assert_eq!(b.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn listeners_for_different_events_isolated() {
+        let ctx = Context::new();
+        let counter_called = Arc::new(AtomicUsize::new(0));
+        let other_called = Arc::new(AtomicUsize::new(0));
+        let cc = Arc::clone(&counter_called);
+        let oc = Arc::clone(&other_called);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |_, _| {
+            cc.fetch_add(1, Ordering::SeqCst);
+        }));
+        ctx.on::<OtherTestEvent, _>(Arc::new(move |_, _| {
+            oc.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "x".to_string(),
+        });
+        assert_eq!(counter_called.load(Ordering::SeqCst), 1);
+        assert_eq!(other_called.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn listener_count_reflects_subscriptions() {
+        let ctx = Context::new();
+        assert_eq!(ctx.listener_count::<TestEvent>(), 0);
+        ctx.on::<TestEvent, _>(Arc::new(|_, _| {}));
+        assert_eq!(ctx.listener_count::<TestEvent>(), 1);
+        ctx.on::<TestEvent, _>(Arc::new(|_, _| {}));
+        assert_eq!(ctx.listener_count::<TestEvent>(), 2);
+    }
+
+    #[test]
+    fn listener_can_read_ctx_during_emit() {
+        // listener 拿 &Context, 可以 ctx.get / ctx.service
+        let ctx = Context::new();
+        ctx.set(SESSION_ID, "session_42".to_string());
+
+        let captured = Arc::new(parking_lot::Mutex::new(String::new()));
+        let cap2 = Arc::clone(&captured);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx, _ev| {
+            let id = ctx.get(SESSION_ID).unwrap_or_default();
+            *cap2.lock() = id;
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "x".to_string(),
+        });
+        assert_eq!(*captured.lock(), "session_42");
+    }
+
+    #[test]
+    #[should_panic(expected = "reentrant emit")]
+    fn reentrant_emit_panics() {
+        let ctx = Context::new();
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx, _ev| {
+            // listener 内 emit: reentrancy → panic
+            ctx.emit(OtherTestEvent);
+        }));
+        ctx.emit(TestEvent {
+            msg: "trigger".to_string(),
+        });
+    }
+
+    // === Disposable / Scope ===
+
+    use std::sync::atomic::AtomicUsize;
+
+    struct CountingResource {
+        count: Arc<AtomicUsize>,
+    }
+    impl Disposable for CountingResource {
+        fn dispose(&self) -> anyhow::Result<()> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct FailingResource;
+    impl Disposable for FailingResource {
+        fn dispose(&self) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("intentional failure"))
+        }
+    }
+
+    #[test]
+    fn scope_disposes_on_drop() {
+        let ctx = Context::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let resource = Arc::new(CountingResource {
+            count: Arc::clone(&count),
+        });
+
+        {
+            let scope = ctx.scope();
+            scope.add(resource);
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+        } // scope drop
+
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ctx_dispose_releases_all_resources() {
+        let ctx = Context::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let r1 = Arc::new(CountingResource {
+            count: Arc::clone(&count),
+        });
+        let r2 = Arc::new(CountingResource {
+            count: Arc::clone(&count),
+        });
+
+        ctx.on_dispose(r1);
+        ctx.on_dispose(r2);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        ctx.dispose().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(ctx.is_disposed());
+    }
+
+    #[test]
+    fn ctx_dispose_idempotent() {
+        let ctx = Context::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let r = Arc::new(CountingResource {
+            count: Arc::clone(&count),
+        });
+        ctx.on_dispose(r);
+        ctx.dispose().unwrap();
+        ctx.dispose().unwrap(); // 第二次 no-op
+        ctx.dispose().unwrap(); // 第三次 no-op
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ctx_dispose_returns_first_error() {
+        let ctx = Context::new();
+        ctx.on_dispose(Arc::new(FailingResource));
+        let result = ctx.dispose();
+        assert!(result.is_err());
+        assert!(ctx.is_disposed(), "dispose 失败也标记 disposed");
+    }
+
+    // === Fork ===
+
+    #[test]
+    fn fork_inherits_services() {
+        let parent = Context::new();
+        parent.inject_from::<GreetingService>().unwrap();
+
+        let child = parent.fork();
+        assert!(child.service::<GreetingService>().is_some(), "fork 应继承 service");
+    }
+
+    #[test]
+    fn fork_does_not_inherit_keys_or_plugins() {
+        let parent = Context::new();
+        parent.set(SESSION_ID, "parent".to_string());
+        parent.plugin(HelloPlugin).unwrap();
+
+        let child = parent.fork();
+        assert!(child.get(SESSION_ID).is_none(), "fork 不继承 typed key");
+        assert!(child.plugins().is_empty(), "fork 不继承 plugin");
+    }
+
+    #[test]
+    fn fork_shares_service_arc() {
+        // fork 跟 extend_from 行为一致: shared Arc, 不是 clone
+        let parent = Context::new();
+        let p_arc = parent.inject_from::<GreetingService>().unwrap();
+
+        let child = parent.fork();
+        let c_arc = child.service::<GreetingService>().unwrap();
+        assert!(Arc::ptr_eq(&p_arc, &c_arc));
+    }
+
+    #[test]
+    fn fork_disposes_independently() {
+        let parent = Context::new();
+        let parent_count = Arc::new(AtomicUsize::new(0));
+        parent.on_dispose(Arc::new(CountingResource {
+            count: Arc::clone(&parent_count),
+        }));
+
+        let child = parent.fork();
+        let child_count = Arc::new(AtomicUsize::new(0));
+        child.on_dispose(Arc::new(CountingResource {
+            count: Arc::clone(&child_count),
+        }));
+
+        parent.dispose().unwrap();
+        assert_eq!(parent_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            child_count.load(Ordering::SeqCst),
+            0,
+            "parent dispose 不应触发 child 的 disposable"
+        );
+        assert!(!child.is_disposed(), "child 不应受 parent dispose 影响");
     }
 }
