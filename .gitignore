@@ -1,0 +1,44 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Workspace 锁文件策略:
+# - Library crate: .gitignore (不跟踪)
+# - Binary / application crate: 跟踪
+# 我们现在是 hybrid, 整个 workspace 跟踪一份 Cargo.lock.
+# 等到了 ma_harness_cli 出现 binary, 评估是否拆 workspace 锁文件策略.
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build / coverage / benchmark 产物
+/coverage/
+/criterion-cache/
+/perf.data*
+/flamegraph.svg
+
+# 临时调试
+*.log
+*.tmp
+/.env
+/.env.local
+/.env.*.local
+
+# 工具链
+/.rustup/
+/.cargo/registry/
+/.cargo/git/
+
+# Phase 2 才用得到 (留占位)
+# /wasm-bindgen-target/
+# /wasm32-wasi/
