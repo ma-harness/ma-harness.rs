@@ -1,4 +1,4 @@
-//! Service trait
+﻿//! Service trait
 //!
 //! 所有可注入到 Context 的服务都实现这个 trait.
 //! 用户通常通过 `#[dsh_service]` 宏自动 impl, 见 docs/macro-design.md §2.
@@ -9,7 +9,7 @@
 //! - `install(ctx)` 用户实现, 通过 ctx 构造自身
 //! - `Self: Sized` 限制: 不支持 dyn Service (Phase 1 简化, Phase 2 加 trait object 注册)
 
-use crate::Context;
+
 
 /// Service trait (内部视角)
 ///

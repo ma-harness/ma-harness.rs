@@ -125,34 +125,16 @@ async fn main() -> Result<()> {
 ///
 /// 2026-08-18: tonic gRPC 临时禁用 (依赖 ma_harness_proto), 只起 salvo HTTP
 async fn start_server(_grpc_port: u16, http_port: u16) -> Result<()> {
-    let log = EventLog::open_in_memory()?;
-    eprintln!("mah start: salvo HTTP on 0.0.0.0:{} (gRPC 临时禁用)", http_port);
+    eprintln!(
+        "mah start: stub mode (gRPC + HTTP server 临时禁用, ma_harness_proto 编译问题未解)"
+    );
+    eprintln!("Phase 1 用 `mah run --message <text>` 直接跑 agent, 无需 server");
+    eprintln!("  -- http port requested: {}", http_port);
 
-    // salvo HTTP (Phase 1: /health + /version)
-    // TcpListener 异步 bind, acceptor 包成 Server::new(acceptor).serve(router)
-    use salvo::conn::TcpListener;
-    let http_addr = format!("0.0.0.0:{}", http_port).parse()?;
-    let acceptor = TcpListener::new(&http_addr).bind().await;
-    let http_router = ma_harness_server::http::router();
-    let http_server = salvo::Server::new(acceptor).serve(http_router);
-
-    // 2026-08-18: tonic gRPC 临时禁用
-    // let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", _grpc_port).parse()?;
-    // let grpc_server = tonic::transport::Server::builder()
-    //     .add_service(AgentServiceServer::new(agent))
-    //     .add_service(SessionServiceServer::new(session))
-    //     .serve(grpc_addr);
-
-    // 并发跑 HTTP server, 等 ctrl-c
-    tokio::select! {
-        // _ = grpc_server => eprintln!("grpc server exited"),
-        _ = http_server => eprintln!("http server exited"),
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("mah: received ctrl-c, shutting down");
-        }
-    }
-    // 防 unused 警告
-    let _ = log;
+    // 2026-08-18: 临时 stub
+    // salvo 0.79 TcpListener::bind() API 变了 (no .bind method, 用别的)
+    // ma_harness_server crate 整体注释 (依赖 ma_harness_proto)
+    // 完整实装等 P2 (protoc 编译通了再恢复)
     Ok(())
 }
 

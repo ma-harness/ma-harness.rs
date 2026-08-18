@@ -10,6 +10,7 @@
 
 #![warn(unsafe_code)] // 2026-08-18: 从 deny 降级到 warn, 允许 context.rs 用 unsafe 延长 lifetime
 #![warn(missing_docs)]
+#![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 // 2026-08-18: 删除 #![feature(associated_type_defaults)], stable 不支持
 // Service impl 必须显式 `type Ctx = Context;` (见 decision-log §3 改动原因)
 

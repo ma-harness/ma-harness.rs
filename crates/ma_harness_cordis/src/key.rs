@@ -38,12 +38,11 @@ pub const fn is_snake_case(s: &str) -> bool {
     if bytes.is_empty() {
         return false;
     }
-    let mut i = 0;
     // 首字符必须是 a-z 或 _
     if !is_lower_or_underscore(bytes[0]) {
         return false;
     }
-    i = 1;
+    let mut i = 1;
     while i < bytes.len() {
         let c = bytes[i];
         if !(is_lower_or_underscore(c) || (c >= b'0' && c <= b'9')) {

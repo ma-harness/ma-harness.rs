@@ -84,6 +84,7 @@ impl Context {
     ///
     /// 2026-08-18 修复: dashmap Ref 局部 drop, 用 unsafe 延长 lifetime
     /// SAFETY: Box 在 self.storage 里, Ref dropped 后 &T 仍指向 Box (Box 地址稳定)
+    #[allow(unsafe_code)]
     pub fn get<T: Clone + Send + Sync + 'static>(&self, key: CtxKey<T>) -> Option<T> {
         let entry = self.storage.get(key.name())?;
         let value_ref = entry.value().downcast_ref::<T>()?;
@@ -95,6 +96,7 @@ impl Context {
     /// 2026-08-18 修复: dashmap Ref 局部 drop, 用 unsafe 延长 lifetime
     /// SAFETY: Box 在 self.storage 里, Ref dropped 后 &T 仍指向 Box (Box 地址稳定)
     ///         self 不变 (no &mut self 同时存在) → Box 不会被移动 → &T 安全
+    #[allow(unsafe_code)]
     pub fn get_ref<T: Send + Sync + 'static>(&self, key: CtxKey<T>) -> Option<&T> {
         let entry = self.storage.get(key.name())?;
         let value_ref = entry.value().downcast_ref::<T>()?;

@@ -1,4 +1,4 @@
-//! Plugin trait + 注册表
+﻿//! Plugin trait + 注册表
 //!
 //! 插件是 "一组 service / tool / listener / command / handler 的打包".
 //! 启动时通过 `ctx.plugin(MyPlugin)` 装载, 卸载时 `uninstall()`.
@@ -39,9 +39,6 @@ pub(crate) struct PluginRegistry {
 }
 
 impl PluginRegistry {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
 
     pub(crate) fn register(&self, plugin: Arc<dyn Plugin>) -> Result<(), CordisError> {
         let mut inner = self.inner.lock();

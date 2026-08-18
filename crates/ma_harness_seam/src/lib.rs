@@ -207,9 +207,11 @@ pub struct CordisPlugin<P: Plugin> {
 }
 
 impl<P: Plugin> CordisPlugin<P> {
+    /// 包装一个公开 Plugin 成内部
     pub fn new(inner: P) -> Self {
         Self { inner }
     }
+    /// 解包
     pub fn into_inner(self) -> P {
         self.inner
     }

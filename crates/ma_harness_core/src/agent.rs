@@ -185,7 +185,7 @@ impl AgentLoop {
     }
 
     /// 关联一个 ctx (Phase 2 用, Phase 1 保留接口)
-    pub fn with_ctx(mut self, ctx: Arc<Context>) -> Self {
+    pub fn with_ctx(self, ctx: Arc<Context>) -> Self {
         *self._ctx_marker.lock() = Some(ctx);
         self
     }

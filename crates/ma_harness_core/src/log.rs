@@ -1,4 +1,4 @@
-//! EventLog — append-only SessionEvent 日志 (rusqlite 实现)
+﻿//! EventLog — append-only SessionEvent 日志 (rusqlite 实现)
 //!
 //! Week 1 Day 7 实现. 设计见 `docs/ma-harness-arch-map.md` §4.
 //!
@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 use crate::event::{EventType, SessionEvent, Severity};
 

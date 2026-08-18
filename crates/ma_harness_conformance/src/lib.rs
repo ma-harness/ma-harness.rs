@@ -36,6 +36,7 @@
 //! - 跨进程 (server vs cli) — 只测 in-process
 
 #![warn(missing_docs)]
+#![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 #![warn(unused_must_use)]
 
 pub mod fixture;

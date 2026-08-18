@@ -11,6 +11,7 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+#![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 
 use std::time::Duration;
 

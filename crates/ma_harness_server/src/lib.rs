@@ -1,4 +1,4 @@
-//! ma_harness_server — 服务层 (salvo + tonic 拼装, 内部 crate)
+﻿//! ma_harness_server — 服务层 (salvo + tonic 拼装, 内部 crate)
 //!
 //! **内部 crate** (2026-08-18 锁定). salvo + tonic 拼装, 频繁变.
 //! Week 7-9 起, 把 `ma_harness_seam` 的 5 个 registry 暴露成 gRPC service + HTTP endpoint.
@@ -26,8 +26,13 @@ pub mod http;
 ///
 /// 2026-08-18: gRPC service 构造方法临时禁用, 只保留 ctx 构造
 pub struct ServerBuilder {
+    /// 事件日志 (Phase 2 持久化)
+    #[allow(dead_code)]
     log: EventLog,
+    /// Model adapter (Phase 1 stub, Phase 2 OpenAI)
     adapter: Arc<dyn ModelAdapter>,
+    /// 活跃 session 表 (Phase 2 多 session 管理)
+    #[allow(dead_code)]
     sessions: dashmap::DashMap<String, ma_harness_core::SessionEvent>, // session_id -> 创建事件
 }
 

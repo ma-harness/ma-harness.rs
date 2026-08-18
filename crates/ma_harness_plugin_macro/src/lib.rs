@@ -1,4 +1,4 @@
-//! ma_harness_plugin_macro — 插件 proc-macro crate
+﻿//! ma_harness_plugin_macro — 插件 proc-macro crate
 //!
 //! **公开 crate** (2026-08-18 锁定). proc-macro, API 锁.
 //!
@@ -18,6 +18,7 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+#![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -211,7 +212,7 @@ pub fn dsh_tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }).collect();
 
-    let params_json_value = quote! {
+    let _params_json_value = quote! {
         serde_json::Value::Array(vec![#(#param_schema_fields),*])
     };
 

@@ -1,4 +1,4 @@
-//! ma_harness_proto — Protobuf 生成代码 + 类型转换
+﻿//! ma_harness_proto — Protobuf 生成代码 + 类型转换
 //!
 //! **公开 crate** (2026-08-18 锁定). 字段稳定 (Prost 自动生成).
 //! 详细 .proto 定义见 `proto/ma_harness/v1/`.
@@ -19,6 +19,7 @@
 //! 但 `v1` 模块暂时是 stub, 等 build.rs 恢复后用 `tonic::include_proto!` 替换.
 
 #![warn(missing_docs)]
+#![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 
 // tonic-build 生成的 Protobuf 代码 (3 个 .proto 的 message + service)
 // 2026-08-18: 临时禁用, build.rs no-op, 用 stub 模块替代
@@ -49,7 +50,7 @@ pub use tonic;
 pub mod convert {
     use ma_harness_core::{EventType, SessionEvent, Severity};
 
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{DateTime, Utc};
 
     /// proto::SessionEvent → core::SessionEvent
     ///

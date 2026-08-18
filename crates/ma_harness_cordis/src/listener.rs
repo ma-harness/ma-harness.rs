@@ -86,6 +86,8 @@ impl<E: ListenerEvent> AnyListener for AnyListenerFromArc<E> {
 }
 
 impl ListenerRegistry {
+    /// 构造一个新的 listener registry
+    #[allow(dead_code)] // 测试用
     pub(crate) fn new() -> Self {
         Self::default()
     }
