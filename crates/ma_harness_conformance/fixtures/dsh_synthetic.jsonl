@@ -3,3 +3,11 @@
 {"name":"dsh_session_lifecycle","category":"session","description":"dsh style session start/end (synthetic)","input":{"session_id":"dsh-002","events":[{"type":"SessionStart","data":{"user_id":"u1"}},{"type":"RunStart","data":{}},{"type":"RunEnd","data":{}},{"type":"SessionEnd","data":{}}]},"expected_output":{"events":[{"type":"SessionStart","data":{"user_id":"u1"}},{"type":"RunStart","data":{}},{"type":"RunEnd","data":{}},{"type":"SessionEnd","data":{}}]}}
 
 {"name":"dsh_error_path","category":"error","description":"dsh style error path (synthetic)","input":{"session_id":"dsh-003","events":[{"type":"RunStart","data":{}},{"type":"ToolCall","data":{"tool":"nonexistent"}},{"type":"ToolError","data":{"tool":"nonexistent","error":"not found"}},{"type":"RunEnd","data":{"status":"error"}}]},"expected_output":{"events":[{"type":"RunStart","data":{}},{"type":"ToolError","data":{"tool":"nonexistent"}},{"type":"RunEnd","data":{"status":"error"}}]}}
+
+{"name":"dsh_alias_camelcase","category":"tool","description":"dsh with camelCase aliases (expectedOutput, tools)","input":{"session_id":"dsh-004","tools":["bash","fs"],"events":[{"type":"ToolCall","data":{"tool":"bash"}}]},"expectedOutput":{"events":[{"type":"ToolResult","data":{"result":"ok"}}]}}
+
+{"name":"dsh_payload_alias","category":"tool","description":"dsh with payload alias (not data)","input":{"session_id":"dsh-005","events":[{"type":"RunStart","payload":{"model":"stub"}},{"type":"RunEnd","payload":{"status":"ok"}}]},"expected_output":{"events":[{"type":"RunStart","data":{"model":"stub"}},{"type":"RunEnd","data":{"status":"ok"}}]}}
+
+{"name":"dsh_assistant_derives_response","category":"agent","description":"dsh assistant message becomes ModelResponse event","input":{"session_id":"dsh-006","messages":[{"role":"user","content":"hi"}]},"expected_output":{"events":[],"messages":[{"role":"assistant","content":"hello back"}]}}
+
+{"name":"dsh_non_object_data","category":"tool","description":"dsh data field is string, not object","input":{"session_id":"dsh-007","events":[{"type":"RunStart","data":{}}]},"expected_output":{"events":[{"type":"ModelResponse","data":"raw_string"}]}}
