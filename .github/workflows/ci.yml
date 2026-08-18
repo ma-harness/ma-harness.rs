@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 避免同 PR 重复跑
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================================================
+  # Lint (fmt + clippy) — 最快, 先跑
+  # ============================================================================
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ============================================================================
+  # Build (cross-platform sanity check)
+  # ============================================================================
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (debug)
+        run: cargo build --workspace --all-targets
+
+  # ============================================================================
+  # Test (在 ubuntu 上跑, Windows/Mac 通过 build 验)
+  # ============================================================================
+  test:
+    name: Test (ubuntu)
+    runs-on: ubuntu-latest
+    needs: [lint, build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test (unit + integration)
+        run: cargo test --workspace --all-features
+
+      - name: Test (conformance smoke)
+        run: |
+          cargo test -p ma_harness_conformance
+          cargo test -p ma_harness_conformance --test smoke
+
+      - name: Verify `mah` CLI builds
+        run: cargo build -p ma_harness_cli
+
+      - name: Smoke test `mah` CLI
+        run: |
+          ./target/debug/mah version
+          ./target/debug/mah --help
+
+  # ============================================================================
+  # Conformance report (Nightly only, 防止 daily 跑太慢)
+  # ============================================================================
+  conformance:
+    name: Conformance (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run conformance (synthetic fixtures)
+        run: |
+          cargo run -p ma_harness_cli -- conformance \
+            --fixtures crates/ma_harness_conformance/fixtures/smoke.jsonl \
+            --output target/
+
+      - name: Run conformance (dsh synthetic)
+        run: |
+          cargo run -p ma_harness_cli -- conformance \
+            --fixtures crates/ma_harness_conformance/fixtures/dsh_synthetic.jsonl \
+            --dsh \
+            --output target/
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: |
+            target/conformance-report.md
+            target/conformance-report.json
+          retention-days: 30
+
+  # ============================================================================
+  # Benchmark (nightly only, 跑一次要 5-10 分钟)
+  # ============================================================================
+  benchmark:
+    name: Benchmark (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Bench (cordis)
+        run: cargo bench -p ma_harness_cordis -- --output-format bencher
+
+      - name: Bench (core)
+        run: cargo bench -p ma_harness_core -- --output-format bencher
+
+      - name: Bench (seam)
+        run: cargo bench -p ma_harness_seam -- --output-format bencher
+
+      - name: Upload bench HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-html
+          path: target/criterion/
+          retention-days: 30

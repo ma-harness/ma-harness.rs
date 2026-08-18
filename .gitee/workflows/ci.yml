@@ -1,0 +1,77 @@
+# Gitee Go (Gitee CI) 配置
+# 仓库地址: git@gitee.com:yifenma/ma-harness.rs
+#
+# 用法: Gitee 仓库 → 设置 → CI/CD → Gitee Go → 启用 → 用本文件
+# Gitee Go 跟 GitHub Actions 语法 95% 兼容, 但 Gitee Go 没有 artifact upload
+# (上传走 Gitee 自身的 attachment 系统), 见 https://gitee.com/help/articles/4269
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================================================
+  # Lint
+  # ============================================================================
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ============================================================================
+  # Test
+  # ============================================================================
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Test (unit + integration)
+        run: cargo test --workspace --all-features
+
+      - name: Test (conformance)
+        run: |
+          cargo test -p ma_harness_conformance
+          cargo test -p ma_harness_conformance --test smoke
+
+      - name: Verify `mah` CLI
+        run: |
+          cargo build -p ma_harness_cli
+          ./target/debug/mah version
+          ./target/debug/mah --help

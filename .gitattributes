@@ -1,0 +1,17 @@
+# Auto-detect text files, force LF normalization
+# (跨 Windows / Linux / Mac 团队, 防止 CRLF 污染)
+* text=auto eol=lf
+
+# 这些二进制文件不能 normalize
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.proto linguist-generated=false
+*.json linguist-generated=true
+# Cargo.lock 是 lock 文件, 不算 generated
+Cargo.lock linguist-generated=false
