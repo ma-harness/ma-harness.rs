@@ -42,11 +42,13 @@ pub mod fixture;
 pub mod runner;
 pub mod compare;
 pub mod report;
+pub mod convert;
 
 pub use fixture::{Fixture, FixtureCategory, FixtureInput, FixtureOutput, FixtureEvent, FixtureLoader, FixtureError};
 pub use runner::{ConformanceRunner, ConformanceResult, RunnerError, RunnerStats};
 pub use compare::{CompareEngine, Diff, CompareResult, CompareError};
 pub use report::{ConformanceReport, ReportFormat, ReportSummary, ReportWriter, ReportError};
+pub use convert::{event_type_from_str, event_type_to_str, fixture_to_session, session_to_fixture, ConvertError};
 
 // 重新导出 ma-harness 公开类型, 业务方不用自己引
 pub use ma_harness_cordis;

@@ -3,9 +3,10 @@
 //! 算法见 `docs/conformance-design.md` § 4。
 
 use crate::compare::{CompareEngine, CompareResult};
+use crate::convert::{fixture_to_session, session_to_fixture};
 use crate::fixture::{Fixture, FixtureEvent};
 use crate::report::ReportSummary;
-use ma_harness_core::event::SessionEvent;
+use ma_harness_core::log::{EventLog, EventQuery};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -139,8 +140,8 @@ impl ConformanceRunner {
         let start = Instant::now();
         debug!(fixture = %fixture.name, "running fixture");
 
-        // 步骤 1: 创建新 ctx
-        let ctx = match self.build_ctx(fixture) {
+        // 步骤 1: 创建新 ctx (Phase 2 会用, 现在保留 hook)
+        let _ctx = match self.build_ctx(fixture) {
             Ok(ctx) => ctx,
             Err(e) => {
                 return ConformanceResult {
@@ -153,8 +154,19 @@ impl ConformanceRunner {
             }
         };
 
-        // 步骤 2-3: 实际 emit
-        let actual_events = self.replay_events(&ctx, &fixture.input.events);
+        // 步骤 2-3: 实际 emit (Phase 2: 用 EventLog 真落库)
+        let actual_events = match self.replay_events_via_event_log(fixture) {
+            Ok(events) => events,
+            Err(e) => {
+                return ConformanceResult {
+                    fixture_name: fixture.name.clone(),
+                    compare: CompareResult::ok(0, fixture.output.events.len()),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    error: Some(format!("event log replay failed: {e}")),
+                    actual_events: Vec::new(),
+                };
+            }
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
 
         if self.verbose {
@@ -205,22 +217,42 @@ impl ConformanceRunner {
         Ok(Arc::new(ma_harness_cordis::Context::new()))
     }
 
-    /// 重放事件到 ctx, 收集实际事件。
+    /// 重放事件到 EventLog (Phase 2: 真装载).
     ///
-    /// Phase 1 简化版:
-    /// - 把每个 input event 直接转成 FixtureEvent 收集 (不动 ctx)
-    /// - 业务方关心的"实际产出"由 fixture.output 描述
-    /// - 真正的 ctx.emit / ctx.service 调用留给 plugin integration test
-    ///
-    /// Phase 2: 用 ma_harness_core::log::EventLog 收集, 跑 ctx.emit 触发 listener。
-    fn replay_events(
+    /// 步骤:
+    /// 1. 开 in-memory EventLog
+    /// 2. 对每个 input event:
+    ///    - 转 SessionEvent (via convert)
+    ///    - 追加到 EventLog
+    /// 3. 从 EventLog 读回所有事件
+    /// 4. 转回 FixtureEvent (via convert) 供 compare
+    fn replay_events_via_event_log(
         &self,
-        _ctx: &Arc<ma_harness_cordis::Context>,
-        input_events: &[FixtureEvent],
-    ) -> Vec<FixtureEvent> {
-        // Phase 1: 透传 input 事件 (假设 fixture 期望的 = fixture 输入)
-        // 这样 framework 自身可以验证 compare 引擎正确
-        input_events.to_vec()
+        fixture: &Fixture,
+    ) -> Result<Vec<FixtureEvent>, RunnerError> {
+        let log = EventLog::open_in_memory().map_err(|e| {
+            RunnerError::EventLog(format!("open_in_memory failed: {e}"))
+        })?;
+
+        for input_event in &fixture.input.events {
+            let session_event = fixture_to_session(&fixture.input.session_id, input_event)
+                .map_err(|e| RunnerError::Convert(e.to_string()))?;
+            let seq = log.append(session_event);
+            if self.verbose {
+                debug!(seq, "appended event");
+            }
+        }
+
+        let page = log
+            .query(&EventQuery {
+                session_id: fixture.input.session_id.clone(),
+                ..Default::default()
+            })
+            .map_err(|e| RunnerError::EventLog(format!("query failed: {e}")))?;
+
+        let actual: Vec<FixtureEvent> = page.events.iter().map(|s| session_to_fixture(&s.event)).collect();
+
+        Ok(actual)
     }
 }
 
@@ -233,6 +265,12 @@ pub enum RunnerError {
     /// Ctx 初始化失败
     #[error("ctx init failed: {0}")]
     CtxInit(String),
+    /// EventLog 操作失败
+    #[error("event log error: {0}")]
+    EventLog(String),
+    /// 事件转换失败
+    #[error("event convert error: {0}")]
+    Convert(String),
 }
 
 #[cfg(test)]
@@ -298,5 +336,106 @@ mod tests {
         let results = runner.run_all(&[sample_fixture()]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].fixture_name, "sample");
+    }
+
+    /// 构造一个多事件 fixture, 验证 EventLog 真实路径
+    fn multi_event_fixture() -> Fixture {
+        Fixture {
+            name: "multi_event".to_string(),
+            category: FixtureCategory::AgentRun,
+            description: Some("Run lifecycle with one tool call".to_string()),
+            input: FixtureInput {
+                session_id: "session-multi".to_string(),
+                plugins: vec!["bash".to_string()],
+                events: vec![
+                    FixtureEvent {
+                        event_type: "RunStart".to_string(),
+                        payload: serde_json::json!({"model": "stub"}),
+                        timestamp_ms: None,
+                    },
+                    FixtureEvent {
+                        event_type: "ToolCall".to_string(),
+                        payload: serde_json::json!({"tool": "bash", "args": {"command": "echo hi"}}),
+                        timestamp_ms: None,
+                    },
+                    FixtureEvent {
+                        event_type: "ToolResult".to_string(),
+                        payload: serde_json::json!({"tool": "bash", "result": "hi\n"}),
+                        timestamp_ms: None,
+                    },
+                    FixtureEvent {
+                        event_type: "RunEnd".to_string(),
+                        payload: serde_json::json!({"status": "ok"}),
+                        timestamp_ms: None,
+                    },
+                ],
+            },
+            output: FixtureOutput {
+                events: vec![
+                    ExpectedEvent {
+                        event_type: "RunStart".to_string(),
+                        payload_match: BTreeMap::new(),
+                        timestamp_ms: None,
+                    },
+                    ExpectedEvent {
+                        event_type: "ToolCall".to_string(),
+                        payload_match: BTreeMap::new(),
+                        timestamp_ms: None,
+                    },
+                    ExpectedEvent {
+                        event_type: "ToolResult".to_string(),
+                        payload_match: BTreeMap::new(),
+                        timestamp_ms: None,
+                    },
+                    ExpectedEvent {
+                        event_type: "RunEnd".to_string(),
+                        payload_match: BTreeMap::new(),
+                        timestamp_ms: None,
+                    },
+                ],
+                final_state: BTreeMap::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn runner_via_event_log_preserves_event_order() {
+        let runner = ConformanceRunner::new();
+        let f = multi_event_fixture();
+        let r = runner.run_fixture(&f);
+        assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+        // 4 个事件按 input 顺序
+        assert_eq!(r.actual_events.len(), 4);
+        assert_eq!(r.actual_events[0].event_type, "RunStart");
+        assert_eq!(r.actual_events[1].event_type, "ToolCall");
+        assert_eq!(r.actual_events[2].event_type, "ToolResult");
+        assert_eq!(r.actual_events[3].event_type, "RunEnd");
+    }
+
+    #[test]
+    fn runner_via_event_log_preserves_payload() {
+        let runner = ConformanceRunner::new();
+        let f = multi_event_fixture();
+        let r = runner.run_fixture(&f);
+        // ToolCall payload 完整保留
+        let tool_call = &r.actual_events[1];
+        assert_eq!(tool_call.payload["tool"], "bash");
+        assert_eq!(tool_call.payload["args"]["command"], "echo hi");
+    }
+
+    /// 期望数量 < 实际数量, 应该报 "extra event"
+    #[test]
+    fn runner_detects_extra_event() {
+        let runner = ConformanceRunner::new();
+        let f = multi_event_fixture();
+        // 把 expected 删一个 (RunEnd 期望空)
+        let mut f = f;
+        f.output.events.pop();
+        let r = runner.run_fixture(&f);
+        assert!(!r.is_pass());
+        // 应该有 1 个 diff: ExtraEvent at index 3
+        assert_eq!(r.compare.diffs.len(), 1);
+        assert!(r.compare.diffs[0].summary().contains("extra event"));
+        assert!(r.compare.diffs[0].summary().contains("RunEnd"));
     }
 }

@@ -182,3 +182,75 @@ fn framework_collects_passing_and_failing_results_separately() {
     assert_eq!(passed.len(), 3);
     assert_eq!(failed.len(), 2);
 }
+
+#[test]
+fn framework_loads_synthetic_fixtures_from_jsonl() {
+    use ma_harness_conformance::fixture::FixtureLoader;
+
+    // 找到 crates/ma_harness_conformance/fixtures/smoke.jsonl
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest_dir).join("fixtures/smoke.jsonl");
+    let fixtures = FixtureLoader::from_jsonl(&path).expect("load smoke fixtures");
+    assert!(fixtures.len() >= 4, "expected >= 4 fixtures, got {}", fixtures.len());
+
+    let runner = ConformanceRunner::new();
+    let results = runner.run_all(&fixtures);
+    let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
+    // smoke.jsonl 故意有 1 个 fail (extra event), 其余 pass
+    assert!(stats.passed >= 3, "expected >= 3 pass, got {}", stats.passed);
+    assert!(stats.failed >= 1, "expected >= 1 fail, got {}", stats.failed);
+    assert_eq!(stats.errored, 0);
+}
+
+#[test]
+fn framework_event_log_preserves_order_across_4_events() {
+    use ma_harness_conformance::fixture::{
+        ExpectedEvent, Fixture, FixtureCategory, FixtureInput, FixtureOutput,
+    };
+    use std::collections::BTreeMap;
+
+    // 构造 4 事件 fixture, 验证 EventLog 真落库
+    let make_event = |ty: &str| FixtureEvent {
+        event_type: ty.to_string(),
+        payload: serde_json::json!({}),
+        timestamp_ms: None,
+    };
+    let make_expected = |ty: &str| ExpectedEvent {
+        event_type: ty.to_string(),
+        payload_match: BTreeMap::new(),
+        timestamp_ms: None,
+    };
+
+    let f = Fixture {
+        name: "order_test".to_string(),
+        category: FixtureCategory::AgentRun,
+        description: None,
+        input: FixtureInput {
+            session_id: "order-test".to_string(),
+            plugins: vec![],
+            events: vec![
+                make_event("RunStart"),
+                make_event("ToolCall"),
+                make_event("ToolResult"),
+                make_event("RunEnd"),
+            ],
+        },
+        output: FixtureOutput {
+            events: vec![
+                make_expected("RunStart"),
+                make_expected("ToolCall"),
+                make_expected("ToolResult"),
+                make_expected("RunEnd"),
+            ],
+            final_state: BTreeMap::new(),
+        },
+    };
+
+    let runner = ConformanceRunner::new();
+    let r = runner.run_fixture(&f);
+    assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+    assert_eq!(r.actual_events.len(), 4);
+    // 顺序保持 (EventLog 1-based seq 单调递增, query 读回按 seq 排序)
+    let types: Vec<&str> = r.actual_events.iter().map(|e| e.event_type.as_str()).collect();
+    assert_eq!(types, vec!["RunStart", "ToolCall", "ToolResult", "RunEnd"]);
+}
