@@ -1,0 +1,32 @@
+[package]
+name = "ma_harness_demo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness 端到端 demo (Week 7, Default 模式完整跑通)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 全部内部 crate
+ma_harness_cordis = { path = "../ma_harness_cordis" }
+ma_harness_core = { path = "../ma_harness_core" }
+ma_harness_seam = { path = "../ma_harness_seam" }
+# 全部 6 first-party + hello
+ma_harness_plugin_hello = { path = "../../plugins/ma_harness_plugin_hello" }
+ma_harness_plugin_bash = { path = "../../plugins/ma_harness_plugin_bash" }
+ma_harness_plugin_fs = { path = "../../plugins/ma_harness_plugin_fs" }
+ma_harness_plugin_web = { path = "../../plugins/ma_harness_plugin_web" }
+ma_harness_plugin_subagent = { path = "../../plugins/ma_harness_plugin_subagent" }
+ma_harness_plugin_skill = { path = "../../plugins/ma_harness_plugin_skill" }
+ma_harness_plugin_cordis = { path = "../../plugins/ma_harness_plugin_cordis" }
+# 外部
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
