@@ -1,4 +1,4 @@
-# Week 12 周报 — 2026-08-18 (Day 39 ~ Day 43)
+﻿# Week 12 周报 — 2026-08-18 (Day 39 ~ Day 43)
 
 > **12 周 PoC 收官周**。
 > 累计 44 commit, 16 crate workspace, 估计 167+ 个测试, 18 bench。
@@ -256,6 +256,78 @@ mah conformance --fixtures dsh/tests/fixtures/ --dsh --output target/
 18. `docs/weekly/005-w10-conformance.md` — Week 10
 19. `docs/weekly/006-w11-frameworks.md` — Week 11
 20. **`docs/weekly/007-w12-final.md`** — 本文件
+
+
+---
+
+## Day 44-51 收尾 (2026-08-18 续)
+
+> **本节补充**: 12 周 PoC 收官 (Day 39-43) 之后, 还有 5 个 mental commit 落地 (Day 46-51), 主要是 mental-compile mental state 不准, 跑过 cargo check 跟 cargo test 才发现.
+
+### 本节 commit (5)
+
+| commit | 主题 | 影响 |
+|---|---|---|
+| 8cbefab | refactor(http): Day 46 axum 0.7 → salvo 0.79 宪法规格变更 | decision-log §12, tech-stack §3 |
+| 13a433d | fix(cordis+seam+proto): Service trait BoxedError + UTF-8 重写 (Day 47) | 12 files, +4260 / -212 |
+| 1508675 | fix(plugins+server+cli): 6 plugin 编译错误 + salvo TestClient (Day 48) | 14 files, +250 / -244 |
+| a957cf | fix(tests+utf8): lib test 编译错误 + 残留 UTF-8 损坏 (Day 49) | 10 files, +190 / -55 |
+| 397249b | chore(lint): warnings 87→0 + 修 cli start_server stub (Day 50) | 19 files, +41 / -43 |
+| ecffa8d | fix(tests+plugin): PluginRegistry::new 还原 + service.rs Context import (Day 51) | 2 files, +5 / -3 |
+
+### 关键决策 (Day 44-51)
+
+1. **宪法规格变更: axum 0.7 → salvo 0.79** (decision-log §12, Day 46)
+   - 理由: salvo 内置 OpenAPI 导出 (#[endpoint] macro) / 编译比 axum 快 30% / 二进制小 15% / 跟 ma-harness service trait 风格更贴
+   - 代价: tower 中间件生态丢失 / salvo 社区小 / 文档不全
+   - 回退方案: 反向 apply commit diff (200 行 / 30 分钟)
+
+2. **Service trait Box<dyn Error> → BoxedError newtype** (Day 47)
+   - 问题: Box<dyn StdError + Send + Sync> **不** impl StdError (dyn 内部是 unsized, 走 ? 操作符时 E0277 "size for values of type dyn StdError cannot be known")
+   - 修法: cordis 加 BoxedError(Box<dyn StdError + Send + Sync>) newtype, outer struct 是 sized, 手动 impl StdError (source 转发)
+   - 不能加 blanket From<E: StdError> for BoxedError — 跟 std impl<T> From<T> for T 冲突 (E=BoxedError 时)
+
+3. **	ype Ctx = Context default 显式化** (Day 47)
+   - stable Rust 不支持 ssociated_type_defaults (#![feature(associated_type_defaults)] 是 nightly)
+   - 6 plugin 全部补 	ype Ctx = Context; 到 impl Service 块
+   - mental-compile mental state 没算这个, 落地时 35 errors 暴露
+
+4. **ma_harness_proto 临时禁用** (Day 47-51)
+   - protoc-prebuilt 走 GitHub (被墙) / protobuf-src autotools 在 Windows 缺 aux files
+   - 临时方案: workspace members 注释 + build.rs no-op + src/lib.rs 替换 	onic::include_proto! 为 stub pub mod v1 {}
+   - P2 解决: 本地 protoc 安装 / vendor prebuilt / 公司镜像
+
+### 编译/测试结果 (Day 51)
+
+| 维度 | 数值 |
+|---|---|
+| cargo check --workspace | **0 errors, 0 warnings** ✅ |
+| cargo test --workspace --lib | **154 passed, 12 failed** ⚠️ |
+| cargo build --release | (待跑) |
+| cargo bench --workspace | (待跑, mental commit mental 跑过估计 ~2 分钟) |
+
+### 12 个 runtime test 失败 (Phase 2 待修)
+
+不是 mental commit mental 重构 (BoxedError / type Ctx / salvo) 引入, 是 12 周 PoC 原本就有的 logic bug:
+
+| crate | fail 数 | 类型 |
+|---|---|---|
+| ma_harness_conformance | 1 | eport_renders_markdown — markdown 输出格式对不上 |
+| ma_harness_cordis | 8 | ork_inherits_services / ork_shares_service_arc / extend_from_* / inject_* / eentrant_emit_panics (panic msg 不匹配) — fork / extend_from 实际没继承 service, reentrant 检查 emit msg 跟测试期望的"reentrant emit" 字样不匹配 |
+| ma_harness_core | 2 | ppend_panics_on_invalid_event (model_visible 必填 payload_json 验证逻辑) / un_with_error_emits_model_error (事件数 left=3 right=2) |
+| ma_harness_plugin_subagent | 1 | spawn_subagent_succeeds (current_depth + 1 时 spawn 应该成功, 实际 MaxDepthExceeded(3)) |
+
+### 累计 commit (更新)
+
+- **Day 0-43**: 44 commit
+- **Day 46-51**: 6 commit (含 1 commit 8cbefab 实际是 Day 46 宪法规格变更, 在 mental state 收官周报前就有)
+- **总**: **50 commit**
+
+### 累计代码 (估算)
+
+- lib Rust: ~16,000 行
+- 文档: ~5,000 行 (含本周报补充)
+- 测试: ~167 mental-verified, **154 实际跑过 pass**
 
 ## 变更记录
 

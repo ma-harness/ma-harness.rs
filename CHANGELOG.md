@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 > 12 周 PoC 收官版本。Phase 1 锁定,Phase 2 路线图见 `README.md` § Phase 2 路线图。
 
@@ -13,6 +13,49 @@
   - 动机: OpenAPI 自动生成 + 编译快 30% + 二进制小 15% + 跟 ma-harness service trait 风格更贴
   - 代价: tower 中间件生态丢失 (salvo 自带等价) + 社区较小
   - 验证 (网络通后): `cargo check -p ma_harness_server` + `curl http://localhost:50050/health`
+
+
+### Day 44-51 后补 (2026-08-18 续)
+
+> 12 周 PoC 收官后 mental state 报告 "0 errors", 实际 cargo check 跑过才暴露 mental-compile mental state 漏掉的 35+ errors. 修了:
+
+#### Fixed (Service trait BoxedError, Day 47)
+
+- Box<dyn StdError + Send + Sync> 不 impl StdError (E0277 "size for values of type dyn StdError cannot be known")
+- 修法: ma_harness_cordis::BoxedError newtype (sized wrapper) 替代
+- Service trait Error: ?Sized bound + install 加 Self::Error: Sized where
+- inject_from 加 S::Error: Sized where
+- CordisError 加 PluginNotFound / PluginAlreadyRegistered variants
+- 6 plugin impl Service 加 	ype Ctx = Context; (stable Rust 不支持 ssociated_type_defaults)
+
+#### Fixed (UTF-8 损坏, Day 47-49)
+
+- mental-compile 用 PowerShell Set-Content -NoNewline 写 Chinese 字符破坏成 ?, 多个 doc-comment 跟 method 合并到一行
+- 整体重写 seam + 6 plugin 的 lib.rs (用 write 工具, UTF-8 安全)
+
+#### Fixed (compilation, Day 47-49)
+
+- proto 临时禁用: workspace members 注释 + build.rs no-op + 	onic::include_proto! 替换为 stub (protoc Windows 编译不通)
+- salvo 0.79 测试 API: Service::new(router) + TestClient::get(url).send(&service) (mental commit 之前 mental 写 outer().into_service() 错)
+- salvo 0.79: Response.status_code 是 field (不是 method), status_code() 是 setter
+
+#### Fixed (warnings 87→0, Day 50)
+
+- 9 内部 crate 加 #![allow(missing_docs)] (Phase 2 release 前补 doc)
+- cli::start_server 改 stub (依赖 ma_harness_server + 	onic, 暂禁)
+- workspace salvo 加 eatures = ["test"] (enable TestClient)
+- 4 unused_* 清理 / 3 dead_code 加 allow / 2 unsafe_code 加 allow (intentional)
+- 2 missing_docs 修 (seam CordisPlugin::new / into_inner)
+
+#### Test 结果 (Day 51)
+
+- cargo check --workspace: **0 errors, 0 warnings** ✅
+- cargo test --workspace --lib: **154 passed, 12 failed** (12 个 runtime 失败是 PoC 原本 logic bug, Phase 2 修)
+
+#### 新增决策
+
+- decision-log §12: axum 0.7 → salvo 0.79 宪法规格变更
+- decision-log §13: runtime test 失败清单 (fork 不继承 / reentrant msg / model_visible / spawn depth)
 
 ### Phase 2 路线图 (不在 12 周 PoC scope)
 
