@@ -12,5 +12,16 @@ description = "ma-harness 元框架 (Cordis-rs, 内部 crate, API 频繁变)"
 [lints]
 workspace = true
 
-# Week 1 末加依赖 (先空)
 [dependencies]
+# Phase 1 Week 1 依赖 (按 tech-stack 冻结)
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+# 测试用, 暂不引外部 crate
