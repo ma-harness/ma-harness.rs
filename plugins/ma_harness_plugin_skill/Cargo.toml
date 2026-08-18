@@ -7,14 +7,22 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness first-party plugin 'skill' (加载 .skill/ 目录的 skill 描述 (Day 5-6 实装))"
+description = "ma-harness first-party plugin 'skill' (鍔犺浇 .skill/ 鐩綍, Week 5-6 瀹炶)"
 
 [lints]
 workspace = true
 
 [dependencies]
-# 公开 API (seam) + 内部 (cordis 写 typed key)
 ma_harness_seam = { path = "../../crates/ma_harness_seam" }
 ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
 ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
+ma_harness_core = { path = "../../crates/ma_harness_core" }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "fs"] }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

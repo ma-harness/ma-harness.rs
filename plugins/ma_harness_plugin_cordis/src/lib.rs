@@ -1,34 +1,56 @@
-//! ma_harness_plugin_cordis — first-party plugin
-//!
-//! meta 插件, 暴露 ctx 自身能力 (自省 / 调试用)
-//!
-//! **设计**: seam 公开 API 风格 (跟 hello plugin 一致), impl cordis::Service/Plugin
-//! 跟 ctx 内部对接, 业务方视角走 ma_harness_seam.
-//!
-//! **实现状态**: Week 3 骨架 (typed key + 占位 service + plugin). Week 5-6 实装业务逻辑.
+//! ma_harness_plugin_cordis — meta 插件, 暴露 ctx 自身能力
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 use ma_harness_cordis::Context;
-use ma_harness_cordis::Plugin as CordisPlugin;
-use ma_harness_cordis::Service as CordisService;
+use ma_harness_cordis::Plugin as CordisPluginTrait;
+use ma_harness_cordis::Service as CordisServiceTrait;
 use ma_harness_seam::{ctx_key, Plugin as SeamPlugin, Service as SeamService};
-
-// ============================================================================
-// 公开 typed key (业务方可以 set 覆盖默认)
-// ============================================================================
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use thiserror::Error;
 
 pub static INSPECT_DEPTH: ma_harness_cordis::CtxKey<u32> = ctx_key!("inspect_depth");
+pub const DEFAULT_INSPECT_DEPTH: u32 = 2;
 
-// ============================================================================
-// Service: CordisService
-// ============================================================================
+#[derive(Debug, Error)]
+pub enum CordisError {
+    #[error("inspect depth exceeded: {0}")]
+    DepthExceeded(u32),
+}
 
-/// CordisService (Week 3 占位, Week 5-6 实装)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CtxSnapshot {
+    pub plugin_count: usize,
+    pub plugins: Vec<String>,
+    pub storage_keys: Vec<String>, // Phase 1 stub
+    pub services: Vec<String>,    // Phase 1 stub
+    pub is_disposed: bool,
+}
+
+/// CordisService — 暴露 ctx 反射能力
 pub struct CordisService;
 
-impl CordisService for CordisService {
+impl CordisService {
+    pub fn inspect(&self, ctx: &Context) -> Result<CtxSnapshot, CordisError> {
+        let depth = ctx.get(INSPECT_DEPTH).unwrap_or(DEFAULT_INSPECT_DEPTH);
+        if depth == 0 {
+            return Err(CordisError::DepthExceeded(0));
+        }
+        let plugins = ctx.plugins();
+        let is_disposed = ctx.is_disposed();
+        Ok(CtxSnapshot {
+            plugin_count: plugins.len(),
+            plugins,
+            storage_keys: Vec::new(),
+            services: Vec::new(),
+            is_disposed,
+        })
+    }
+}
+
+impl CordisServiceTrait for CordisService {
     type Error = anyhow::Error;
     fn install(_ctx: &Context) -> anyhow::Result<Self> {
         Ok(CordisService)
@@ -48,16 +70,13 @@ impl SeamService for CordisService {
     }
 }
 
-// ============================================================================
-// Plugin: CordisPlugin
-// ============================================================================
-
-/// CordisPlugin
 pub struct CordisPlugin;
 
-impl CordisPlugin for CordisPlugin {
-    fn install(&self, _ctx: &Context) -> anyhow::Result<()> {
-        // Week 5-6 实装业务逻辑
+impl CordisPluginTrait for CordisPlugin {
+    fn install(&self, ctx: &Context) -> anyhow::Result<()> {
+        let svc = CordisService::install(ctx)?;
+        ctx.inject(Arc::new(svc));
+        ctx.set(INSPECT_DEPTH, DEFAULT_INSPECT_DEPTH);
         Ok(())
     }
     fn name(&self) -> &str {
@@ -67,9 +86,34 @@ impl CordisPlugin for CordisPlugin {
 
 impl SeamPlugin for CordisPlugin {
     fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        <Self as CordisPlugin>::install(self, ctx)
+        <Self as CordisPluginTrait>::install(self, ctx)
     }
     fn name(&self) -> &str {
         "cordis"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspect_empty_ctx() {
+        let ctx = Context::new();
+        ctx.set(INSPECT_DEPTH, 2u32);
+        let svc = CordisService;
+        let snap = svc.inspect(&ctx).unwrap();
+        assert_eq!(snap.plugin_count, 0);
+        assert!(snap.plugins.is_empty());
+        assert!(!snap.is_disposed);
+    }
+
+    #[test]
+    fn inspect_depth_zero_errors() {
+        let ctx = Context::new();
+        ctx.set(INSPECT_DEPTH, 0u32);
+        let svc = CordisService;
+        let result = svc.inspect(&ctx);
+        assert!(matches!(result, Err(CordisError::DepthExceeded(_))));
     }
 }
