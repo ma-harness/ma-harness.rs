@@ -13,7 +13,9 @@
 pub mod agent;
 pub mod event;
 pub mod log;
+pub mod tool;
 
 pub use agent::{AgentLoop, AgentRunRequest, AgentRunResponse, FinishReason, ModelAdapter, ModelMessage, ModelRequest, ModelResponse, StubModelAdapter};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
+pub use tool::{ToolEntry, ToolInvokeFn, ToolRegistry, ToolSchema};
