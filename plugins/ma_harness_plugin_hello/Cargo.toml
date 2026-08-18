@@ -7,16 +7,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness hello-world demo plugin (Week 1 Day 4 端到端演示)"
+description = "ma-harness hello-world demo plugin (用 ma_harness_seam 公开 API)"
 
 [lints]
 workspace = true
 
 [dependencies]
+# 用公开 seam API, 不直接用 cordis (内部)
+ma_harness_seam = { path = "../../crates/ma_harness_seam" }
 ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
 ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-
-[dev-dependencies]
-# 集成测试用
