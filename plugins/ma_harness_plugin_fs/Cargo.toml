@@ -7,14 +7,23 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness first-party plugin 'fs' (ÎÄ¼þÏµÍ³¶Á / Ð´ (ÊÜ sandbox ÏÞÖÆ, Day 5-6 Êµ×°))"
+description = "ma-harness first-party plugin 'fs' (æ–‡ä»¶ç³»ç»Ÿè¯»/å†™, Week 5-6 å®žè£…)"
 
 [lints]
 workspace = true
 
 [dependencies]
-# ¹«¿ª API (seam) + ÄÚ²¿ (cordis Ð´ typed key)
 ma_harness_seam = { path = "../../crates/ma_harness_seam" }
 ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
 ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
+ma_harness_core = { path = "../../crates/ma_harness_core" }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "fs", "io-util"] }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
