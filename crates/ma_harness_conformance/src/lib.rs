@@ -43,12 +43,14 @@ pub mod runner;
 pub mod compare;
 pub mod report;
 pub mod convert;
+pub mod dsh_format;
 
 pub use fixture::{Fixture, FixtureCategory, FixtureInput, FixtureOutput, FixtureEvent, FixtureLoader, FixtureError};
 pub use runner::{ConformanceRunner, ConformanceResult, RunnerError, RunnerStats};
 pub use compare::{CompareEngine, Diff, CompareResult, CompareError};
 pub use report::{ConformanceReport, ReportFormat, ReportSummary, ReportWriter, ReportError};
 pub use convert::{event_type_from_str, event_type_to_str, fixture_to_session, session_to_fixture, ConvertError};
+pub use dsh_format::{DshFixture, DshInput, DshMessage, DshEvent, DshExpectedOutput, dsh_to_fixture, parse_dsh_jsonl, DshError};
 
 // 重新导出 ma-harness 公开类型, 业务方不用自己引
 pub use ma_harness_cordis;

@@ -254,3 +254,57 @@ fn framework_event_log_preserves_order_across_4_events() {
     let types: Vec<&str> = r.actual_events.iter().map(|e| e.event_type.as_str()).collect();
     assert_eq!(types, vec!["RunStart", "ToolCall", "ToolResult", "RunEnd"]);
 }
+
+#[test]
+fn dsh_format_loads_synthetic_fixtures() {
+    use ma_harness_conformance::dsh_format::parse_dsh_jsonl;
+
+    let content = r#"
+# 模拟 dsh 真实 fixture (待 Week 12 校准)
+{"name":"dsh_smoke_1","category":"agent","input":{"session_id":"s","messages":[{"role":"user","content":"hi"}]},"expected_output":{"events":[{"type":"RunStart","data":{}}],"messages":[{"role":"assistant","content":"hello"}]}}
+
+{"name":"dsh_smoke_2","category":"tool","input":{"session_id":"s2","events":[{"type":"ToolCall","data":{"tool":"bash"}}]},"expected_output":{"events":[{"type":"ToolResult","data":{"result":"ok"}}]}}
+"#;
+    let fs = parse_dsh_jsonl(content).expect("parse");
+    assert_eq!(fs.len(), 2);
+    assert_eq!(fs[0].name, "dsh_smoke_1");
+    // input.events 从 messages 派生
+    assert_eq!(fs[0].input.events.len(), 1);
+    assert_eq!(fs[0].input.events[0].event_type, "UserInput");
+    // output.events 含 expected events + assistant message 派生
+    assert!(fs[0].output.events.iter().any(|e| e.event_type == "RunStart"));
+    assert!(fs[0].output.events.iter().any(|e| e.event_type == "ModelResponse"));
+    // tools alias → plugins
+    assert_eq!(fs[1].input.plugins, vec!["bash"]);
+}
+
+#[test]
+fn dsh_format_aliases_supported() {
+    use ma_harness_conformance::dsh_format::parse_dsh_jsonl;
+
+    let content = r#"
+{"name":"alias_full","input":{"session_id":"s","tools":["bash","fs"]},"expected":{"events":[{"type":"ToolCall","payload":{"tool":"bash"}}]}}
+"#;
+    let fs = parse_dsh_jsonl(content).expect("parse");
+    assert_eq!(fs.len(), 1);
+    assert_eq!(fs[0].input.plugins, vec!["bash", "fs"]);
+    assert_eq!(fs[0].output.events[0].payload_match.get("tool").unwrap(), "bash");
+}
+
+#[test]
+fn runner_runs_dsh_synthetic_fixtures() {
+    use ma_harness_conformance::dsh_format::parse_dsh_jsonl;
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest_dir).join("fixtures/dsh_synthetic.jsonl");
+    let content = std::fs::read_to_string(&path).expect("read dsh synthetic");
+    let fs = parse_dsh_jsonl(&content).expect("parse dsh synthetic");
+    assert!(!fs.is_empty(), "no dsh synthetic fixtures loaded");
+
+    let runner = ConformanceRunner::new();
+    let results = runner.run_all(&fs);
+    let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
+    // dsh_synthetic.jsonl 3 个 fixture, 都应该 pass
+    assert_eq!(stats.errored, 0, "runner errors: {:?}", results.iter().filter(|r| r.error.is_some()).collect::<Vec<_>>());
+    assert!(stats.passed >= 3, "expected >= 3 pass, got {} (total {})", stats.passed, stats.total);
+}
