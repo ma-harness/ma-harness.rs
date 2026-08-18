@@ -8,8 +8,10 @@
 //!
 //! 设计见 `docs/ma-harness-arch-map.md` §2.
 
-#![deny(unsafe_code)]
+#![warn(unsafe_code)] // 2026-08-18: 从 deny 降级到 warn, 允许 context.rs 用 unsafe 延长 lifetime
 #![warn(missing_docs)]
+// 2026-08-18: 删除 #![feature(associated_type_defaults)], stable 不支持
+// Service impl 必须显式 `type Ctx = Context;` (见 decision-log §3 改动原因)
 
 mod context;
 mod disposable;
@@ -22,10 +24,10 @@ mod service;
 
 pub use context::Context;
 pub use disposable::{Disposable, Scope};
-pub use error::CordisError;
+pub use error::{BoxedError, CordisError};
 pub use event::{Event as CordisEvent, EventSeverity};
-pub use key::CtxKey;
-pub use listener::{Listener, ListenerEvent, ListenerRegistry};
+pub use key::{is_snake_case, CtxKey}; // 2026-08-18: is_snake_case 公开, 给 ctx_key! macro 用
+pub use listener::{Listener, ListenerEvent}; // ListenerRegistry 是 pub(crate), 不再 export
 pub use plugin::Plugin;
 pub use service::Service;
 

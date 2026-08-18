@@ -81,18 +81,24 @@ impl Context {
     }
 
     /// 取一个 typed 值 (克隆)
+    ///
+    /// 2026-08-18 修复: dashmap Ref 局部 drop, 用 unsafe 延长 lifetime
+    /// SAFETY: Box 在 self.storage 里, Ref dropped 后 &T 仍指向 Box (Box 地址稳定)
     pub fn get<T: Clone + Send + Sync + 'static>(&self, key: CtxKey<T>) -> Option<T> {
-        self.storage
-            .get(key.name())
-            .and_then(|entry| entry.downcast_ref::<T>())
-            .cloned()
+        let entry = self.storage.get(key.name())?;
+        let value_ref = entry.value().downcast_ref::<T>()?;
+        Some(unsafe { &*(value_ref as *const T) }.clone())
     }
 
     /// 取一个 typed 值 (引用, 零拷贝)
+    ///
+    /// 2026-08-18 修复: dashmap Ref 局部 drop, 用 unsafe 延长 lifetime
+    /// SAFETY: Box 在 self.storage 里, Ref dropped 后 &T 仍指向 Box (Box 地址稳定)
+    ///         self 不变 (no &mut self 同时存在) → Box 不会被移动 → &T 安全
     pub fn get_ref<T: Send + Sync + 'static>(&self, key: CtxKey<T>) -> Option<&T> {
-        self.storage
-            .get(key.name())
-            .and_then(|entry| entry.downcast_ref::<T>())
+        let entry = self.storage.get(key.name())?;
+        let value_ref = entry.value().downcast_ref::<T>()?;
+        Some(unsafe { &*(value_ref as *const T) })
     }
 
     /// 移除一个 typed 值
@@ -120,7 +126,15 @@ impl Context {
     ///
     /// 错误处理: install 返回 `S::Error`,通过 `Display + Send + Sync` 边界强转 string,
     /// 不要求 `S::Error: Into<CordisError>` (避免给每个 Service 强加 Into bound).
-    pub fn inject_from<S: Service>(&self) -> Result<Arc<S>, CordisError> {
+    ///
+    /// 2026-08-18 修复:
+    /// - 加 `S::Ctx = Context` 显式 bound, 之前 default 已删除
+    /// - 加 `S::Error: Sized` bound (Service trait 的 Error 是 `?Sized` 让 Box<dyn Error> 能用,
+    ///   但 Result<T, E> 隐含 E: Sized)
+    pub fn inject_from<S: Service<Ctx = Context>>(&self) -> Result<Arc<S>, CordisError>
+    where
+        S::Error: Sized,
+    {
         let svc = S::install(self).map_err(|e| {
             tracing::error!(error = %e, service = std::any::type_name::<S>(), "service install failed");
             CordisError::Other(format!("service install failed: {}", e))

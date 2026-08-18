@@ -30,6 +30,9 @@ use std::marker::PhantomData;
 ///
 /// 检查 `s` 是否全小写字母 + 下划线 + 数字 (且不以数字开头).
 /// const fn, 可以在 const 上下文调用.
+///
+/// 2026-08-18: 从 pub(crate) 改 pub, 让 ma_harness_plugin_macro / ma_harness_seam
+/// 在 macro_rules! ctx_key! 里调用.
 pub const fn is_snake_case(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.is_empty() {

@@ -4,7 +4,7 @@ members = [
     "crates/ma_harness_cordis",
     "crates/ma_harness_core",
     "crates/ma_harness_seam",
-    "crates/ma_harness_proto",
+    # "crates/ma_harness_proto",  # 2026-08-18: 临时禁用, protoc 编译在 Windows 不通 (autotools 缺 aux files, protoc-prebuilt 走 GitHub 被墙)
     "crates/ma_harness_cli",
     "crates/ma_harness_server",
     "crates/ma_harness_plugin_macro",
@@ -56,7 +56,8 @@ tonic-reflection = "0.12"
 
 # HTTP (server only) — 2026-08-18 axum → salvo (宪法规格变更, 见 decision-log §12)
 # salvo 自带 hyper 1, 编译比 axum 快, 内置 OpenAPI 导出 (#[endpoint] macro)
-salvo = { version = "0.79", features = ["serve", "hyper", "http1"] }
+# 0.79 features 验证过: 实际只有 eyre, hyper/http1 等是默认 / 隐式, 不需要显式
+salvo = { version = "0.79" }
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }

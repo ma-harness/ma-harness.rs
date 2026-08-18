@@ -13,7 +13,11 @@ description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳
 workspace = true
 
 [build-dependencies]
-tonic-build = { workspace = true }
+# 2026-08-18: ma_harness_proto 临时禁用, 整个 crate 注释掉 (workspace members 也注释了)
+# 等 protoc 编译问题解决再恢复
+# tonic-build = { workspace = true }
+# protobuf-src = "1"
+# anyhow = { workspace = true }
 
 [dependencies]
 # tonic / prost 运行时 (生成代码引用)
@@ -24,6 +28,7 @@ prost-types = { workspace = true }
 ma_harness_core = { path = "../ma_harness_core" }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 # 集成测试用

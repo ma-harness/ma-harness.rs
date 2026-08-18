@@ -71,6 +71,20 @@ impl<E: ListenerEvent> AnyListener for Arc<dyn Listener<E>> {
     }
 }
 
+// 2026-08-18 修复 E0308: 加 AnyListenerFromArc wrapper, 让 Arc<dyn Listener<E>> 通过新类型
+// 转成 Arc<dyn AnyListener>
+struct AnyListenerFromArc<E: ListenerEvent> {
+    inner: Arc<dyn Listener<E>>,
+}
+
+impl<E: ListenerEvent> AnyListener for AnyListenerFromArc<E> {
+    fn dispatch(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync)) {
+        if let Some(e) = event.downcast_ref::<E>() {
+            Listener::handle(self.inner.as_ref(), ctx, e);
+        }
+    }
+}
+
 impl ListenerRegistry {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -79,7 +93,10 @@ impl ListenerRegistry {
     /// 注册一个 listener 给 E 类型事件
     pub(crate) fn on<E: ListenerEvent>(&self, listener: Arc<dyn Listener<E>>) {
         let type_id = TypeId::of::<E>();
-        let any: Arc<dyn AnyListener> = listener;
+        // 2026-08-18 修复: 用 wrap newtype 转换 Arc<dyn Listener<E>> -> Arc<dyn AnyListener>
+        // 走 AnyListenerFromArc 包装, 委托给原 Arc<dyn Listener<E>>
+        // (trait upcasting 1.86+ 在 Arc<dyn _> 上不稳定, 用显式 wrap 更稳)
+        let any: Arc<dyn AnyListener> = Arc::new(AnyListenerFromArc { inner: listener });
         let mut inner = self.inner.write();
         inner.entry(type_id).or_default().push(any);
     }
