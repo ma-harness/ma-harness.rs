@@ -42,6 +42,7 @@ pub trait Service: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Context;
     use std::fmt;
 
     struct MyService {

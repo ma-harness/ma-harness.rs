@@ -39,6 +39,10 @@ pub(crate) struct PluginRegistry {
 }
 
 impl PluginRegistry {
+    /// 构造一个新的 plugin registry
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
     pub(crate) fn register(&self, plugin: Arc<dyn Plugin>) -> Result<(), CordisError> {
         let mut inner = self.inner.lock();
