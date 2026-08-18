@@ -29,7 +29,7 @@ ma-harness.rs/
 │   ├── code-mode-deferred.md
 │   └── tech-stack.md
 ├── crates/                  ← 6 个核心 package
-│   ├── ma_harness_cordis/   ← 元框架 (Cordis-rs,自主重写)
+│   ├── ma_harness_cordis/   ← 元框架 (Cordis-rs,自主重写, **内部 crate**)
 │   ├── ma_harness_core/     ← agent loop / session / event
 │   ├── ma_harness_seam/     ← Seam 类型 (Phase 1 做 3-4 个)
 │   ├── ma_harness_proto/    ← Protobuf 定义 + Prost codegen
@@ -133,7 +133,10 @@ dsh 用 camelCase (`agentLoop` / `sessionId`),**我们统一 snake_case**:
 ## 给 AI agent 的特别说明
 
 - 这个仓库的"宪法"是 `docs/`,不是 `Cargo.toml`。改 crate 结构前先看
-  `docs/decision-log.md` 第 2 节范围。
+  `docs/decision-log.md` 第 2 节范围,改 crate 公开性前先看 §5.1。
+- **Crate 公开性是显式属性** (2026-08-18 锁定):
+  `ma_harness_cordis` 是**内部 crate**,API 频繁变,改它不要走 ADR;
+  `ma_harness_seam` / `ma_harness_plugin_macro` 是**公开**,改一次要更新 spec 文档。
 - 写新 ctx key 之前先查 `docs/decision-log.md#4` (snake_case 规则)。
 - 加新依赖前先查 `docs/tech-stack.md` 的版本冻结表和"不引入"清单。
 - 任何 "能不能做 Code Mode" 类问题,直接引 `docs/code-mode-deferred.md`,

@@ -442,8 +442,12 @@ error: unexpected token
 
 ## 8. 例子:hello-world plugin
 
+> ⚠️ 真实插件作者**不应该**直接 use `ma_harness_cordis::*` (2026-08-18 锁定为内部 crate)。
+> 下面是**内部视角**的写法,展示 macro 实际工作。**插件作者视角**用
+> `ma_harness_seam::{Plugin, Service, Listener, ToolRegistry}` 走 seam 抽象层。
+
 ```rust
-// plugins/ma_harness_plugin_hello/src/lib.rs
+// plugins/ma_harness_plugin_hello/src/lib.rs (内部视角示例)
 
 use ma_harness_cordis::{Context, Service, Plugin};
 use ma_harness_plugin_macro::{dsh_service, dsh_tool};

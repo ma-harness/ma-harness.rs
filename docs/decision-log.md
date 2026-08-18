@@ -106,6 +106,22 @@ dsh 用 camelCase (例 `agentLoop` / `sessionId`),我们统一改成 snake_case:
 - **协议**: 内部仓库,先不挂 LICENSE;未来开源走 MIT (跟 dsh 对齐)
 - **分支模型**: trunk-based + 短期 feature branch (< 1 周)
 
+### 5.1 Crate 公开性 (2026-08-18 锁定)
+
+| Crate | 属性 | 说明 |
+|---|---|---|
+| `ma_harness_cordis` | **内部** | 元框架,API 频繁变,不需要 `#[non_exhaustive]` |
+| `ma_harness_core` | **内部** | agent loop / session,跟 cordis 一起变 |
+| `ma_harness_seam` | **公开占位** | 插件作者会 use,Phase 1 标 `#[non_exhaustive]`,稳定度中 |
+| `ma_harness_proto` | **公开** | Protobuf 自动生成,字段稳定 |
+| `ma_harness_cli` | **二进制** | 公开 = 二进制本身 (`mah`) |
+| `ma_harness_server` | **内部** | axum + tonic 拼装层,频繁变 |
+| `ma_harness_plugin_macro` | **公开** | proc-macro 给插件作者用,API 锁 |
+| 6 个 first-party 插件 | **公开** | 引用 `ma_harness_seam::*` |
+
+> **原则**: 内部 crate = 团队自己改;公开 crate = 改一次要 ADR。
+> 跟 dsh 不同:dsh 的 cordis 是 npm 公开包(被 4000+ 插件依赖),我们 1.0 阶段是内部工具,公开度更低。
+
 ---
 
 ## 6. 与 dsh 的关系 (明确划清)
