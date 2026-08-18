@@ -24,3 +24,11 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "plugin"
+harness = false
