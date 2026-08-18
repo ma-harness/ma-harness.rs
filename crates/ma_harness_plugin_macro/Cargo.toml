@@ -16,7 +16,8 @@ workspace = true
 proc-macro = true
 
 [dependencies]
-# 占位也需要 syn/proc-macro2 来产 compile_error!, 真实 macro 落地后会再加 quote/schemars/serde_json
+# Week 1 Day 3 加 ma_harness_cordis 依赖, 给 ctx_key! 调 const fn 用
+ma_harness_cordis = { path = "../ma_harness_cordis" }
 syn = { workspace = true }
 proc-macro2 = { workspace = true }
 # quote = { workspace = true }            # Week 2-3 加

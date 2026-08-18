@@ -169,6 +169,46 @@ impl Context {
     pub fn plugin_by_name(&self, name: &str) -> Option<Arc<dyn Plugin>> {
         self.plugins.get(name)
     }
+
+    // ========================================================================
+    // Extend (Week 1 Day 3 新增, arch-map §2.3)
+    // ========================================================================
+
+    /// 从另一个 ctx 继承 service 引用.
+    ///
+    /// # 行为
+    ///
+    /// - 把 `other` 注册的所有 service (`Arc<dyn Any + Send + Sync>`) 复制引用进 `self`
+    /// - typed key storage **不**继承 (key 是 owned 语义, 自己重新 set)
+    /// - plugin **不**继承 (plugin 是自包含, 自己重新装载)
+    ///
+    /// # 死锁安全
+    ///
+    /// 先把 other 的 services 一次性 collect 出 Arc, 再插进 self,
+    /// 不同时持两把锁.
+    ///
+    /// # 用途
+    ///
+    /// 父 ctx 派生 sub ctx 时 (e.g. plugin subagent), 把父 ctx 已有 service
+    /// 引用共享给子 ctx. Phase 2 加 `Context::fork()` 用此实现.
+    pub fn extend_from(&self, other: &Context) {
+        // 一次性 collect (持 other 锁), 然后释放, 再 insert (持 self 锁)
+        let to_insert: Vec<(std::any::TypeId, std::sync::Arc<dyn std::any::Any + Send + Sync>)> =
+            other
+                .services
+                .iter()
+                .map(|entry| {
+                    let type_id: std::any::TypeId = *entry.key();
+                    let arc: std::sync::Arc<dyn std::any::Any + Send + Sync> = entry.value().clone();
+                    (type_id, arc)
+                })
+                .collect();
+        // iter() 结束, other.services 锁释放
+
+        for (type_id, arc) in to_insert {
+            self.services.insert(type_id, arc);
+        }
+    }
 }
 
 impl std::fmt::Debug for Context {
@@ -329,5 +369,77 @@ mod tests {
         ctx.set(KEY_A, "a_value".to_string());
         assert_eq!(ctx.get(KEY_A), Some("a_value".to_string()));
         assert_eq!(ctx.get(KEY_B), None, "key_b 不应能拿到 key_a 的值");
+    }
+
+    #[test]
+    fn extend_from_copies_services() {
+        // 父 ctx 装 service, 子 ctx extend 父, 子能拿到.
+        let parent = Context::new();
+        parent.inject_from::<GreetingService>().unwrap();
+        assert!(parent.service::<GreetingService>().is_some());
+
+        let child = Context::new();
+        assert!(child.service::<GreetingService>().is_none(), "子 ctx 初始没 service");
+        child.extend_from(&parent);
+        assert!(child.service::<GreetingService>().is_some(), "extend 后子 ctx 应继承 service");
+
+        // Arc 引用同一份, 不是 clone
+        let parent_arc = parent.service::<GreetingService>().unwrap();
+        let child_arc = child.service::<GreetingService>().unwrap();
+        assert!(Arc::ptr_eq(&parent_arc, &child_arc), "extend 应共享 Arc, 不 clone");
+    }
+
+    #[test]
+    fn extend_from_does_not_copy_keys() {
+        // typed key 不 extend, 业务方自己 set.
+        let parent = Context::new();
+        parent.set(SESSION_ID, "parent_value".to_string());
+
+        let child = Context::new();
+        child.extend_from(&parent);
+        assert_eq!(child.get(SESSION_ID), None, "typed key 不应被 extend");
+    }
+
+    #[test]
+    fn extend_from_does_not_copy_plugins() {
+        // plugin 不 extend, 业务方自己 plugin().
+        let parent = Context::new();
+        parent.plugin(HelloPlugin).unwrap();
+        assert_eq!(parent.plugins().len(), 1);
+
+        let child = Context::new();
+        child.extend_from(&parent);
+        assert!(child.plugins().is_empty(), "plugin 不应被 extend");
+    }
+
+    #[test]
+    fn extend_from_overwrites_same_service() {
+        // 同一 service 类型: child 自己装一份, extend 后被 parent 覆盖.
+        let parent = Context::new();
+        let p_arc = parent.inject_from::<GreetingService>().unwrap();
+
+        let child = Context::new();
+        let c_arc = child.inject_from::<GreetingService>().unwrap();
+
+        // 初始两个不同 Arc
+        assert!(!Arc::ptr_eq(&p_arc, &c_arc));
+
+        child.extend_from(&parent);
+
+        // extend 后, child 的 service 应被 parent 覆盖
+        let c_arc_after = child.service::<GreetingService>().unwrap();
+        assert!(Arc::ptr_eq(&p_arc, &c_arc_after), "extend 应覆盖 child 已有 service");
+    }
+
+    #[test]
+    fn extend_from_empty_parent_is_noop() {
+        let parent = Context::new();
+        let child = Context::new();
+        child.set(SESSION_ID, "child_value".to_string());
+
+        child.extend_from(&parent);
+        // 不应有副作用
+        assert_eq!(child.get(SESSION_ID), Some("child_value".to_string()));
+        assert!(child.plugins().is_empty());
     }
 }
