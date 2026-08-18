@@ -43,7 +43,13 @@ mah --help
 ma-harness.rs/
 ├── AGENTS.md                       ← AI agent / 新成员入口
 ├── README.md                       ← 你正在看
+├── CHANGELOG.md                    ← 变更记录
+├── LICENSE-MIT                     ← MIT License
+├── LICENSE-APACHE                  ← Apache 2.0 License
 ├── Cargo.toml                      ← workspace 根 (16 member)
+├── .gitattributes                  ← 跨平台 LF 规范化
+├── .github/workflows/ci.yml        ← GitHub Actions CI
+├── .gitee/workflows/ci.yml         ← Gitee Go CI
 ├── docs/                           ← 决策档案 + 设计稿 + 周报
 │   ├── decision-log.md             ← 11 项关键决策 (宪法层)
 │   ├── ma-harness-arch-map.md      ← 跟 dsh 的 12 节机制映射
@@ -55,7 +61,7 @@ ma-harness.rs/
 │   ├── benchmark-design.md         ← Week 10 benchmark 设计
 │   ├── conformance-report-week11.md ← Week 11 conformance 报告 (TBD)
 │   ├── benchmark-report-week11.md  ← Week 11 benchmark 报告 (TBD)
-│   └── weekly/                     ← 周报 (000-006)
+│   └── weekly/                     ← 周报 (000-007)
 ├── proto/ma_harness/v1/            ← 3 个 .proto (agent / session / event)
 ├── crates/                         ← 8 个内部 + 公开 crate
 │   ├── ma_harness_cordis/          ← 内部元框架 (7 文件, ~2700 行)
@@ -108,9 +114,11 @@ mah version
 | 写 plugin | [`docs/plugin-schema-v1.md`](./docs/plugin-schema-v1.md) |
 | 跑 conformance | [`docs/conformance-design.md`](./docs/conformance-design.md) |
 | 跑 benchmark | [`docs/benchmark-design.md`](./docs/benchmark-design.md) |
-| 跟踪进度 | [`docs/weekly/`](./docs/weekly/) (000-006) |
+| 跟踪进度 | [`docs/weekly/`](./docs/weekly/) (000-007) |
 | 加新 crate | [`docs/tech-stack.md`](./docs/tech-stack.md) § "不引入"清单 |
 | 用 ma-harness API | [`crates/ma_harness_seam/src/lib.rs`](./crates/ma_harness_seam/src/lib.rs) |
+| 变更记录 | [`CHANGELOG.md`](./CHANGELOG.md) |
+| 许可证 | [`LICENSE-MIT`](./LICENSE-MIT) + [`LICENSE-APACHE`](./LICENSE-APACHE) |
 
 ## 关键数字 (12 周 PoC 终点)
 
@@ -153,6 +161,9 @@ cargo bench --workspace
 ## License
 
 MIT OR Apache-2.0 (跟 workspace 锁定一致)
+
+- [`LICENSE-MIT`](./LICENSE-MIT) — MIT License
+- [`LICENSE-APACHE`](./LICENSE-APACHE) — Apache License 2.0
 
 ## 仓库地址
 
