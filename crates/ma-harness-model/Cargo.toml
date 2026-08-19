@@ -1,0 +1,29 @@
+[package]
+name = "ma-harness-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness LLM model adapters (OpenAI / Anthropic / Stub) (Phase 2.3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-core = { path = "../ma-harness-core" }
+
+# 外部
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

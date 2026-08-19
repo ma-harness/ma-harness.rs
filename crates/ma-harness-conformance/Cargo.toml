@@ -1,0 +1,43 @@
+[package]
+name = "ma-harness-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Conformance test framework: replay dsh-style JSONL fixtures through ma-harness and compare event sequences."
+
+[lints]
+workspace = true
+
+[dependencies]
+# ma-harness crates
+ma-harness-cordis = { path = "../ma-harness-cordis" }
+ma-harness-core = { path = "../ma-harness-core" }
+ma-harness-seam = { path = "../ma-harness-seam" }
+ma-harness-proto = { path = "../ma-harness-proto" }
+
+# 通用依赖 (从 workspace 继承)
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+async-stream = "0.3"
+
+[dev-dependencies]
+# 测试用 first-party plugin (验证 framework 自身)
+ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
+ma-harness-plugin-bash = { path = "../../plugins/ma-harness-plugin-bash" }
+ma-harness-plugin-cordis = { path = "../../plugins/ma-harness-plugin-cordis" }
+pretty_assertions = { workspace = true }
+tokio-test = { workspace = true }
+insta = { workspace = true }

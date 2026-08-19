@@ -1,0 +1,32 @@
+[package]
+name = "ma-harness-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳定)"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+# 2026-08-18 (Day 52): 用本地 vendor/protoc (npmmirror 镜像下载), 不走 protoc-prebuilt
+tonic-build = { workspace = true }
+
+[dependencies]
+# tonic / prost 运行时 (生成代码引用)
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+# convert module 用
+ma-harness-core = { path = "../ma-harness-core" }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+# 集成测试用
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

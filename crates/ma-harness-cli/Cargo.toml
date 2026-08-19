@@ -1,0 +1,39 @@
+[package]
+name = "ma-harness-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness CLI (二进制, 提供 `mah` 命令)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mah"
+path = "src/main.rs"
+
+[dependencies]
+# 内部
+ma-harness-cordis = { path = "../ma-harness-cordis" }
+ma-harness-core = { path = "../ma-harness-core" }
+ma-harness-seam = { path = "../ma-harness-seam" }
+ma-harness-proto = { path = "../ma-harness-proto" }  # 2026-08-18 (Day 52): 恢复
+ma-harness-server = { path = "../ma-harness-server" }  # 2026-08-18 (Day 52): 恢复
+ma-harness-conformance = { path = "../ma-harness-conformance" }
+ma-harness-code = { path = "../ma-harness-code" }  # 2026-08-19 (Day 68): Phase 2.6 Code Mode
+ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
+# 外部
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }  # 2026-08-18 (Day 52): 恢复
+salvo = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }

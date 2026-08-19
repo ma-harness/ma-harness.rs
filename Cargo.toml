@@ -1,25 +1,25 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/ma_harness_cordis",
-    "crates/ma_harness_core",
-    "crates/ma_harness_seam",
-    "crates/ma_harness_proto",  # 2026-08-18 (Day 52): 恢复, 用本地 vendor/protoc
-    "crates/ma_harness_cli",
-    "crates/ma_harness_server",
-    "crates/ma_harness_plugin_macro",
-    "crates/ma_harness_demo",
-    "crates/ma_harness_conformance",
-    "crates/ma_harness_sandbox",  # 2026-08-18 (Day 55): Phase 2.2 landlock sandbox
-    "crates/ma_harness_model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
-    "crates/ma_harness_code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
-    "plugins/ma_harness_plugin_hello",
-    "plugins/ma_harness_plugin_bash",
-    "plugins/ma_harness_plugin_fs",
-    "plugins/ma_harness_plugin_web",
-    "plugins/ma_harness_plugin_subagent",
-    "plugins/ma_harness_plugin_skill",
-    "plugins/ma_harness_plugin_cordis",
+    "crates/ma-harness-cordis",
+    "crates/ma-harness-core",
+    "crates/ma-harness-seam",
+    "crates/ma-harness-proto",  # 2026-08-18 (Day 52): 恢复, 用本地 vendor/protoc
+    "crates/ma-harness-cli",
+    "crates/ma-harness-server",
+    "crates/ma-harness-plugin-macro",
+    "crates/ma-harness-demo",
+    "crates/ma-harness-conformance",
+    "crates/ma-harness-sandbox",  # 2026-08-18 (Day 55): Phase 2.2 landlock sandbox
+    "crates/ma-harness-model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
+    "crates/ma-harness-code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
+    "plugins/ma-harness-plugin-hello",
+    "plugins/ma-harness-plugin-bash",
+    "plugins/ma-harness-plugin-fs",
+    "plugins/ma-harness-plugin-web",
+    "plugins/ma-harness-plugin-subagent",
+    "plugins/ma-harness-plugin-skill",
+    "plugins/ma-harness-plugin-cordis",
 ]
 
 [workspace.package]
