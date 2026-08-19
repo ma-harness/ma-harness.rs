@@ -52,7 +52,7 @@ pub use agent_compress::{
     CompressionPolicy,
 };
 pub use agents_md::{load_agents_md, AgentsMdConfig, AgentsMdResult};
-pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, PluginRecord, PluginSpec};
+pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, LoadedPlugin, PluginRecord, PluginSpec};
 pub use creator_compile::{compile_plugin, dylib_filename, find_cargo, CompileConfig, CompileOutput};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};

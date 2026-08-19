@@ -342,7 +342,12 @@ crate-type = ["cdylib"]
     )
 }
 
-/// 渲染 src/lib.rs (P10-1.5)
+/// 渲染 src/lib.rs (P10-1.5 + P10-1.7)
+///
+/// **P10-1.7 改动**: `register` 改 `extern "C" fn()` 无入参无返.
+/// 原因: 跨 dylib 边界 (dlopen / LoadLibrary) 调 Rust trait object ABI 不稳,
+/// `extern "C" fn()` 是 C-ABI 兼容, libloading::Symbol<extern "C" fn()> 直接拿.
+/// 业务方 (P10-1.8) 想传 host ToolRegistry 进 plugin, 让 plugin 依赖 workspace `ma-harness-core` 共享类型.
 fn render_lib_rs(spec: &PluginSpec) -> String {
     format!(
         r#"// Auto-generated from PluginSpec "{}"
@@ -351,9 +356,12 @@ fn render_lib_rs(spec: &PluginSpec) -> String {
 {}
 
 // 业务方写 register() 拿 ToolRegistry 注入
-// v1 简化: register() 不接参数, 业务方在 plugin 内部 hardcode
-pub fn register() {{
-    // TODO(P10-1.7): 拿 ToolRegistry, 调 registry.register(schema, invoke_fn)
+// P10-1.7: extern "C" fn() — libloading::Symbol<extern "C" fn()> 跨 dylib 边界 ABI 稳
+// P10-1.8: 让 plugin 依赖 ma-harness-core, register 改 (registry: &mut ToolRegistry),
+//          plugin 内部可以 registry.register(schema, invoke_fn) 注入工具
+// Rust 2024 edition: #[no_mangle] 走 unsafe(...) 包裹 (edition 严格了)
+#[unsafe(no_mangle)]
+pub extern "C" fn register() {{
     eprintln!("[{}] register() called", "{}");
 }}
 "#,
@@ -573,7 +581,10 @@ mod tests {
             dependencies: vec![],
         };
         let lib = render_lib_rs(&spec);
-        assert!(lib.contains("pub fn register()"));
+        // P10-1.7: extern "C" fn() 跨 dylib 边界
+        assert!(lib.contains(r#"pub extern "C" fn register()"#), "register 应该是 extern \"C\": got\n{lib}");
+        // Rust 2024 edition: #[unsafe(no_mangle)] 包裹 (unsafe attribute 严格)
+        assert!(lib.contains("#[unsafe(no_mangle)]"), "应该有 #[unsafe(no_mangle)] 让 libloading 找符号: got\n{lib}");
         assert!(lib.contains("fn foo()"));
         assert!(lib.contains("myplugin"));
     }

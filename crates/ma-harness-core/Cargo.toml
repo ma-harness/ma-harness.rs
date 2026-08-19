@@ -32,6 +32,8 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 async-stream = { workspace = true }
+# P10-1.7: Creator libloading 加载编译产物
+libloading = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

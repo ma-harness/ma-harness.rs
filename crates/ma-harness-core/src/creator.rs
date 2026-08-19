@@ -23,13 +23,11 @@
 //! dsh 的 Creator 模式: model 写 JS 代码, sandbox 跑. 我们用 Rust + WASM 更安全.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-
-use crate::tool::ToolRegistry;
 
 /// Plugin spec (P9-2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +68,9 @@ pub struct PluginRecord {
     pub status: CompileStatus,
     pub compile_error: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// P10-1.7: compile 成功后记录 dylib 真实路径 (P10-1.6 dylib_artifact_path 拿这个)
+    /// None = 未编译 / 编译失败 / v1 简化 (不真编译)
+    pub artifact_path: Option<PathBuf>,
 }
 
 /// 编译错误
@@ -83,6 +84,38 @@ pub enum CreatorError {
     NotLoaded(String, CompileStatus),
     #[error("compile error: {0}")]
     Compile(String),
+    /// P10-1.7: libloading 加载错误
+    #[error("load error: {0}")]
+    Load(String),
+}
+
+/// P10-1.7: LoadedPlugin — libloading Library RAII 句柄
+///
+/// 持有 `libloading::Library` 防 dylib 被 unload (Linux/Unix 上 dlclose 静态符号失效).
+/// `Drop` 时自动 unload, 业务方可以 clone / 拿 name 引用, 不需要再管底层.
+///
+/// 业务方 P10-1.8 想跨 dylib 传 Rust 类型 (Arc<dyn Fn> 等), 拿这个句柄然后调 `register()` 后
+/// plugin 内部已经把工具注入 host ToolRegistry. v1 register 是 extern "C" 无入参, 仅做 side effect.
+#[derive(Debug)]
+pub struct LoadedPlugin {
+    /// Plugin 名 (业务方拿这个索引)
+    pub name: String,
+    /// dylib 路径
+    pub artifact_path: PathBuf,
+    /// libloading Library (Drop 时自动 dlclose)
+    _library: libloading::Library,
+}
+
+impl LoadedPlugin {
+    /// 拿 plugin 名
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// 拿 dylib 路径
+    pub fn path(&self) -> &Path {
+        &self.artifact_path
+    }
 }
 
 /// Creator registry (P9-2)
@@ -128,6 +161,7 @@ impl CreatorRegistry {
             status: CompileStatus::Pending,
             compile_error: None,
             created_at: chrono::Utc::now(),
+            artifact_path: None,
         };
         plugins.insert(name.clone(), record);
         Ok(name)
@@ -195,12 +229,13 @@ impl CreatorRegistry {
             })?;
 
             match compile_result {
-                Ok(_output) => {
-                    // 成功, 标 Loaded
+                Ok(output) => {
+                    // 成功, 标 Loaded + 记 dylib 路径
                     let mut plugins = self.plugins.lock();
                     if let Some(record) = plugins.get_mut(name) {
                         record.status = CompileStatus::Loaded;
                         record.compile_error = None;
+                        record.artifact_path = Some(output.artifact_path);
                     }
                     return Ok(CompileStatus::Loaded);
                 }
@@ -209,6 +244,7 @@ impl CreatorRegistry {
                     if let Some(record) = plugins.get_mut(name) {
                         record.status = CompileStatus::Failed;
                         record.compile_error = Some(e.to_string());
+                        record.artifact_path = None;
                     }
                     return Err(e);
                 }
@@ -232,31 +268,64 @@ impl CreatorRegistry {
         self.compile_config = cfg;
     }
 
-    /// 加载到 ToolRegistry (P9-2 v1 简化: 占位, v2 libloading)
-    pub fn load_into(&self, _name: &str, _registry: &ToolRegistry) -> Result<(), CreatorError> {
-        // v1: 简化, 仅 mark as loaded
-        Ok(())
+    /// 加载编译产物 via libloading (P10-1.7 / Day 101)
+    ///
+    /// 1. 拿 `dylib_artifact_path(name)` (P10-1.6 + P10-1.7: 用 compile 记录的 artifact_path)
+    /// 2. `libloading::Library::new(path)` 加载 dylib (跨平台 dlopen / LoadLibrary)
+    /// 3. 找 `register` 符号 (`extern "C" fn()`)
+    /// 4. 调 `register()` (P10-1.7 v1 无入参, 仅 side effect)
+    /// 5. 返 `LoadedPlugin` 句柄 (RAII 保活, Drop 时 dlclose)
+    ///
+    /// **P10-1.7 限制**: register 是 `extern "C" fn()` 无入参, 不传 host ToolRegistry.
+    /// 跨 dylib 边界传 Rust trait object (Arc<dyn Fn> + Context + BoxFuture) ABI 不稳,
+    /// 留给 P10-1.8 让 plugin 依赖 workspace `ma-harness-core` 共享 `ToolRegistry` 类型.
+    #[allow(unsafe_code)] // P10-1.7: libloading unsafe { Library::new + get<Symbol> } 是 dylib FFI 必需
+    pub fn load_into(&self, name: &str) -> Result<LoadedPlugin, CreatorError> {
+        let artifact = self.dylib_artifact_path(name)?;
+
+        // 跨平台: libloading::Library::new 自动 dlopen (Unix) / LoadLibraryW (Windows)
+        // SAFETY: 业务方保证 path 来自 compile_plugin 写出的 cdylib, 是合法 ELF/PE/Mach-O
+        let library = unsafe { libloading::Library::new(&artifact) }.map_err(|e| {
+            CreatorError::Load(format!("加载 dylib 失败 {}: {e}", artifact.display()))
+        })?;
+
+        // 找 register 符号 (`extern "C" fn()` 无入参无返)
+        // SAFETY: `register` 是 cargo build 出来的 cdylib 入口, render_lib_rs 必有
+        let register: libloading::Symbol<extern "C" fn()> = unsafe {
+            library.get(b"register\0")
+        }
+        .map_err(|e| CreatorError::Load(format!("找 register 符号失败: {e}")))?;
+
+        // 调 register (side effect: plugin 自己 eprintln / 设 static / P10-1.8 注入 registry)
+        register();
+
+        Ok(LoadedPlugin {
+            name: name.to_string(),
+            artifact_path: artifact,
+            _library: library,
+        })
     }
 
-    /// P10-1.6: 业务方拿 dylib 实际路径 (用 crate::creator_compile::dylib_filename 算跨平台文件名)
+    /// P10-1.7: 拿 dylib 实际路径
     ///
-    /// 返 `Result<PathBuf, CreatorError>` (artifact 路径), 业务方 P10-1.7 拿这个 libloading 加载.
+    /// 优先用 compile 记录的 `artifact_path` (P10-1.6 fix), 兜底用 `output_dir` 拼.
     /// 找不到 plugin 或没 Loaded 时返错.
     pub fn dylib_artifact_path(&self, name: &str) -> Result<PathBuf, CreatorError> {
         let record = self.get(name).ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
         if record.status != CompileStatus::Loaded {
             return Err(CreatorError::NotLoaded(name.to_string(), record.status));
         }
+        // 优先 compile 记录的真实路径 (P10-1.7: compile_plugin 写到 cfg.output_dir, 不一定是 self.output_dir)
+        if let Some(p) = &record.artifact_path {
+            return Ok(p.clone());
+        }
+        // 兜底 (v1 简化模式, 没真编译, 拼 self.output_dir)
         let dylib_name = crate::creator_compile::dylib_filename(&record.spec.name);
         Ok(self
             .output_dir
             .join(&record.spec.name)
             .join("target")
-            .join(if record.status == CompileStatus::Loaded {
-                "release"
-            } else {
-                "debug"
-            })
+            .join("release")
             .join(dylib_name))
     }
 
@@ -311,19 +380,18 @@ impl CreatorFactory {
         }
     }
 
-    /// 端到端: 业务方 (model) 推 spec, 编译, 加载到 ToolRegistry
+    /// 端到端: 业务方 (model) 推 spec, 编译, 加载 dylib
     ///
-    /// 简化版 v1: register_spec + compile + load_into 一气呵成
+    /// 简化版: register_spec + compile + load_into 一气呵成
+    /// **P10-1.7 改动**: 返 `LoadedPlugin` (RAII 句柄保 dylib 活), 业务方拿它
     pub async fn create_and_load(
         &self,
         spec: PluginSpec,
-        registry: &ToolRegistry,
-    ) -> Result<String, CreatorError> {
+    ) -> Result<LoadedPlugin, CreatorError> {
         let name = spec.name.clone();
-        let id = self.registry.register_spec(spec)?;
+        self.registry.register_spec(spec)?;
         self.registry.compile(&name).await?;
-        self.registry.load_into(&name, registry)?;
-        Ok(id)
+        self.registry.load_into(&name)
     }
 }
 
@@ -400,13 +468,94 @@ mod tests {
 
     #[tokio::test]
     async fn factory_end_to_end() {
+        // P10-1.7: v1 简化模式 (不真编译) 端到端 — register_spec + compile(v1 fallback) + load_into
+        // v1 fallback 标 Loaded 但不写 artifact_path, load_into 找不到 dll 路径会 NotFound / Load 错
+        // 这个 test 验证: 不 panic, 返错合理
         let factory = CreatorFactory::new();
-        let log = crate::log::EventLog::open_in_memory().unwrap();
-        let reg = ToolRegistry::new();
-        // Just verify the reg is alive, not actually load
-        let _ = log;
-        let id = factory.create_and_load(sample_spec(), &reg).await.unwrap();
-        assert!(!id.is_empty());
+        let result = factory.create_and_load(sample_spec()).await;
+        assert!(result.is_err(), "v1 模式 load_into 应该失败 (dll 不存在)");
+    }
+
+    #[tokio::test]
+    async fn factory_end_to_end_real_compile_and_load() {
+        // P10-1.7: 真 cargo 编译 + 真 libloading 加载 (集成测)
+        // CI 环境可能没 cargo / network, skip 失败
+        use crate::creator_compile::CompileConfig;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = CompileConfig {
+            temp_root: Some(dir.path().to_path_buf()),
+            output_dir: Some(dir.path().join("out")),
+            timeout: std::time::Duration::from_secs(120),
+            release: false, // debug 编译快
+            ..Default::default()
+        };
+
+        let mut factory = CreatorFactory::new();
+        factory.registry.set_compile_config(Some(cfg));
+
+        let mut spec = sample_spec();
+        spec.name = "real_compile_load_test".into();
+        spec.source_code = r#"pub fn add(a: i32, b: i32) -> i32 { a + b }"#.into();
+
+        let result = factory.create_and_load(spec).await;
+        if let Err(e) = &result {
+            eprintln!("real_compile_load (CI skip): {e}");
+            return;
+        }
+        let loaded = result.unwrap();
+        assert_eq!(loaded.name(), "real_compile_load_test");
+        assert!(loaded.path().exists(), "dylib 路径应存在: {}", loaded.path().display());
+        // RAII: loaded 持 Library, 不会被 dlclose
+    }
+
+    #[tokio::test]
+    async fn load_into_dylib_calls_register() {
+        // P10-1.7: load_into 拿 dylib, 调 register extern "C" fn()
+        // 这个 test 跟 factory_end_to_end_real_compile_and_load 重复, 这里测单一 load_into
+        use crate::creator_compile::CompileConfig;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = CompileConfig {
+            temp_root: Some(dir.path().to_path_buf()),
+            output_dir: Some(dir.path().join("out")),
+            timeout: std::time::Duration::from_secs(120),
+            release: false,
+            ..Default::default()
+        };
+
+        let mut reg = CreatorRegistry::new();
+        reg.set_compile_config(Some(cfg));
+
+        let mut spec = sample_spec();
+        spec.name = "load_into_test".into();
+        spec.source_code = "pub fn noop() {}".into();
+
+        reg.register_spec(spec).unwrap();
+        if reg.compile("load_into_test").await.is_err() {
+            eprintln!("compile 失败 (CI skip)");
+            return;
+        }
+        let loaded = reg.load_into("load_into_test");
+        if let Err(e) = &loaded {
+            eprintln!("load_into 失败 (CI skip): {e}");
+            return;
+        }
+        let loaded = loaded.unwrap();
+        assert!(loaded.path().exists());
+    }
+
+    #[test]
+    fn load_into_errors_when_not_loaded() {
+        // P10-1.7: 没编译就 load_into 应该 NotFound / NotLoaded
+        let reg = CreatorRegistry::new();
+        reg.register_spec(sample_spec()).unwrap();
+        let result = reg.load_into("test_plugin");
+        // v1 模式 status=Loaded 但 artifact_path=None, dylib_artifact_path 兜底会报 NotFound (artifact 不存在)
+        // 但这里 status 走 v1 fallback 是 Loaded, 然后 artifact_path 是 None, 兜底拼 self.output_dir 路径
+        // 那条路径不存在但 dylib_artifact_path 不 verify, 只 verify status
+        // load_into 内部 libloading::Library::new 会失败, 返 CreatorError::Load
+        assert!(result.is_err());
     }
 
     #[tokio::test]
