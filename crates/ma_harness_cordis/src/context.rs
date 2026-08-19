@@ -351,7 +351,8 @@ impl Context {
 
     /// 列出订阅 E 的 listener 数量 (调试)
     pub fn listener_count<E: ListenerEvent>(&self) -> usize {
-        self.listeners.count::<E>()
+        self.listeners
+            .count_for_type_id(std::any::TypeId::of::<E>())
     }
 
     // ========================================================================
