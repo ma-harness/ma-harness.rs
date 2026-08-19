@@ -6,8 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
-description = "ma-harness 插件 proc-macro crate (公开, API 锁: #[dsh_service/listener/tool/command/handler] + ctx_key!)"
+publish = true
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["plugin", "proc-macro", "service", "listener", "derive"]
+categories = ["development-tools", "no-std", "api-bindings"]
+description = "ma-harness plugin proc-macro crate: #[dsh_service/listener/tool/command/handler] derives + ctx_key! macro + dsh_service_dual / dsh_plugin_dual attribute macros"
 
 [lints]
 workspace = true
@@ -17,7 +20,8 @@ proc-macro = true
 
 [dependencies]
 # 内部依赖 (dsh_service_dual / dsh_plugin_dual 展开时引用)
-ma-harness-cordis = { path = "../ma-harness-cordis" }
+# version="0.1.0" 跟 cordis 当前 version 对齐
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
 # 注意: 不能 dep ma_harness_seam (cyclic — seam re-export DshService 来自本 crate)
 # seam 引用是 user 端用 use ma_harness_seam::dsh_*_dual; 时引入, macro 展开的 ::ma_harness_seam::Service
 # 由 user crate 的 path resolution 提供. trybuild 编译时由 user crate (plugin_hello) 提供.

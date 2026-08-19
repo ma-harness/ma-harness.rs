@@ -6,21 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 homepage = "https://gitee.com/yifenma/ma-harness.rs"
-keywords = ["plugin","seam","facade","non_exhaustive","public-api"]
-categories = ["development-tools","api-bindings"]
-description = "Public plugin API facade for ma-harness. Plugin authors use this crate (not cordis directly). Trait-isolated Service/Plugin/Listener/Disposable/Tool with #[non_exhaustive] for stable evolution."
+keywords = ["plugin", "seam", "facade", "non_exhaustive", "public-api"]
+categories = ["development-tools", "api-bindings"]
+description = "Public plugin API facade for ma-harness. Plugin authors use this crate (not cordis directly). Trait-isolated Service/Plugin/Listener/Disposable/Tool with #[non_exhaustive] for stable evolution. Includes inventory-based plugin loader + topological dependency resolution."
 
 [lints]
 workspace = true
 
 [dependencies]
-# 内部依赖
-ma-harness-cordis = { path = "../ma-harness-cordis" }
-ma-harness-plugin-macro = { path = "../ma-harness-plugin-macro" }
+# 内部依赖 (version 跟 publish 时的 crates.io version 对齐)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-plugin-macro = { path = "../ma-harness-plugin-macro", version = "0.1.0" }
 # 公开 macro 必备依赖 (插件作者 use 时需要)
-ma-harness-core = { path = "../ma-harness-core" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
 # 外部
 anyhow = { workspace = true }
 async-trait = { workspace = true }

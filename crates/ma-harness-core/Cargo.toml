@@ -6,15 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
-description = "ma-harness 核心: SessionEvent / agent loop / 日志 (内部 crate)"
+publish = true
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["agent", "session", "event-log", "agent-loop", "model-adapter"]
+categories = ["development-tools", "api-bindings", "asynchronous"]
+description = "ma-harness core: SessionEvent / agent loop / EventLog (sqlite) / ModelAdapter trait"
 
 [lints]
 workspace = true
 
 [dependencies]
-# 内部依赖
-ma-harness-cordis = { path = "../ma-harness-cordis" }
+# 内部依赖 (version="0.1.0" 跟 cordis 当前 version 对齐, publish 时 crates.io 找得到)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
 # 外部
 anyhow = { workspace = true }
 thiserror = { workspace = true }
