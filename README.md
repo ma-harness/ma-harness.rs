@@ -29,7 +29,7 @@
 # 编译 (网络通后)
 cargo build --workspace
 
-# 跑全部测试 (~307 lib test)
+# 跑全部测试 (~303 lib test)
 cargo test --workspace --lib
 
 # 跑 benchmark (criterion)
@@ -126,6 +126,8 @@ mah open-api export --output docs/api/openapi.json  # 7 paths OpenAPI 3.1 spec
 # TUI dashboard (4 panel)
 mah tui [--log <db>] [--store-path <db>]       # ratatui, j/k 选 session, Enter 进 detail
 
+# TUI P6-5 增强: Tab 切 panel focus, j/k 跨 panel, 选中状态持久化 (~/.ma-harness/tui-state.json)
+
 # Misc
 mah version
 ```
@@ -180,15 +182,15 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 
 | 指标 | 数值 |
 |---|---|
-| 累计 commit | 130+ (持续增长) |
+| 累计 commit | 131+ (持续增长) |
 | Workspace member | 19 (13 crates/ + 7 plugins/) |
-| 累计代码 | ~20000 行 |
-| 累计 lib test | 307 (全过) |
+| 累计代码 | ~20100 行 |
+| 累计 lib test | 303 (全过) |
 | 累计 trybuild fixture | 18 |
 | crates.io publish | 5/19 (cordis, code, core, plugin-macro, seam) |
 | HTTP API paths | 7 (3 → 7) |
 | Bindings | 4 语言 (Python / JS / TS / Go) |
-| 设计文档 | 9 份 + decision-log § 1-13 |
+| 设计文档 | 9 份 + decision-log § 1-19 |
 | 周报 | 7 份 (Day 0 / Week 1-2 / 3-4 / 5-6 / 7-9 / 10 / 11) |
 
 ## Phase 路线图 (回顾)
@@ -245,7 +247,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 - P6-2: OpenaiAdapter 真 SSE (reqwest + bytes_stream + parse) ✅ (Day 100)
 - P6-3: AnthropicAdapter 真 SSE (event-based protocol) ✅ (Day 100)
 - P6-4: streaming perf bench (criterion 5 bench) ✅ (Day 100)
-- P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) — TODO
+- P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) ✅ (Day 101)
 
 ## 网络环境
 

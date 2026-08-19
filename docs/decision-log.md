@@ -598,3 +598,122 @@ parse_sse_data_line/group      time:   [988.48 ns 1.0032 µs 1.0188 µs]
 - Phase 7+ 业务方反馈 streaming 卡顿: 先跑 `cargo bench` 看哪个 bench 退化, 再针对性优化
 - 业务方对 streaming latency 严格 (e.g. < 100ms P50): 加 `time` bench + histogram output, criterion 不直接支持, 改用 `divan` 或 `iai`
 
+## 19. TUI 增强 — j/k 跨 panel + 选中状态持久化 (2026-08-19 / Day 101 / P6-5)
+
+### 目标
+
+P6-1/2/3/4 落完 streaming infra 后, P6-5 增强 TUI 交互:
+
+- **A 块: j/k 跨 panel** — Sessions/Events 两个 panel 共享 j/k, Tab 切 focus
+- **B 块: 选中状态持久化** — 上次选中的 session + focus 重启后恢复
+
+### 业务方体验 (A 块)
+
+启动 TUI 后:
+- 默认 focus = Sessions, j/k 在 session list 上下移
+- Tab → focus 切到 Events, j/k 在 events list 上下滚 (滚动最新 20 条)
+- BackTab 反向 cycle
+- Enter 仅在 Sessions focus 有效 (Events focus Enter 是 no-op, 保持 cycle 干净)
+- focus 边框 BOLD Cyan + title 加 `▶` marker, 视觉明显
+
+### 业务方体验 (B 块)
+
+- 默认 state path = `~/.ma-harness/tui-state.json` (USERPROFILE fallback Windows)
+- 重启 TUI → 自动 restore: last_session_id 对位到当前 session list (不在了则清掉), focus 恢复
+- 环境变量 `MA_HARNESS_TUI_STATE=/custom/path` 覆盖
+- 自定义 path: `TuiApp::new_with_log_and_store_and_state_path(log, store, Some(path))`
+
+### 实现要点 (commit 8705f6b)
+
+**A 块**:
+- `Panel` enum (Sessions/Events) impl Copy + Eq, next/prev 2-cycle, Plugins 不可 focus
+- `focus: Arc<Mutex<Panel>>` 字段 in TuiApp
+- `events_scroll: Arc<Mutex<usize>>` (0 = 最新, j 下滚)
+- `handle_list_key` 改造: Tab/BackTab 切 focus + persist, j/k 按 focus 路由 (move_selection vs scroll_events)
+- `scroll_events(delta: i64)` clamp 到 [0, len-1]
+- `ui_list` 改造: focus panel 边框 BOLD Cyan + title `▶` marker; events panel 按 scroll 渲染
+
+**B 块**:
+- `state_path: Option<PathBuf>` 字段
+- `persisted_last_session_id: Arc<Mutex<Option<String>>>` 字段
+- `PersistedState` struct (module-level): `last_session_id` + `last_focus` (serde derive)
+- `default_state_path()`: MA_HARNESS_TUI_STATE env → HOME → USERPROFILE → None
+- `load_persisted_state(path)`: 容错 (文件不存在 / JSON 错都走空 state, `unwrap_or_default`)
+- `save_persisted_state(path)`: create_dir_all + write tmp + rename atomic
+- `apply_persisted_selection()`: refresh 后对位 selected_session 到 last_session_id; session 不在则清掉
+- `persist_state()`: 写状态失败 eprintln 不阻断 TUI
+- `new_with_log_and_store_and_state_path(...)` 新 constructor (测试 / 业务方自定义 path)
+- `enter_detail()` 同步记录 last_session_id
+
+**依赖**: `crates/ma-harness-tui/Cargo.toml` +`serde` +`serde_json` (workspace 版本, features derive)
+
+### 关键设计决策
+
+- **Panel 走 2-cycle**: Plugins 不可 focus, 保持 cycle 干净 (3 选 2 = 跳跃感差)
+- **Enter 仅 Sessions focus**: Events focus Enter no-op, 避免 cycle 行为不一致
+- **state path 优先级**: env → HOME → USERPROFILE → None (None = 不持久化)
+- **state file 写 tmp + rename atomic**: 避免半路挂时文件半空
+- **corrupted JSON 走 `unwrap_or_default`**: 启动不因旧 file 损坏 panic
+- **persisted session 不在 → 清掉 persisted_last_session_id**: 避免下次再尝试对位 stale id
+- **persist_state() 失败 eprintln 不 panic**: TUI 进程不能因磁盘满挂
+- **PersistedState 放 module-level**: impl 块内不能放 struct
+- **构造时 `new_with_log_and_store_and_state_path` reload + apply 自定义 path**: 默认 path load 是 1 次事件, 自定义 path load 是另 1 次, apply 必须跟 load 一对
+- **测试隔离**: P6-5 新增 test 全部用 tmpdir + 自定义 state path, 避免污染 home `~/.ma-harness/tui-state.json` 跟其他 test 抢文件
+
+### 踩坑 (P6-5 阶段 1 个核心)
+
+**parking_lot::Mutex 不可重入 — 死锁 hang**:
+
+```rust
+*self.focus.lock() = self.focus.lock().next();  // ← 死锁!
+```
+
+上述表达式在同一行对同一 parking_lot::Mutex 锁 2 次: 左边 `self.focus.lock()` 拿 guard 持锁未释放, 右边 `self.focus.lock()` 第二次拿同一 mutex 立即死锁 (`parking_lot::Mutex` 不可重入, 跟 std::sync::Mutex 不一样!).
+
+**症状**: cargo test `tui_tab_cycles_focus` / `tui_backtab_cycles_focus` / `tui_tab_saves_state` 单跑也 hang >60s 无输出. 但 `tui_initial_focus_is_sessions` 不死锁 (因为它只 assert 读, 不修改).
+
+**修法**: 拆成 2 个语句, 避免同一表达式双 lock:
+
+```rust
+let next = self.focus.lock().next();
+*self.focus.lock() = next;
+```
+
+或者 (更 idiomatic, 一次 lock 拿 guard 然后改 deref):
+
+```rust
+let mut g = self.focus.lock();
+*g = g.next();
+```
+
+本次 5 处都改成第一种 (跟其他 helper 风格一致). 5 处分别是:
+- `handle_list_key` Tab 分支
+- `handle_list_key` BackTab 分支
+- `tui_tab_cycles_focus` 2 次 cycle
+- `tui_backtab_cycles_focus` 1 次 prev
+
+**给后来人**: 业务方写 parking_lot::Mutex 复合操作时, 永远记住:
+- `*x.lock() = x.lock().next()` → 死锁
+- `x.lock().a = x.lock().b` → 死锁
+- `let g = x.lock(); g.field = ...; *g = ...; drop(g); x.lock().other = ...; ` → OK (guard 显式 drop)
+- 如果 std::sync::Mutex 习惯, 切 parking_lot 一定要 review 复合 lock 表达式
+
+### 测试
+
+- tui 16 → 28 (+12 P6-5)
+  - A 块 (6): tui_initial_focus_is_sessions / tui_tab_cycles_focus / tui_backtab_cycles_focus / tui_jk_routes_by_focus / tui_events_scroll_clamps / tui_enter_in_events_focus_does_nothing
+  - B 块 (6): tui_load_persisted_state_no_file_is_default / tui_persist_and_reload_roundtrip / tui_constructor_loads_persisted_state / tui_persisted_session_not_found_clears / tui_tab_saves_state / tui_load_corrupted_state_falls_back / tui_default_state_path_env_var_overrides
+- workspace lib 291 → 303 (303/303 全过, 0 fail)
+- workspace bin 12 (unchanged)
+- total 315/315 (除 4 pre-existing broken: plugin-macro trybuild / plugin-hello trait scope / conformance FixtureEvent / cordis doctest)
+
+### 给后来人
+
+- 业务方跑 TUI: `mah tui` → 默认 `~/.ma-harness/tui-state.json`, 重启自动恢复
+- 业务方自定义 path: `MA_HARNESS_TUI_STATE=/path/to/state.json mah tui`
+- 业务方写 plugin 集成 TUI: `TuiApp::new_with_log_and_store_and_state_path(log, store, state_path)` 走自定义 state file
+- 业务方测 TUI 交互: tmpdir 必加, `new_with_log_and_store_and_state_path` 传 state_path 隔离, 不要用 `new()` (会污染 home)
+- 业务方扩展: focus 加 Plugins 选项 → 改 `Panel` enum 加 `Plugins` 变体 + `next/prev` 调成 3-cycle
+- 业务方扩展: 持久化更多 state (e.g. last_focus_subposition) → `PersistedState` 加字段 (serde default, 向后兼容)
+- parking_lot 死锁教训: 业务方写任何 `*x.lock() = ...` 复合表达式, 必先拆 2 行
+
