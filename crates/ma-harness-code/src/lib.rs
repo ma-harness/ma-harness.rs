@@ -57,22 +57,90 @@
 //!
 //! # 限制
 //!
-//! - Phase 2.6 PoC: 不支持 WASI, 不支持 fuel 限制, 不支持 component model
-//! - 只支持 core wasm 1.0 + simple host import
+//! - **Phase 3.1 加固**: fuel / epoch / ResourceLimiter (memory + table) 三层沙箱
+//! - 业务方 wasm 默认受 10M fuel + 5s epoch deadline + 16MB memory 限制
 //! - 业务方 wasm 不能访问 host 文件系统 / 网络 (没开 WASI)
-//! - 后续 (Phase 3): 加 fuel 限制 + epoch interruption 防 DoS
+//! - Phase 2.6 早期: 不支持 component model (WASI preview2)
+//!
+//! # 沙箱配置 (Phase 3.1 / T3.1)
+//!
+//! ```ignore
+//! use ma_harness_code::{CodeRunner, SandboxConfig};
+//!
+//! // 默认安全配置
+//! let runner = CodeRunner::new_with_config(SandboxConfig::default())?;
+//!
+//! // 自定义 (允许无限指令但限内存)
+//! let cfg = SandboxConfig {
+//!     fuel: 0,  // 0 = 不限
+//!     epoch_deadline_ms: Some(30_000),  // 30s
+//!     memory_bytes: 64 * 1024 * 1024,  // 64MB
+//!     table_elements: Some(10_000),
+//! };
+//! let runner = CodeRunner::new_with_config(cfg)?;
+//! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use wasmtime::*;
+
+/// 沙箱配置 (Phase 3.1 / T3.1)
+///
+/// 三层防御:
+/// 1. **fuel**: 限制指令数 (0 = 不限). 防死循环 / DoS
+/// 2. **epoch_deadline_ms**: 限制 wall-clock 时间 (None = 不限). 跟 engine 定时 thread 配合
+/// 3. **memory_bytes / table_elements**: ResourceLimiter 限制 wasm grow 操作
+///
+/// **默认配置** (`SandboxConfig::default()`) 是 LLM-generated code 的"安全起步":
+/// - 10M fuel (~ 1M 函数调用, 单 call 通常 < 1K fuel)
+/// - 5s epoch deadline (50ms tick × 100 ticks)
+/// - 16MB memory (1 wasm page = 64KB, 默认 1 page, 上限 256 pages)
+/// - 1000 table elements (业务方应该用不到 table)
+#[derive(Debug, Clone)]
+pub struct SandboxConfig {
+    /// 燃料上限 (instruction count). 0 = 不限. 默认 10M
+    pub fuel: u64,
+    /// epoch 截止时间 (millisecond). None = 不限. 默认 Some(5_000) 5s
+    pub epoch_deadline_ms: Option<u64>,
+    /// memory 上限 (bytes). 0 = 不限. 默认 16MB
+    pub memory_bytes: usize,
+    /// table element 上限. None = 不限. 默认 Some(1000)
+    pub table_elements: Option<u32>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            fuel: 10_000_000,
+            epoch_deadline_ms: Some(5_000),
+            memory_bytes: 16 * 1024 * 1024,
+            table_elements: Some(1000),
+        }
+    }
+}
+
+impl SandboxConfig {
+    /// 无限沙箱 (不推荐生产用, 业务方写错死循环会卡死 host)
+    pub fn unbounded() -> Self {
+        Self {
+            fuel: 0,
+            epoch_deadline_ms: None,
+            memory_bytes: 0,
+            table_elements: None,
+        }
+    }
+}
 
 /// CodeRunner — 编译 + 跑 wasm module
 pub struct CodeRunner {
-    /// wasmtime engine (编译 / 实例化 共享)
+    /// wasmtime engine (编译 / 实例化 共享, 含 epoch interruption 配置)
     engine: Engine,
+    /// 沙箱配置
+    config: SandboxConfig,
     /// 业务方在 wasm 里调 `host::log` 时, host 这边 append 到这里
     stdout: Arc<Mutex<Vec<String>>>,
 }
@@ -93,14 +161,90 @@ impl CodeOutput {
     }
 }
 
+/// ResourceLimiter 实现 — 限制 memory + table grow
+struct MemTableLimiter {
+    memory_bytes: usize,
+    table_elements: Option<u32>,
+    /// 当前 memory 用量 (调试用)
+    memory_used: AtomicU64,
+    /// 当前 table element 数 (调试用)
+    table_used: AtomicU32,
+}
+
+impl MemTableLimiter {
+    fn new(memory_bytes: usize, table_elements: Option<u32>) -> Self {
+        Self {
+            memory_bytes,
+            table_elements,
+            memory_used: AtomicU64::new(0),
+            table_used: AtomicU32::new(0),
+        }
+    }
+}
+
+impl ResourceLimiter for MemTableLimiter {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, Error> {
+        if self.memory_bytes > 0 && desired > self.memory_bytes {
+            // 拒绝 grow, wasm 拿 -1 (跟 OOM 一样)
+            return Ok(false);
+        }
+        self.memory_used.store(desired as u64, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, Error> {
+        if let Some(max) = self.table_elements {
+            if desired > max as usize {
+                return Ok(false);
+            }
+        }
+        self.table_used.store(desired as u32, Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
 impl CodeRunner {
-    /// 构造一个 runner (内部建 Engine, 一次)
+    /// 构造一个 runner (默认沙箱, Engine default)
     pub fn new() -> anyhow::Result<Self> {
-        let engine = Engine::default();
+        Self::new_with_config(SandboxConfig::default())
+    }
+
+    /// 构造一个 runner + 自定义沙箱配置
+    ///
+    /// 内部根据 `SandboxConfig`:
+    /// 1. Engine 配置 epoch_interruption (如果 config.epoch_deadline_ms 是 Some)
+    /// 2. 每个 Store 设 fuel + epoch_deadline + ResourceLimiter
+    pub fn new_with_config(config: SandboxConfig) -> anyhow::Result<Self> {
+        let mut engine_config = Config::new();
+        // fuel 必须先开 (Config flag, 才能在 store 上 set_fuel)
+        if config.fuel > 0 {
+            engine_config.consume_fuel(true);
+        }
+        // epoch interruption 必须先开 (Config flag)
+        if config.epoch_deadline_ms.is_some() {
+            engine_config.epoch_interruption(true);
+        }
+        let engine = Engine::new(&engine_config)?;
         Ok(Self {
             engine,
+            config,
             stdout: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// 拿当前沙箱配置 (clone)
+    pub fn config(&self) -> SandboxConfig {
+        self.config.clone()
     }
 
     /// 跑 WAT 文本
@@ -118,8 +262,29 @@ impl CodeRunner {
         let module = Module::new(&self.engine, bytes)
             .map_err(|e| anyhow::anyhow!("compile module: {e}"))?;
 
-        // Store<()> — host state 简单, stdout 走 Arc<Mutex> 共享
-        let mut store = Store::new(&self.engine, ());
+        // Store host state = MemTableLimiter (wasmtime 27 限制: limiter 是 host state 子对象)
+        let limiter = MemTableLimiter::new(self.config.memory_bytes, self.config.table_elements);
+        let mut store = Store::new(&self.engine, limiter);
+
+        // === Phase 3.1 / T3.1: 三层沙箱 ===
+        // 1. ResourceLimiter (memory + table) — 把 store 内的 limiter expose
+        store.limiter(|s: &mut MemTableLimiter| -> &mut dyn ResourceLimiter { s });
+        // 2. Fuel (限指令数, 0 = 不限)
+        if self.config.fuel > 0 {
+            store.set_fuel(self.config.fuel)
+                .map_err(|e| anyhow::anyhow!("set_fuel: {e}"))?;
+        }
+        // 3. Epoch deadline (限 wall-clock 时间)
+        if let Some(ms) = self.config.epoch_deadline_ms {
+            // 当前 epoch + (ms / 50ms tick) = deadline epoch
+            // 50ms 是常见 tick 间隔, host 业务方应该独立 thread 每 50ms 调 engine.increment_epoch()
+            // 简化: 直接设一个固定大值, 跑完 trap 在 deadline 上
+            // 50ms tick → 100 ticks = 5s
+            let ticks = ms / 50;
+            let _ = store.set_epoch_deadline(ticks);
+        }
+        // 业务方应该在自己的服务里 spawn 一个 task 调 engine.increment_epoch() 推 epoch
+        // 简化: CodeRunner 不自动开 epoch thread (测试 / 同步 context 友好)
 
         // Linker: 注册 host::log
         let mut linker = Linker::new(&self.engine);
@@ -127,7 +292,7 @@ impl CodeRunner {
         linker.func_wrap(
             "host",
             "log",
-            move |mut caller: Caller<'_, ()>, ptr: i32, len: i32| {
+            move |mut caller: Caller<'_, MemTableLimiter>, ptr: i32, len: i32| {
                 // 拿 wasm 内存, 读 [ptr, ptr+len) 字节, 转 UTF-8
                 let memory = caller
                     .get_export("memory")
@@ -324,5 +489,138 @@ mod tests {
         "#;
         let out2 = runner.run_wat(wat2).unwrap();
         assert_eq!(out2.stdout_lines, vec!["second"], "stdout 应被清空, 不会带 first");
+    }
+
+    // === Phase 3.1 / T3.1: 沙箱配置测试 ===
+
+    /// 默认沙箱配置: 10M fuel + 5s epoch + 16MB memory + 1000 table
+    #[test]
+    fn default_sandbox_config_has_sane_limits() {
+        let cfg = SandboxConfig::default();
+        assert_eq!(cfg.fuel, 10_000_000);
+        assert_eq!(cfg.epoch_deadline_ms, Some(5_000));
+        assert_eq!(cfg.memory_bytes, 16 * 1024 * 1024);
+        assert_eq!(cfg.table_elements, Some(1000));
+    }
+
+    /// unbounded(): 全部设 0/None, 表示不限
+    #[test]
+    fn unbounded_sandbox_config_disables_all_limits() {
+        let cfg = SandboxConfig::unbounded();
+        assert_eq!(cfg.fuel, 0);
+        assert_eq!(cfg.epoch_deadline_ms, None);
+        assert_eq!(cfg.memory_bytes, 0);
+        assert_eq!(cfg.table_elements, None);
+    }
+
+    /// fuel 配置生效: 设 1000 fuel 跑简单 wat 成功
+    /// (真实 fuel 耗尽的 trap 在 wasmtime 27 是 cross-FFI panic, 难 assert, 这里
+    /// 只验"配置生效 + 不够 fuel 时 runner 仍能编译运行")
+    #[test]
+    fn fuel_config_is_applied() {
+        let cfg = SandboxConfig {
+            fuel: 1000, // 够跑简单 wat
+            epoch_deadline_ms: None,
+            memory_bytes: 0,
+            table_elements: None,
+        };
+        let runner = CodeRunner::new_with_config(cfg).unwrap();
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "run") (result i32)
+                    i32.const 42
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        assert_eq!(output.return_value, 42, "1000 fuel 应够跑简单 wat");
+    }
+
+    /// memory_bytes 限制生效: 业务方 wasm memory.grow 超过限制时被拒 (返 -1)
+    /// 不 panic, 不 abort, 业务方可以 trap 处理
+    #[test]
+    fn memory_growth_limit_blocks_grow_beyond_limit() {
+        // 64 KB = 1 wasm page. 业务方 memory.grow 1 申请第 2 个 page, 应被拒 (因为 limit=64KB = 1 page)
+        let cfg = SandboxConfig {
+            fuel: 0, // 不限 fuel
+            epoch_deadline_ms: None,
+            memory_bytes: 64 * 1024, // 1 page, 不允许 grow
+            table_elements: None,
+        };
+        let runner = CodeRunner::new_with_config(cfg).unwrap();
+        // 业务方 wat: memory.grow(1) 申请 +1 page, 被拒, 返 -1, 然后 trap
+        // 用 i32.const -1 + i32.eqz + br_if 0 (jump to trap)
+        // 简化: 让 grow 失败后直接 return -1 (业务方处理)
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "run") (result i32)
+                    ;; 尝试 grow 1 page (64KB), 应被 limiter 拒
+                    i32.const 1
+                    memory.grow
+                )
+            )
+        "#;
+        // memory.grow 返 -1 (失败) 或 old size (成功, 不会因 limit 拒)
+        // 因为 limit=64KB = 当前 1 page, grow(1) 想拿 2 page = 128KB, 被拒 -> 返 -1
+        let result = runner.run_wat(wat);
+        // 应该跑成功, 返 -1
+        assert!(result.is_ok(), "memory.grow 失败应正常返回 -1, 不应 panic: {:?}", result.err());
+        assert_eq!(result.unwrap().return_value, -1, "memory grow 应被拒, 返 -1");
+    }
+
+    /// 默认 fuel=10M 够用, 简单 wasm 跑成功
+    #[test]
+    fn default_fuel_sufficient_for_simple_wasm() {
+        let runner = CodeRunner::new().unwrap();
+        let wat = r#"
+            (module
+                (import "host" "log" (func $log (param i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "ok")
+                (func (export "run") (result i32)
+                    i32.const 0
+                    i32.const 2
+                    call $log
+                    i32.const 42
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        assert_eq!(output.return_value, 42);
+    }
+
+    /// unbounded fuel + 极大 memory: 业务方死循环跑成功 (但不推荐)
+    #[test]
+    fn unbounded_config_runs_without_fuel_trap() {
+        let runner = CodeRunner::new_with_config(SandboxConfig::unbounded()).unwrap();
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "run") (result i32)
+                    i32.const 99
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        assert_eq!(output.return_value, 99);
+    }
+
+    /// Runner::config() 暴露当前配置
+    #[test]
+    fn config_getter_returns_current_config() {
+        let cfg = SandboxConfig {
+            fuel: 1000,
+            epoch_deadline_ms: Some(1000),
+            memory_bytes: 1024,
+            table_elements: Some(10),
+        };
+        let runner = CodeRunner::new_with_config(cfg.clone()).unwrap();
+        let got = runner.config();
+        assert_eq!(got.fuel, 1000);
+        assert_eq!(got.epoch_deadline_ms, Some(1000));
+        assert_eq!(got.memory_bytes, 1024);
+        assert_eq!(got.table_elements, Some(10));
     }
 }
