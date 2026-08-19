@@ -29,6 +29,9 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
+# P6-5 B: 选中状态持久化 (last_session_id + last_focus) → ~/.ma-harness/tui-state.json
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # P4-1: EventLog test

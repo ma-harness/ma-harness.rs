@@ -31,7 +31,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     DefaultTerminal, Frame,
 };
 use std::sync::Arc;
@@ -48,6 +48,34 @@ enum AppMode {
     List,
     /// Detail view: 单个 session 的 events + metadata
     Detail { session_id: String },
+}
+
+/// TUI panel focus (P6-5 / Day 101) — j/k 作用在哪一个 panel
+///
+/// Plugins panel 不可 focus (纯展示)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    /// Sessions panel (左)
+    Sessions,
+    /// Events panel (下, 全宽)
+    Events,
+}
+
+impl Panel {
+    /// 下一个 panel (Tab cycle)
+    fn next(self) -> Self {
+        match self {
+            Panel::Sessions => Panel::Events,
+            Panel::Events => Panel::Sessions,
+        }
+    }
+    /// 上一个 panel (BackTab / Shift-Tab cycle)
+    fn prev(self) -> Self {
+        match self {
+            Panel::Sessions => Panel::Events,
+            Panel::Events => Panel::Sessions,
+        }
+    }
 }
 
 /// TUI app state
@@ -68,8 +96,17 @@ pub struct TuiApp {
     ticks: u64,
     /// **P5-2**: 当前 mode (List / Detail)
     mode: Arc<Mutex<AppMode>>,
-    /// **P5-2**: List mode 当前选中 session 的 index (j/k 上下移)
+    /// **P5-2**: List mode 当前选中 session 的 index (j/k 上下移, Sessions panel focus)
     selected_session: Arc<Mutex<usize>>,
+    /// **P6-5**: 当前 focus panel (j/k 作用在哪个 panel)
+    focus: Arc<Mutex<Panel>>,
+    /// **P6-5**: Events panel 的 scroll offset (0 = 最新最上, j 下滚一条, k 上滚一条)
+    events_scroll: Arc<Mutex<usize>>,
+    /// **P6-5 (B)**: 选中状态持久化路径 (~/.ma-harness/tui-state.json, 可被构造参数覆盖)
+    state_path: Option<std::path::PathBuf>,
+    /// **P6-5 (B)**: 启动时从 state file 读出的 last_session_id
+    /// (refresh 后用这个把 selected_session 重新对位到持久化的 session)
+    persisted_last_session_id: Arc<Mutex<Option<String>>>,
 }
 
 /// 一行 session 信息
@@ -90,6 +127,16 @@ struct EventRow {
     timestamp: String,
 }
 
+/// **P6-5 B**: 持久化 state JSON schema
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
+struct PersistedState {
+    /// 上次选中的 session id (Detail view 进入时, 或 List mode 切换 focus 时记录)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_session_id: Option<String>,
+    /// 上次 focus 在哪个 panel ("Sessions" / "Events")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_focus: Option<String>,
+}
 
 impl TuiApp {
     /// 构造一个新 TUI app (无 EventLog, 全 stub fallback)
@@ -129,8 +176,19 @@ impl TuiApp {
             ticks: 0,
             mode: Arc::new(Mutex::new(AppMode::List)),
             selected_session: Arc::new(Mutex::new(0)),
+            focus: Arc::new(Mutex::new(Panel::Sessions)),
+            events_scroll: Arc::new(Mutex::new(0)),
+            state_path: Self::default_state_path(),
+            persisted_last_session_id: Arc::new(Mutex::new(None)),
         };
+        // P6-5 B: 加载持久化状态 (last_session_id, last_focus)
+        if let Some(path) = &app.state_path {
+            if let Err(e) = app.load_persisted_state(path) {
+                eprintln!("TUI: WARN failed to load state from {}: {e}", path.display());
+            }
+        }
         app.refresh()?;
+        app.apply_persisted_selection();
         Ok(app)
     }
 
@@ -162,9 +220,131 @@ impl TuiApp {
             ticks: 0,
             mode: Arc::new(Mutex::new(AppMode::List)),
             selected_session: Arc::new(Mutex::new(0)),
+            focus: Arc::new(Mutex::new(Panel::Sessions)),
+            events_scroll: Arc::new(Mutex::new(0)),
+            state_path: Self::default_state_path(),
+            persisted_last_session_id: Arc::new(Mutex::new(None)),
         };
+        // P6-5 B: 加载持久化状态
+        if let Some(path) = &app.state_path {
+            if let Err(e) = app.load_persisted_state(path) {
+                eprintln!("TUI: WARN failed to load state from {}: {e}", path.display());
+            }
+        }
         app.refresh()?;
+        app.apply_persisted_selection();
         Ok(app)
+    }
+
+    /// **P6-5 B**: 用自定义 state 路径构造 (测试用, 业务方 CLI 走 default ~/.ma-harness/tui-state.json)
+    pub fn new_with_log_and_store_and_state_path(
+        log_path: Option<&Path>,
+        store: Option<Arc<dyn SessionStore>>,
+        state_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        // 1. 调 new_with_log_and_store (它已经 load + apply 默认 path 的 state)
+        let mut app = Self::new_with_log_and_store(log_path, store)?;
+        // 2. 如果业务方传了 state_path, 覆盖并 reload + apply
+        if let Some(p) = state_path {
+            // 覆盖前清掉之前默认 path load 出来的 state, 避免双 source 混淆
+            *app.persisted_last_session_id.lock() = None;
+            app.state_path = Some(p.clone());
+            if let Err(e) = app.load_persisted_state(&p) {
+                eprintln!("TUI: WARN failed to load state from {}: {e}", p.display());
+            }
+            // reload 后再 apply 一次 (new_with_log_and_store 里的 apply 用的是默认 path)
+            app.apply_persisted_selection();
+        }
+        Ok(app)
+    }
+
+    /// **P6-5 B**: 默认 state 文件路径
+    ///
+    /// 优先级:
+    /// 1. `MA_HARNESS_TUI_STATE` 环境变量
+    /// 2. `~/.ma-harness/tui-state.json` (XDG-style, Linux/Mac)
+    /// 3. `None` (业务方走 cwd 不持久化)
+    fn default_state_path() -> Option<std::path::PathBuf> {
+        if let Ok(p) = std::env::var("MA_HARNESS_TUI_STATE") {
+            if !p.is_empty() {
+                return Some(std::path::PathBuf::from(p));
+            }
+        }
+        // ~/.ma-harness/tui-state.json
+        if let Some(home) = std::env::var_os("HOME") {
+            let dir = std::path::PathBuf::from(home).join(".ma-harness");
+            return Some(dir.join("tui-state.json"));
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            // Windows fallback
+            let dir = std::path::PathBuf::from(home).join(".ma-harness");
+            return Some(dir.join("tui-state.json"));
+        }
+        None
+    }
+
+    /// **P6-5 B**: 从 path 加载持久化 state (启动时调)
+    ///
+    /// 错误 (文件不存在 / JSON 错) 都不抛, 走空 state (容错优先)
+    fn load_persisted_state(&self, path: &Path) -> Result<()> {
+        if !path.exists() {
+            return Ok(());  // 首次跑, 没文件, 走默认
+        }
+        let content = std::fs::read_to_string(path)?;
+        let state: PersistedState = serde_json::from_str(&content).unwrap_or_default();
+        if let Some(sid) = state.last_session_id {
+            *self.persisted_last_session_id.lock() = Some(sid);
+        }
+        if let Some(panel_str) = state.last_focus {
+            let panel = match panel_str.as_str() {
+                "Events" => Panel::Events,
+                _ => Panel::Sessions,
+            };
+            *self.focus.lock() = panel;
+        }
+        Ok(())
+    }
+
+    /// **P6-5 B**: 保存持久化 state 到 path (交互事件触发, e.g. Tab 切 focus / Enter 进 detail)
+    ///
+    /// 容错: 目录不存在则 create_dir_all; 写失败 Log 但不 panic (TUI 不能挂)
+    fn save_persisted_state(&self, path: &Path) -> Result<()> {
+        let state = PersistedState {
+            last_session_id: self.persisted_last_session_id.lock().clone(),
+            last_focus: Some(match *self.focus.lock() {
+                Panel::Events => "Events".to_string(),
+                Panel::Sessions => "Sessions".to_string(),
+            }),
+        };
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let json = serde_json::to_string_pretty(&state)?;
+        // 写 tmp + rename 避免半路挂时文件半空
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// **P6-5 B**: refresh 后用持久化的 last_session_id 把 selected_session 对位
+    ///
+    /// 业务方上次选中的 session 可能这次还在 → 对位到对应 index
+    /// session 不在了 (e.g. 已关闭) → 保持 0, 把 persisted_last_session_id 清掉
+    fn apply_persisted_selection(&self) {
+        let last = match self.persisted_last_session_id.lock().clone() {
+            Some(s) => s,
+            None => return,  // 没持久化, 默认 0
+        };
+        let sessions = self.sessions.lock();
+        if let Some(idx) = sessions.iter().position(|s| s.id == last) {
+            *self.selected_session.lock() = idx;
+        } else {
+            // session 不在了, 清掉 (避免下次再尝试对位 stale id)
+            *self.persisted_last_session_id.lock() = None;
+        }
     }
 
     /// 刷新数据 (从 inventory + SessionStore + EventLog / stub)
@@ -335,12 +515,14 @@ impl TuiApp {
         Ok(())
     }
 
-    /// List mode 按键处理 (P5-2)
+    /// List mode 按键处理 (P5-2 + P6-5)
     ///
     /// - `q` / `Esc` / `Ctrl-C`: 退出 (返 false 让 run_loop 停)
-    /// - `j` / `↓`: 下一个 session
-    /// - `k` / `↑`: 上一个 session
-    /// - `Enter`: 进 Detail view
+    /// - `Tab`: focus forward (Sessions → Events → Sessions)
+    /// - `BackTab`: focus backward
+    /// - `j` / `↓`: 下一个 (按当前 focus panel)
+    /// - `k` / `↑`: 上一个 (按当前 focus panel)
+    /// - `Enter`: 进 Detail view (仅 Sessions focus 有效)
     ///
     /// Returns: true = 继续 loop, false = 退出
     fn handle_list_key(&self, key: crossterm::event::KeyEvent) -> Result<bool> {
@@ -352,14 +534,37 @@ impl TuiApp {
             {
                 return Ok(false);
             }
+            crossterm::event::KeyCode::Tab => {
+                // P6-5 A: focus 切换 (forward)
+                let _next = self.focus.lock().next();
+            *self.focus.lock() = _next;
+                self.persist_state();
+            }
+            crossterm::event::KeyCode::BackTab => {
+                // P6-5 A: focus 切换 (backward)
+                let _prev = self.focus.lock().prev();
+            *self.focus.lock() = _prev;
+                self.persist_state();
+            }
             crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
-                self.move_selection(1i64);
+                // P6-5 A: 按 focus 路由 j/k
+                match *self.focus.lock() {
+                    Panel::Sessions => self.move_selection(1i64),
+                    Panel::Events => self.scroll_events(1i64),
+                }
             }
             crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
-                self.move_selection(-1i64);
+                match *self.focus.lock() {
+                    Panel::Sessions => self.move_selection(-1i64),
+                    Panel::Events => self.scroll_events(-1i64),
+                }
             }
             crossterm::event::KeyCode::Enter => {
-                self.enter_detail();
+                // P6-5 A: Enter 仅在 Sessions focus 有效
+                if *self.focus.lock() == Panel::Sessions {
+                    self.enter_detail();
+                    self.persist_state();
+                }
             }
             _ => {}
         }
@@ -414,6 +619,37 @@ impl TuiApp {
             *self.mode.lock() = AppMode::Detail {
                 session_id: row.id.clone(),
             };
+            // P6-5 B: 记录 last_session_id 用于持久化
+            *self.persisted_last_session_id.lock() = Some(row.id.clone());
+        }
+    }
+
+    /// 滚动 events panel (clamp 到 [0, len-1])
+    ///
+    /// events 数组是"最新在末尾", iter().rev() 后 0 = 最新最上
+    /// j 下滚 → scroll++ (看到更老的)
+    /// k 上滚 → scroll-- (回到最新的)
+    fn scroll_events(&self, delta: i64) {
+        let events = self.events.lock();
+        if events.is_empty() {
+            return;
+        }
+        let cur = *self.events_scroll.lock() as i64;
+        let len = events.len() as i64;
+        let next = if delta >= 0 {
+            (cur + delta).min(len - 1)
+        } else {
+            (cur + delta).max(0)
+        };
+        *self.events_scroll.lock() = next as usize;
+    }
+
+    /// **P6-5 B**: 写持久化 state (eprintln 失败不阻断 TUI, 跟持久化 import 思路一致)
+    fn persist_state(&self) {
+        if let Some(path) = &self.state_path {
+            if let Err(e) = self.save_persisted_state(path) {
+                eprintln!("TUI: WARN failed to save state to {}: {e}", path.display());
+            }
         }
     }
 
@@ -429,9 +665,10 @@ impl TuiApp {
         }
     }
 
-    /// List mode 4 panel UI (P4-5 布局 + P5-2 高亮选中)
+    /// List mode 4 panel UI (P4-5 布局 + P5-2 高亮选中 + P6-5 focus 高亮 + Events scroll)
     fn ui_list(&self, frame: &mut Frame) {
         let area = frame.area();
+        let focus = *self.focus.lock();
 
         // 主布局: title (3) + row1 (Min 5) + row2 (Min 8) + status (3)
         let main_chunks = Layout::default()
@@ -444,7 +681,11 @@ impl TuiApp {
             ])
             .split(area);
 
-        // Title
+        // Title — 显示当前 focus
+        let focus_label = match focus {
+            Panel::Sessions => "Sessions",
+            Panel::Events => "Events",
+        };
         let title = Paragraph::new(Line::from(vec![
             Span::styled(
                 "ma-harness TUI",
@@ -454,7 +695,9 @@ impl TuiApp {
             ),
             Span::raw(" "),
             Span::styled(
-                "(Phase 5 — 'j/k' nav, 'Enter' detail, 'q' quit)",
+                format!(
+                    "(Phase 6 — focus: {focus_label}; Tab switch; 'j/k' nav; 'Enter' detail; 'q' quit)"
+                ),
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
@@ -467,7 +710,7 @@ impl TuiApp {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_chunks[1]);
 
-        // Sessions panel (P5-2: 高亮 selected_session)
+        // Sessions panel (P5-2: 高亮 selected_session, P6-5: 边框 BOLD 当 focus=Sessions)
         let selected = *self.selected_session.lock();
         let sessions = self.sessions.lock();
         let session_items: Vec<ListItem> = sessions
@@ -495,16 +738,25 @@ impl TuiApp {
                 ListItem::new(line)
             })
             .collect();
-        let sessions_list = List::new(session_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Sessions ({})", sessions.len())),
-            );
+        // P6-5 A: focus 高亮 (border title 加 ▶ marker, border BOLD)
+        let sessions_title = if focus == Panel::Sessions {
+            format!("▶ Sessions ({})", sessions.len())
+        } else {
+            format!("Sessions ({})", sessions.len())
+        };
+        let sessions_block = if focus == Panel::Sessions {
+            Block::default()
+                .borders(Borders::ALL)
+                .title(sessions_title)
+                .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        } else {
+            Block::default().borders(Borders::ALL).title(sessions_title)
+        };
+        let sessions_list = List::new(session_items).block(sessions_block);
         frame.render_widget(sessions_list, row1_chunks[0]);
         drop(sessions);
 
-        // Plugins panel
+        // Plugins panel (纯展示, 不可 focus)
         let plugins = self.plugins.lock();
         let plugin_items: Vec<ListItem> = plugins
             .iter()
@@ -524,11 +776,17 @@ impl TuiApp {
         frame.render_widget(plugins_list, row1_chunks[1]);
         drop(plugins);
 
-        // Row 2: Events panel
+        // Row 2: Events panel (P6-5: 边框高亮当 focus, scroll 偏移按 events_scroll)
         let events = self.events.lock();
+        let scroll = *self.events_scroll.lock();
+        // events.iter().rev() 后 0 = 最新, 1 = 第二新...
+        // scroll = 0 → 取所有; scroll > 0 → 跳过前 scroll 条
+        // 实现: 先 reverse 拿到 [newest, second_newest, ...]
+        //       然后 skip(scroll) 拿从老到新
         let event_items: Vec<ListItem> = events
             .iter()
             .rev()
+            .skip(scroll)
             .map(|e| {
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{}", e.seq), Style::default().fg(Color::DarkGray)),
@@ -551,11 +809,26 @@ impl TuiApp {
                 ]))
             })
             .collect();
-        let events_list = List::new(event_items).block(
+        // P6-5 A: focus 高亮 + scroll 状态
+        let events_title = if focus == Panel::Events {
+            format!(
+                "▶ Events (latest {} of {}, scroll={})",
+                event_items.len(),
+                events.len(),
+                scroll
+            )
+        } else {
+            format!("Events (latest {})", events.len())
+        };
+        let events_block = if focus == Panel::Events {
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("Events (latest {})", events.len())),
-        );
+                .title(events_title)
+                .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        } else {
+            Block::default().borders(Borders::ALL).title(events_title)
+        };
+        let events_list = List::new(event_items).block(events_block);
         frame.render_widget(events_list, main_chunks[2]);
         let event_count = events.len();
         drop(events);
@@ -1115,5 +1388,392 @@ mod tests {
         };
         let cont = app.handle_list_key(key_q).unwrap();
         assert!(!cont, "'q' 应返 false 让 loop 停");
+    }
+
+    // === P6-5 A: j/k 跨 panel (Tab 切 focus) ===
+
+    /// 初始 focus = Sessions
+    #[test]
+    fn tui_initial_focus_is_sessions() {
+        let app = TuiApp::new().unwrap();
+        let focus = app.focus.lock();
+        assert_eq!(*focus, Panel::Sessions, "初始 focus 应是 Sessions");
+    }
+
+    /// Tab 切 focus: Sessions → Events → Sessions
+    #[test]
+    fn tui_tab_cycles_focus() {
+        let app = TuiApp::new().unwrap();
+        // 初始 = Sessions
+        assert_eq!(*app.focus.lock(), Panel::Sessions);
+
+        // Tab → Events
+        let _next = app.focus.lock().next();
+        *app.focus.lock() = _next;
+        assert_eq!(*app.focus.lock(), Panel::Events, "Tab 1 次: Sessions → Events");
+
+        // Tab → Sessions (cycle)
+        let _next = app.focus.lock().next();
+        *app.focus.lock() = _next;
+        assert_eq!(*app.focus.lock(), Panel::Sessions, "Tab 2 次: Events → Sessions");
+    }
+
+    /// BackTab 反向: Sessions → Events (用 prev)
+    #[test]
+    fn tui_backtab_cycles_focus() {
+        let app = TuiApp::new().unwrap();
+        // 初始 = Sessions
+        // BackTab → Events (走 prev)
+        let _prev = app.focus.lock().prev();
+        *app.focus.lock() = _prev;
+        assert_eq!(*app.focus.lock(), Panel::Events, "BackTab: Sessions → Events");
+    }
+
+    /// j/k 按 focus 路由: Sessions focus → move_selection, Events focus → scroll_events
+    #[test]
+    fn tui_jk_routes_by_focus() {
+        use ma_harness_core::{EventLog, EventType, SessionEvent};
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let log_path = tmpdir.path().join("events.db");
+        let log = EventLog::open(&log_path).unwrap();
+        for i in 0..5 {
+            let mut ev = SessionEvent::new(format!("s-{i}"), EventType::SessionStart);
+            ev.payload_json = Some(format!(r#"{{"session":"s-{i}"}}"#));
+            let _ = log.append(ev);
+        }
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        for i in 0..5 {
+            let proto = ProtoSession {
+                id: format!("s-{i}"),
+                name: format!("name-{i}"),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec![],
+                user_id: String::new(),
+            };
+            store.create(&proto).unwrap();
+        }
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(Some(&log_path), Some(store_arc)).unwrap();
+
+        // 初始 focus = Sessions, 5 个 session
+        assert_eq!(*app.focus.lock(), Panel::Sessions);
+        assert_eq!(app.sessions.lock().len(), 5);
+
+        // Sessions focus: j 移动 selected_session 0 → 1
+        app.move_selection(1i64);
+        assert_eq!(*app.selected_session.lock(), 1, "Sessions focus: j 移 selected 0→1");
+
+        // 切到 Events focus
+        *app.focus.lock() = Panel::Events;
+
+        // Events focus: j 移动 events_scroll 0 → 1
+        app.scroll_events(1i64);
+        assert_eq!(*app.events_scroll.lock(), 1, "Events focus: j 移 scroll 0→1");
+
+        // k 上移回 0
+        app.scroll_events(-1i64);
+        assert_eq!(*app.events_scroll.lock(), 0, "Events focus: k 移 scroll 1→0");
+    }
+
+    /// Events scroll clamp 到 [0, len-1]
+    #[test]
+    fn tui_events_scroll_clamps() {
+        let app = TuiApp::new().unwrap();
+        // 20 个 stub event
+        assert_eq!(app.events.lock().len(), 20);
+
+        // k 在 0 不动
+        app.scroll_events(-1i64);
+        assert_eq!(*app.events_scroll.lock(), 0, "scroll=0 时 k 不动");
+
+        // j 一直按直到 clamp 到 19
+        for _ in 0..30 {
+            app.scroll_events(1i64);
+        }
+        assert_eq!(*app.events_scroll.lock(), 19, "scroll 应 clamp 到 len-1=19");
+    }
+
+    /// Enter 在 Events focus 时不进 detail
+    #[test]
+    fn tui_enter_in_events_focus_does_nothing() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        let proto = ProtoSession {
+            id: "s-1".to_string(),
+            name: "alpha".to_string(),
+            state: ProtoSessionState::Active as i32,
+            mode: OperatingMode::Default as i32,
+            created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            closed_at: None,
+            metadata: None,
+            stats: None,
+            enabled_plugins: vec![],
+            user_id: String::new(),
+        };
+        store.create(&proto).unwrap();
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(None, Some(store_arc)).unwrap();
+
+        // 切到 Events focus
+        *app.focus.lock() = Panel::Events;
+
+        // 模拟按 Enter — handle_list_key 应 no-op
+        let key_enter = KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        let cont = app.handle_list_key(key_enter).unwrap();
+        assert!(cont, "Enter 在 Events focus 应继续 loop, 不退出");
+        // mode 应仍是 List (没进 detail)
+        let mode = app.mode.lock();
+        assert_eq!(*mode, AppMode::List, "Enter 在 Events focus 不应进 detail");
+    }
+
+    // === P6-5 B: 选中状态持久化 ===
+
+    /// 加载不存在的 state 文件 → 走默认
+    #[test]
+    fn tui_load_persisted_state_no_file_is_default() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("non-existent.json");
+        let app = TuiApp::new().unwrap();
+        // 不应 panic, 不应 fail
+        app.load_persisted_state(&path).unwrap();
+        assert!(app.persisted_last_session_id.lock().is_none());
+    }
+
+    /// 保存 → 重新加载 → state 一致
+    #[test]
+    fn tui_persist_and_reload_roundtrip() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("tui-state.json");
+
+        let app = TuiApp::new().unwrap();
+        // 模拟 set 持久化 state
+        *app.persisted_last_session_id.lock() = Some("ev-1".to_string());
+        *app.focus.lock() = Panel::Events;
+        // 写到 path
+        app.save_persisted_state(&path).unwrap();
+        // 文件应存在
+        assert!(path.exists(), "save 后文件应存在: {}", path.display());
+
+        // 新 TuiApp, 加载
+        let app2 = TuiApp::new().unwrap();
+        app2.load_persisted_state(&path).unwrap();
+        assert_eq!(
+            app2.persisted_last_session_id.lock().as_deref(),
+            Some("ev-1"),
+            "reload 后 last_session_id 应一致"
+        );
+        assert_eq!(*app2.focus.lock(), Panel::Events, "reload 后 focus 应一致");
+    }
+
+    /// 启动时自动加载 (走 new_with_log_and_store_and_state_path)
+    #[test]
+    fn tui_constructor_loads_persisted_state() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        for (id, name) in [("presisted-1", "alpha"), ("presisted-2", "beta")] {
+            let proto = ProtoSession {
+                id: id.to_string(),
+                name: name.to_string(),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec![],
+                user_id: String::new(),
+            };
+            store.create(&proto).unwrap();
+        }
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+
+        // 1. 准备 state file (持久化 "presisted-2" + Events focus)
+        let state_path = tmpdir.path().join("state.json");
+        {
+            let app = TuiApp::new().unwrap();
+            *app.persisted_last_session_id.lock() = Some("presisted-2".to_string());
+            *app.focus.lock() = Panel::Events;
+            app.save_persisted_state(&state_path).unwrap();
+        }
+
+        // 2. 用 state_path 启动 → 应自动加载, focus=Events, selected_session 对位到 persisted-2
+        let app2 = TuiApp::new_with_log_and_store_and_state_path(
+            None,
+            Some(store_arc),
+            Some(state_path),
+        )
+        .unwrap();
+
+        // focus 应是 Events (持久化的)
+        assert_eq!(*app2.focus.lock(), Panel::Events, "reload 后 focus 应是 Events");
+
+        // last_session_id 应是 persisted-2
+        let last = app2.persisted_last_session_id.lock().clone();
+        assert_eq!(last.as_deref(), Some("presisted-2"), "last_session_id 应是 persisted-2");
+
+        // selected_session 应指向 persisted-2
+        // 验证方式: 持久化 last_session_id 还在, selected_session 指向一个真实存在的 session
+        // 因为 SessionStore list 顺序不定, 找持久化 id 在 sessions 里的 index
+        let sessions = app2.sessions.lock();
+        let expected_idx = sessions.iter().position(|s| s.id == "presisted-2");
+        assert!(expected_idx.is_some(), "sessions 应含 persisted-2");
+        let expected_idx = expected_idx.unwrap();
+        let actual_selected = *app2.selected_session.lock();
+        let actual_id = sessions.get(actual_selected).map(|s| s.id.as_str());
+        assert_eq!(
+            actual_id, Some("presisted-2"),
+            "selected_session 应指向 persisted-2, got idx={} id={:?}",
+            actual_selected, actual_id
+        );
+        assert_eq!(actual_selected, expected_idx, "selected index 应是 persisted-2 的 index");
+    }
+
+        /// 持久化的 session 不再存在 → 自动清掉 (不保持 stale id)
+    #[test]
+    fn tui_persisted_session_not_found_clears() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        // 只有 new-session, 没 old-session
+        let proto = ProtoSession {
+            id: "new-session".to_string(),
+            name: "new".to_string(),
+            state: ProtoSessionState::Active as i32,
+            mode: OperatingMode::Default as i32,
+            created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            closed_at: None,
+            metadata: None,
+            stats: None,
+            enabled_plugins: vec![],
+            user_id: String::new(),
+        };
+        store.create(&proto).unwrap();
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+
+        // 准备 state file 指向不存在的 session
+        let state_path = tmpdir.path().join("state.json");
+        {
+            let app = TuiApp::new().unwrap();
+            *app.persisted_last_session_id.lock() = Some("old-session-not-exist".to_string());
+            app.save_persisted_state(&state_path).unwrap();
+        }
+
+        // 启动 → 应自动清掉 persisted_last_session_id (old-session 不在)
+        let app = TuiApp::new_with_log_and_store_and_state_path(
+            None,
+            Some(store_arc),
+            Some(state_path),
+        )
+        .unwrap();
+        assert!(
+            app.persisted_last_session_id.lock().is_none(),
+            "持久化 session 不存在时应清掉, got {:?}",
+            app.persisted_last_session_id.lock()
+        );
+        // selected_session 应回到 0 (默认)
+        assert_eq!(*app.selected_session.lock(), 0);
+    }
+
+    /// Tab 切 focus 时自动 save (走 handle_list_key)
+    #[test]
+    fn tui_tab_saves_state() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let state_path = tmpdir.path().join("state.json");
+        let app = TuiApp::new_with_log_and_store_and_state_path(
+            None,
+            None,
+            Some(state_path.clone()),
+        )
+        .unwrap();
+        // 初始 = Sessions
+        assert_eq!(*app.focus.lock(), Panel::Sessions);
+
+        // 模拟按 Tab
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let key_tab = KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        app.handle_list_key(key_tab).unwrap();
+        // focus 应切到 Events
+        assert_eq!(*app.focus.lock(), Panel::Events);
+        // state file 应被 save
+        assert!(state_path.exists(), "Tab 后应自动 save state file");
+        // 文件应含 "Events"
+        let content = std::fs::read_to_string(&state_path).unwrap();
+        assert!(content.contains("Events"), "save 后文件应含 'Events', got: {}", content);
+    }
+
+    /// 损坏的 JSON 文件不 panic, 走空 state
+    #[test]
+    fn tui_load_corrupted_state_falls_back() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let path = tmpdir.path().join("corrupted.json");
+        std::fs::write(&path, "{ invalid json @@ }").unwrap();
+
+        let app = TuiApp::new().unwrap();
+        // 不应 panic
+        app.load_persisted_state(&path).unwrap();
+        // 走空 state
+        assert!(app.persisted_last_session_id.lock().is_none());
+        // focus 仍是默认
+        assert_eq!(*app.focus.lock(), Panel::Sessions);
+    }
+
+    /// default_state_path 走 HOME / USERPROFILE / env var
+    #[test]
+    #[allow(unsafe_code)] // std::env::set_var / remove_var 是 unsafe (Rust 2024+), 测试需要
+    fn tui_default_state_path_env_var_overrides() {
+        // MA_HARNESS_TUI_STATE 优先
+        let custom = std::path::PathBuf::from("/tmp/custom-tui-state.json");
+        // set_var / remove_var 是 unsafe (Rust 2024+), 串行化避免 race
+        unsafe {
+            std::env::set_var("MA_HARNESS_TUI_STATE", custom.to_string_lossy().to_string());
+        }
+        let result = TuiApp::default_state_path();
+        assert_eq!(result.as_deref(), Some(custom.as_path()));
+        unsafe {
+            std::env::remove_var("MA_HARNESS_TUI_STATE");
+        }
     }
 }

@@ -2500,6 +2500,8 @@ dependencies = [
  "parking_lot",
  "prost-types",
  "ratatui",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
