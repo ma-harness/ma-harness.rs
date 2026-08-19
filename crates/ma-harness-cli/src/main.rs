@@ -117,6 +117,23 @@ enum Commands {
         #[command(subcommand)]
         action: CodeAction,
     },
+    /// **Phase 3.3 / T3.3**: 业务方 prompt → LLM 生成 .wat → wasm 沙箱跑
+    ///
+    /// 需要环境 `OPENAI_API_KEY` (或 `--api-key <key>`)
+    ///
+    /// 例子:
+    ///   OPENAI_API_KEY=sk-... mah run-prompt "compute 1+1, return the result as i32"
+    ///   OPENAI_API_KEY=sk-... mah run-prompt "log 'hello world', return 0"
+    RunPrompt {
+        /// 业务方需求描述 (LLM 转 .wat)
+        prompt: String,
+        /// 可选 API key (缺省读 env OPENAI_API_KEY)
+        #[arg(long)]
+        api_key: Option<String>,
+        /// 可选 model (缺省 gpt-4o-mini)
+        #[arg(long, default_value = "gpt-4o-mini")]
+        model: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -154,6 +171,9 @@ async fn main() -> Result<()> {
         Commands::Code { action } => match action {
             CodeAction::Run { file } => run_code(&file),
         },
+        Commands::RunPrompt { prompt, api_key, model } => {
+            run_prompt(&prompt, api_key.as_deref(), &model).await
+        }
     }
 }
 
@@ -380,6 +400,148 @@ fn run_code(file: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// 从 LLM 文本响应里提取 WAT (处理 markdown fence + 找 (module ... ))
+fn extract_wat_from_llm_response(text: &str) -> Option<String> {
+    // 1. 找 ```wat ... ``` fence
+    if let Some(start) = text.find("```wat") {
+        let after = &text[start + 6..];
+        if let Some(end) = after.find("```") {
+            return Some(after[..end].trim().to_string());
+        }
+    }
+    // 2. 找 ``` ... ``` (没指定语言)
+    if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        if let Some(end) = after.find("```") {
+            let body = after[..end].trim();
+            // 验证内容是 WAT (含 (module)
+            if body.contains("(module") {
+                return Some(body.to_string());
+            }
+        }
+    }
+    // 3. 找 (module ... ) 直接形式
+    if let Some(start) = text.find("(module") {
+        // 简单算 (module 配对的 ), 配错 fall back
+        let mut depth = 0i32;
+        let mut end = None;
+        for (i, c) in text.as_bytes()[start..].iter().copied().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end) = end {
+            return Some(text[start..end].to_string());
+        }
+    }
+    None
+}
+
+// enumerate helper: walk over bytes with index
+
+
+/// **Phase 3.3 / T3.3**: 业务方 prompt → LLM 生成 .wat → wasm 沙箱跑
+///
+/// 流程:
+/// 1. 拿 OPENAI_API_KEY (--api-key 显式 > env)
+/// 2. 构造 OpenaiAdapter
+/// 3. 发 prompt + system instruction "return .wat"
+/// 4. parse_response → content
+/// 5. extract_wat_from_llm_response 提取 .wat
+/// 6. CodeRunner (T3.1 sandbox) 跑
+/// 7. 显示 stdout + return value
+async fn run_prompt(prompt: &str, api_key: Option<&str>, model: &str) -> Result<()> {
+    use ma_harness_code::{CodeRunner, SandboxConfig};
+    use ma_harness_core::ModelRequest;
+    use ma_harness_model::OpenaiAdapter;
+
+    // 1. API key
+    let key = match api_key {
+        Some(k) => k.to_string(),
+        None => std::env::var("OPENAI_API_KEY").map_err(|_| {
+            anyhow::anyhow!("OPENAI_API_KEY not set. Use --api-key or export OPENAI_API_KEY=sk-...")
+        })?,
+    };
+
+    eprintln!("mah run-prompt: prompt = {prompt}");
+    eprintln!("mah run-prompt: model = {model}");
+
+    // 2. 构造 adapter
+    let adapter = OpenaiAdapter::new(key).with_model(model.to_string());
+
+    // 3. 构造 ModelRequest
+    let system = "You are a WebAssembly expert. The user will give you a task. \
+                  Generate a valid WAT (WebAssembly text format) module that performs the task. \
+                  The module MUST export a function named 'run' that returns i32. \
+                  If the task requires printing output, import the host function 'host.log(ptr:i32, len:i32)' \
+                  and export a 'memory'. Otherwise, just return the result as i32. \
+                  Return ONLY the WAT source, optionally wrapped in ```wat ... ``` markdown fence. \
+                  Do NOT add explanations outside the code block.";
+
+    let req = ModelRequest {
+        model: model.to_string(),
+        messages: vec![ma_harness_core::ModelMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        }],
+        temperature: 0.0, // 0 = deterministic, 跟 code generation 对齐
+        max_tokens: 1024,
+        system_prompt: Some(system.to_string()),
+    };
+
+    // 4. 调 LLM (走 ModelAdapter trait)
+    use ma_harness_core::ModelAdapter;
+    eprintln!("mah run-prompt: calling LLM...");
+    let resp = adapter
+        .complete(&req)
+        .await
+        .map_err(|e| anyhow::anyhow!("LLM call failed: {e}"))?;
+    eprintln!(
+        "mah run-prompt: LLM returned ({} prompt + {} completion tokens)",
+        resp.prompt_tokens, resp.completion_tokens
+    );
+
+    // 5. 提取 WAT
+    let wat = extract_wat_from_llm_response(&resp.content)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no WAT found in LLM response. Raw content (first 500 chars):\n{}",
+                &resp.content.chars().take(500).collect::<String>()
+            )
+        })?;
+
+    eprintln!("--- LLM generated WAT ({} bytes) ---", wat.len());
+    for line in wat.lines() {
+        eprintln!("  {}", line);
+    }
+    eprintln!("--- end WAT ---");
+
+    // 6. wasm 跑 (T3.1 sandbox)
+    let runner = CodeRunner::new_with_config(SandboxConfig::default())
+        .map_err(|e| anyhow::anyhow!("init CodeRunner: {e}"))?;
+
+    eprintln!("mah run-prompt: running WAT in wasm sandbox...");
+    let output = runner
+        .run_wat(&wat)
+        .map_err(|e| anyhow::anyhow!("wasm run failed: {e}"))?;
+
+    // 7. 显示结果
+    println!("--- stdout ---");
+    for line in &output.stdout_lines {
+        println!("{}", line);
+    }
+    println!("--- return value: {} ---", output.return_value);
+    Ok(())
+}
+
 /// 打印 benchmark 信息 (不真跑, criterion 走 cargo bench)
 fn print_bench_info(crate_name: Option<&str>) -> Result<()> {
     println!("ma-harness bench info");
@@ -406,4 +568,71 @@ fn print_bench_info(crate_name: Option<&str>) -> Result<()> {
     println!();
     println!("详细 bench 列表见 docs/benchmark-design.md § 3 + docs/benchmark-report-week11.md");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === T3.3 WAT extraction helper 测试 ===
+
+    #[test]
+    fn extract_wat_from_wat_fence() {
+        let text = r#"Here's the WAT:
+```wat
+(module
+    (memory (export "memory") 1)
+    (func (export "run") (result i32)
+        i32.const 42
+    )
+)
+```
+That's it."#;
+        let wat = extract_wat_from_llm_response(text).unwrap();
+        assert!(wat.contains("(module"));
+        assert!(wat.contains("i32.const 42"));
+    }
+
+    #[test]
+    fn extract_wat_from_plain_fence() {
+        let text = r#"```
+(module (func (export "run") (result i32) i32.const 1))
+```"#;
+        let wat = extract_wat_from_llm_response(text).unwrap();
+        assert!(wat.contains("(module"));
+    }
+
+    #[test]
+    fn extract_wat_from_bare_module() {
+        let text = r#"Here is the code:
+(module
+    (func (export "run") (result i32) i32.const 0)
+)
+End."#;
+        let wat = extract_wat_from_llm_response(text).unwrap();
+        assert!(wat.contains("(module"));
+        assert!(wat.contains("i32.const 0"));
+    }
+
+    #[test]
+    fn extract_wat_no_module_returns_none() {
+        let text = "I cannot generate WAT for this.";
+        assert!(extract_wat_from_llm_response(text).is_none());
+    }
+
+    #[test]
+    fn extract_wat_handles_paren_matching() {
+        // 嵌套括号 (i32.const (1 + 2)) 不应乱配
+        let text = r#"
+(module
+    (func (export "run") (result i32)
+        i32.const 5
+    )
+)
+"#;
+        let wat = extract_wat_from_llm_response(text).unwrap();
+        // 应含 export run + i32.const 5
+        assert!(wat.contains("export \"run\""));
+        assert!(wat.contains("i32.const 5"));
+    }
 }

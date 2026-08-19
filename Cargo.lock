@@ -1995,6 +1995,7 @@ dependencies = [
  "ma-harness-conformance",
  "ma-harness-cordis",
  "ma-harness-core",
+ "ma-harness-model",
  "ma-harness-plugin-hello",
  "ma-harness-proto",
  "ma-harness-seam",
