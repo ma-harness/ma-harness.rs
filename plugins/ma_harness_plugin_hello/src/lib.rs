@@ -140,6 +140,50 @@ impl Listener<HelloGreeted> for HighPrioGreetListener {
 }
 
 // ============================================================================
+// Phase 2.4 (T2.4): AsyncDisposable demo
+// ============================================================================
+//
+// 模拟一个"延迟关闭"的资源 (e.g. async HTTP client / tokio task 取消),
+// 走 `ctx.on_dispose_async` + `ctx.dispose_all_async().await` 验证并发 dispose.
+
+/// Async 资源: dispose_async sleep 50ms (模拟 IO wait), 然后设 disposed 标记
+pub struct AsyncSleepResource {
+    name: String,
+    disposed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AsyncSleepResource {
+    pub fn new(name: &str) -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            Self {
+                name: name.to_string(),
+                disposed: std::sync::Arc::clone(&flag),
+            },
+            flag,
+        )
+    }
+}
+
+impl ma_harness_cordis::AsyncDisposable for AsyncSleepResource {
+    fn dispose_async<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>,
+    > {
+        let name = self.name.clone();
+        let flag = std::sync::Arc::clone(&self.disposed);
+        Box::pin(async move {
+            // 模拟 IO wait
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("[async-dispose] {name} done");
+            Ok(())
+        })
+    }
+}
+
+// ============================================================================
 // 单元测试 (跟 Week 1 Day 4 一致, 验证 macro 生成的 impl 行为跟手写 impl 等价)
 // ============================================================================
 
@@ -296,5 +340,89 @@ mod tests {
         pub struct VeryLowPrioListener;
         assert_eq!(VeryLowPrioListener::DSH_LISTENER_PRIORITY, -100);
         let _listener: Arc<dyn Listener<HelloGreeted>> = Arc::new(HighPrioGreetListener);
+    }
+
+    // === Phase 2.4 (T2.4): AsyncDisposable ===
+
+    /// 验证 async disposable 注册 + 释放流程
+    #[tokio::test]
+    async fn async_disposable_runs_on_dispose_all() {
+        let ctx = Context::new();
+        let (resource, flag) = AsyncSleepResource::new("test_async_1");
+        ctx.on_dispose_async(std::sync::Arc::new(resource));
+        // 释放前 flag 是 false
+        assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
+        // dispose_all_async 走 join_all 释放
+        ctx.dispose_all_async().await.unwrap();
+        // 释放后 flag 是 true
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// 验证多个 async disposable 并发释放 (tokio join_all)
+    #[tokio::test]
+    async fn async_disposable_runs_concurrently() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+        let ctx = Context::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+        // 注册 3 个, 每个 dispose_async 等 50ms
+        for i in 0..3 {
+            let counter = Arc::clone(&counter);
+            struct CountingAsync(Arc<AtomicUsize>);
+            impl ma_harness_cordis::AsyncDisposable for CountingAsync {
+                fn dispose_async<'a>(
+                    &'a self,
+                ) -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>,
+                > {
+                    let c = Arc::clone(&self.0);
+                    Box::pin(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    })
+                }
+            }
+            ctx.on_dispose_async(Arc::new(CountingAsync(Arc::clone(&counter))) as _);
+            // 显式 drop i 防 unused warning
+            let _ = i;
+        }
+        // 测并发: 3 个各 50ms, 串行 150ms, 并发应 < 100ms
+        let start = std::time::Instant::now();
+        ctx.dispose_all_async().await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // 并发 3 个 50ms task 应 < 120ms (容差)
+        assert!(
+            elapsed < std::time::Duration::from_millis(120),
+            "expected concurrent dispose < 120ms, got {:?}",
+            elapsed
+        );
+    }
+
+    /// 验证 async disposable 跟 sync disposable 完全独立
+    #[tokio::test]
+    async fn async_and_sync_disposables_are_independent() {
+        let ctx = Context::new();
+        // 同步: 注册 + dispose 不影响 async
+        struct SyncNoop;
+        impl ma_harness_cordis::Disposable for SyncNoop {
+            fn dispose(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+        ctx.on_dispose(std::sync::Arc::new(SyncNoop));
+        // async: 注册 + dispose
+        let (resource, flag) = AsyncSleepResource::new("independent");
+        ctx.on_dispose_async(std::sync::Arc::new(resource));
+        // 调 sync dispose, async 不应触发
+        ctx.dispose().unwrap();
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::SeqCst),
+            "sync dispose 不应触发 async disposable"
+        );
+        // 调 async dispose, flag 触发
+        ctx.dispose_all_async().await.unwrap();
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

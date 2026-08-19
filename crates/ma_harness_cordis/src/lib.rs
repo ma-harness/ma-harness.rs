@@ -24,7 +24,7 @@ mod plugin;
 mod service;
 
 pub use context::Context;
-pub use disposable::{Disposable, Scope};
+pub use disposable::{AsyncDisposable, Disposable, Scope};
 pub use error::{BoxedError, CordisError};
 pub use event::{Event as CordisEvent, EventSeverity};
 pub use key::{is_snake_case, CtxKey}; // 2026-08-18: is_snake_case 公开, 给 ctx_key! macro 用

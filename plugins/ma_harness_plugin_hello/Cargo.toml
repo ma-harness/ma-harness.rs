@@ -20,3 +20,9 @@ ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
 anyhow = { workspace = true }
 # Phase 2.2 (T2.2): inventory 分布式注册
 inventory = { workspace = true }
+# Phase 2.4 (T2.4): AsyncDisposable demo (非 test 也用 tokio::time::sleep)
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+# Phase 2.4 (T2.4): async disposable test
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }

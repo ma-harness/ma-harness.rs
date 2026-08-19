@@ -2,6 +2,9 @@
 //!
 //! Week 1 Day 5 实现: `Disposable` trait + `Scope` (RAII 包装) + `Context::dispose`.
 //!
+//! Phase 2.4 (T2.4) 加 `AsyncDisposable` trait: `async fn dispose_async`,
+//! 配合 `Context::dispose_all_async` 走 `futures::future::join_all` 并发释放.
+//!
 //! 设计见 `docs/ma-harness-arch-map.md` §2 (Cordis 元框架).
 //!
 //! # 关键约束
@@ -16,7 +19,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-/// Disposable 资源 trait
+/// Disposable 资源 trait (sync)
 ///
 /// 用户资源 (file handle / db connection / child process) impl 这个 trait,
 /// 注册到 ctx.scope() 或 ctx.on_dispose().
@@ -27,6 +30,33 @@ pub trait Disposable: Send + Sync + 'static {
     /// Phase 1: 失败时返回 Err, ctx.dispose 会收集
     /// Phase 2: 改成 `fn dispose(&self) -> ();` 失败 panic (harness 资源泄漏 = 严重)
     fn dispose(&self) -> anyhow::Result<()>;
+}
+
+/// **Phase 2.4 (T2.4) 新增**: 异步 Disposable
+///
+/// 跟 `Disposable` 并存, 业务方按需选. 异步 dispose 用于:
+/// - 网络连接关闭 (async close)
+/// - 子进程等待 (async wait)
+/// - 远程资源释放 (HTTP DELETE 调下游)
+/// - tokio task 取消 / join
+///
+/// 实现细节:
+/// - `dispose_async` 走 `async fn`, 返回 Pin<Box<dyn Future>> 也行
+///   (用 `#[async_trait]` 或者用 native async fn 走 blanket impl)
+/// - 注册走 `ctx.on_dispose_async(arc)` (独立于 sync entry)
+/// - 释放走 `ctx.dispose_all_async().await`, 内部 `futures::future::join_all` 并发跑
+/// - 跟 sync `Disposable` 不互通, 业务方要么 sync 要么 async 选一个
+///
+/// **未来 (Phase 3)**: 合并 sync + async, 走 `async fn dispose(&self) -> Result<()>` 单一 trait,
+/// sync 的 wrapper 成 `async fn dispose(&self) { sync_body }`. 当前为 backward compat 保留两份.
+pub trait AsyncDisposable: Send + Sync + 'static {
+    /// 异步释放资源
+    ///
+    /// 默认实现: spawn block 给 sync 路径用. 业务方可以 override 走真 async.
+    /// 失败时返回 Err, ctx.dispose_all_async 收集第一个错误.
+    fn dispose_async<'a>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>;
 }
 
 /// 内部 disposable 包装, 记录 disposed 状态避免重复释放
@@ -53,6 +83,33 @@ impl DisposableEntry {
             self.inner.dispose()
         } else {
             // 已 dispose, 静默 no-op
+            Ok(())
+        }
+    }
+}
+
+/// 内部 async disposable 包装, 跟 sync entry 完全独立
+pub(crate) struct AsyncDisposableEntry {
+    inner: Arc<dyn AsyncDisposable>,
+    disposed: AtomicBool,
+}
+
+impl AsyncDisposableEntry {
+    pub(crate) fn new(d: Arc<dyn AsyncDisposable>) -> Self {
+        Self {
+            inner: d,
+            disposed: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) async fn dispose(&self) -> anyhow::Result<()> {
+        if self
+            .disposed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.inner.dispose_async().await
+        } else {
             Ok(())
         }
     }

@@ -33,7 +33,7 @@ use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::disposable::{Disposable, DisposableEntry, Scope};
+use crate::disposable::{AsyncDisposable, AsyncDisposableEntry, Disposable, DisposableEntry, Scope};
 use crate::key::CtxKey;
 use crate::listener::{AsyncListener, AsyncListenerRegistry, Listener, ListenerEvent, ListenerRegistry};
 use crate::plugin::{Plugin, PluginRegistry};
@@ -63,6 +63,8 @@ pub struct Context {
     async_listeners: AsyncListenerRegistry,
     /// disposable list (Week 1 Day 5 加, 跟 scope 共享)
     disposables: Arc<parking_lot::Mutex<Vec<DisposableEntry>>>,
+    /// async disposable list (Phase 2.4 / T2.4 加, 跟 sync 完全独立)
+    async_disposables: Arc<parking_lot::Mutex<Vec<AsyncDisposableEntry>>>,
     /// ctx 是否已 dispose
     disposed: std::sync::atomic::AtomicBool,
 }
@@ -471,6 +473,15 @@ impl Context {
         disposables.push(DisposableEntry::new(d));
     }
 
+    /// **Phase 2.4 (T2.4) 新增**: 注册一个 async disposable
+    ///
+    /// 跟 sync `on_dispose` 完全独立, 互不影响.
+    /// `dispose_all_async` 才走 async_disposables 列表.
+    pub fn on_dispose_async<D: AsyncDisposable>(&self, d: Arc<D>) {
+        let mut disposables = self.async_disposables.lock();
+        disposables.push(AsyncDisposableEntry::new(d));
+    }
+
     /// 主动释放 ctx 所有 disposable
     ///
     /// LIFO 顺序. 失败时收集, 返回第一个错误.
@@ -497,6 +508,43 @@ impl Context {
             }
         } else {
             Ok(())
+        }
+    }
+
+    /// **Phase 2.4 (T2.4) 新增**: 主动释放 ctx 所有 async disposable
+    ///
+    /// 跟 sync `dispose` 完全独立. 内部走 `futures::future::join_all` **并发**释放
+    /// (sync dispose 是 LIFO 顺序, async 是并发 — 业务方按需选).
+    ///
+    /// 多次调用 idempotent (async_disposables 各自 disposed AtomicBool).
+    ///
+    /// # 错误处理
+    ///
+    /// 收集所有 dispose_async 错误, 第一个错误作为 outer Result 返回.
+    /// 其余错误在内部 log (eprintln) 但不中断 (跟 sync dispose 行为一致).
+    pub async fn dispose_all_async(&self) -> anyhow::Result<()> {
+        // 拿出所有 entry (pop 反向, 跟 sync LIFO 对齐 — 但并发跑实际顺序不保证)
+        let entries: Vec<AsyncDisposableEntry> = {
+            let mut disposables = self.async_disposables.lock();
+            let mut taken = Vec::new();
+            while let Some(e) = disposables.pop() {
+                taken.push(e);
+            }
+            taken
+        };
+        // join_all 并发跑, 收集第一个错误
+        let results = futures::future::join_all(entries.iter().map(|e| e.dispose())).await;
+        let mut first_err: Option<anyhow::Error> = None;
+        for r in results {
+            if let Err(err) = r {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 

@@ -22,6 +22,8 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 anyhow = { workspace = true }
+# Phase 2.4 (T2.4): dispose_all_async 走 join_all
+futures = { workspace = true }
 
 [dev-dependencies]
 # 测试用

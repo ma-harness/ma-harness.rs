@@ -1721,6 +1721,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dashmap",
+ "futures",
  "parking_lot",
  "thiserror 1.0.69",
  "tokio",
@@ -1848,6 +1849,7 @@ dependencies = [
  "ma_harness_cordis",
  "ma_harness_plugin_macro",
  "ma_harness_seam",
+ "tokio",
 ]
 
 [[package]]
