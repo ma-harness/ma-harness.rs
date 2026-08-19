@@ -259,3 +259,59 @@ dsh 用 camelCase (例 `agentLoop` / `sessionId`),我们统一改成 snake_case:
 P4 阶段测试: 257 lib tests + 18 trybuild fixtures + 5 README files + 3 binding demo (Python/Node/Go + JS/TS).
 
 workspace lib test 全过, integration test (server http/gRPC) 28/0 全过, plugin_hello 集成测试全过.
+
+
+## 14. pyo3 Native Binding 评估 (2026-08-19 / Day 98 / P5-9)
+
+### 决策
+
+**暂缓 pyo3, 等 gRPC binding 跑 3-6 月看业务反馈** (详见 [pyo3-evaluation.md](./pyo3-evaluation.md))
+
+### 理由
+
+| 维度 | gRPC | pyo3 | 评估 |
+|---|---|---|---|
+| 性能 (高 QPS) | 0.5-2ms/RPC | 0.01-0.05ms/RPC | pyo3 5-10x 优势, 但低 QPS <100 几乎无差 |
+| 业务方上手 | 30 min (装 stub) | 5 min (import) | pyo3 强, 但门槛是 Rust toolchain |
+| Rust toolchain | ❌ 不需要 | ✅ **需要** | 强约束, 业务方不一定能装 |
+| 单测 setup | 启动 server / mock | 直接调, 0 server | pyo3 强 |
+| Wheel 大小 | 5MB (grpcio) | 30MB+ (含 .so) | gRPC 优 |
+| 跨 Python 版本 | 自由 | 锁 cp 3.9-3.12 各自 | gRPC 强 |
+| 维护成本 | 低 | 中 | gRPC 强 |
+
+### 3 走法对比
+
+- **走法 A (full in-process)**: 业务方 import 直调, 不走 gRPC
+- **走法 B (embedded gRPC)**: 进程内 fork tonic server, 走 stub (兼容现有 API)
+- **走法 C (hybrid)**: 默认 in-process, fallback gRPC (兼容性)
+
+### 触发重新评估的条件
+
+1. 业务方反馈 gRPC 性能是瓶颈 (高 QPS 场景)
+2. 业务方反馈单测 setup 复杂 (mock server 难写)
+3. 业务方愿意接受 maturin build pipeline (CI 多 2-5 分钟)
+
+### 如果做 (Phase 7+)
+
+推荐 **走法 C (hybrid)**, 条件:
+- 业务方有 **2 个以上** 真实 Python 项目
+- 业务方有 **专用 Rust 工程师** 维护 native binding
+- 业务方有 **CI 能跑 maturin** (cross-platform wheel build)
+
+实施: 新 crate ma-harness-py (cdylib), PyO3 包装 ma-harness-core, maturin 跨平台 build wheel, PyPI publish.
+
+### 国内参考
+
+- Polars — maturin 跨平台 wheel 范例
+- Pydantic v2 — 完整 Rust core + Python 包装
+- Django 5.0 — ORM 部分用 Rust, 增量迁移
+
+### 给后来人
+
+- **不要急着上 pyo3**: 走 gRPC binding 90% 业务方够用
+- **真要上**: 优先 hybrid (走法 C), 业务方按需选
+- **Rust 工具链**: 公司内是否有 Rust team 决定可行性
+- **wheel build**: maturin 是当前最稳, 比 setuptools-rust 简单
+- **ABI 兼容**: 业务方 Python 版本必须跟 wheel cp 版本匹配
+- **替代方案**: 如果只是想要 no-network, 可以走 embedded gRPC (走法 B) 业务方 0 改动
+

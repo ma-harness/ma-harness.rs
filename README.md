@@ -231,10 +231,13 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 - P5-2: TUI session detail view (j/k/Enter/Esc) ✅
 - P5-3: HTTP /v1/sessions/{id}/events ✅
 - P5-4: README 更新 (本文档) ✅
-- P5-5: RunStream 实现 (TODO, 多日)
-- P5-6: streaming RPC demo (TODO)
-- P5-7: OpenAPI → grpc-web (TODO)
-- P5-8: pyo3 评估 (TODO)
+- P5-5: `mah sessions` CLI (本地 SqliteStore / EventLog) ✅
+- P5-6: RunStream RPC 实现 (gRPC streaming) ✅
+- P5-7: streaming RPC demo 4 语言 (Python/Node/TS/Go) ✅
+- P5-8: HTTP SSE `/v1/runs/stream` (浏览器 EventSource) ✅
+- P5-9: pyo3 评估 ([`docs/pyo3-evaluation.md`](./docs/pyo3-evaluation.md)) ✅
+
+**Phase 5 收官 9/9** (Day 90-98)
 
 ## 网络环境
 
