@@ -43,6 +43,20 @@ static GLOBAL_SESSION_STORE: parking_lot::Mutex<Option<Arc<dyn SessionStore>>> =
 static GLOBAL_EVENT_LOG: parking_lot::Mutex<Option<Arc<EventLog>>> =
     parking_lot::Mutex::new(None);
 
+/// 2026-08-19 (Day 101 / P7-2.5): 全局 approval registry 容器
+///
+/// 跟 GLOBAL_EVENT_LOG 同样模式: Mutex 允许 test 多次覆盖.
+/// 业务方调 set_global_approval() 装 approval service + policy.
+/// HTTP handlers (POST/GET /v1/approvals) 走这个全局.
+static GLOBAL_APPROVAL: parking_lot::Mutex<
+    Option<Arc<ma_harness_cordis::ApprovalRegistry>>,
+> = parking_lot::Mutex::new(None);
+
+/// 初始化全局 approval registry (跟 run_router 配对调用)
+pub fn set_global_approval(registry: Arc<ma_harness_cordis::ApprovalRegistry>) {
+    *GLOBAL_APPROVAL.lock() = Some(registry);
+}
+
 /// 初始化全局 adapter (跟 `run_router` 配对调用)
 pub fn set_global_adapter(adapter: Arc<dyn ModelAdapter>) {
     let _ = GLOBAL_ADAPTER.set(adapter);
@@ -146,7 +160,9 @@ pub fn run_router_with_log_and_store(
                         .post(create_run_handler)
                         .push(Router::with_path("stream").post(create_run_stream_handler)),
                 )
-                .push(sessions_router_with_events()),
+                .push(sessions_router_with_events())
+                // P7-2.5: HTTP approval 端点
+                .push(approvals_router()),
         )
 }
 
@@ -180,6 +196,71 @@ fn sessions_router_with_events() -> Router {
         .push(
             Router::with_path("{id}").push(Router::with_path("events").get(get_session_events_handler)),
         )
+}
+
+/// /v1/approvals 嵌套 router (P7-2.5 / Day 101)
+///
+/// HTTP approval 端点, 业务方用 Web UI / CLI / 其它 client 提交审批决策:
+/// - GET    /v1/approvals          — 列出所有 pending approval
+/// - GET    /v1/approvals/{id}     — 单个 approval detail
+/// - POST   /v1/approvals/{id}     — 提交 decision (Approved / Denied)
+/// - DELETE /v1/approvals/{id}     — 取消 (等 tool 调超时)
+///
+/// v1 简化: 业务方 register approval, 业务方手动 call approval service.
+/// v2 集成: tool 调时 push pending, HTTP POST 决策后 oneshot set.
+fn approvals_router() -> Router {
+    Router::with_path("approvals")
+        .get(list_approvals_handler)
+        .push(
+            Router::with_path("{id}")
+                .get(get_approval_handler)
+                .post(submit_approval_handler)
+                .delete(cancel_approval_handler),
+        )
+}
+
+/// GET /v1/approvals — 列出所有 pending approval
+#[endpoint]
+async fn list_approvals_handler() -> Json<serde_json::Value> {
+    // v1: 返空 list (实际 approval state 走 ctx.approval() registry,
+    // 跨进程跨 ctx 复杂, v2 集成 P7-3 工具管道时再实现)
+    Json(json!({
+        "approvals": [],
+        "count": 0,
+        "_note": "P7-2.5 v1: list 是 stub, 完整版 v2 集成 P7-3 工具管道时实现"
+    }))
+}
+
+/// GET /v1/approvals/{id} — 单个 approval detail
+#[endpoint]
+async fn get_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
+    // v1 stub
+    Json(json!({
+        "id": id.into_inner(),
+        "_note": "P7-2.5 v1: detail 是 stub"
+    }))
+}
+
+/// POST /v1/approvals/{id} — 提交 decision
+#[endpoint]
+async fn submit_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
+    // v1 stub
+    Json(json!({
+        "id": id.into_inner(),
+        "decision": "approved",
+        "_note": "P7-2.5 v1: 业务方自己调 approval service, HTTP 端点是 placeholder"
+    }))
+}
+
+/// DELETE /v1/approvals/{id} — 取消
+#[endpoint]
+async fn cancel_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
+    // v1 stub
+    Json(json!({
+        "id": id.into_inner(),
+        "status": "cancelled",
+        "_note": "P7-2.5 v1: 取消是 stub"
+    }))
 }
 
 /// /health 处理器 (Phase 3.5: 改用 #[endpoint] for OpenAPI export)
