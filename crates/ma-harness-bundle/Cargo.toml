@@ -1,0 +1,29 @@
+[package]
+name = "ma-harness-bundle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness plugin bundle (P11-8, Day 101+1) — 一键装多个 plugin"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-registry = { path = "../ma-harness-registry" }
+
+# 外部
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+semver = { workspace = true }
+toml = { workspace = true }  # P11-8: bundle.toml 解析
+chrono = { workspace = true }  # P11-8 dev: 测试用 PluginManifest.created_at
+
+[dev-dependencies]
+tempfile = { workspace = true }

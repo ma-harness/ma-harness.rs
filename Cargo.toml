@@ -15,6 +15,7 @@ members = [
     "crates/ma-harness-code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
     "crates/ma-harness-tui",  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard (ratatui)
     "crates/ma-harness-registry",  # 2026-08-20 (Day 101+1): P11-6 Plugin Registry
+    "crates/ma-harness-bundle",  # 2026-08-20 (Day 101+1): P11-8 Bundle 概念
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
@@ -128,6 +129,9 @@ base64 = "0.22"
 
 # 版本 (P11-6: Plugin Registry 用 semver)
 semver = { version = "1", features = ["serde"] }
+
+# Bundle (P11-8)
+toml = "0.8"
 
 # proc-macro
 syn = { version = "2", features = ["full", "extra-traits"] }
