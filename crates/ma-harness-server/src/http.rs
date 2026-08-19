@@ -14,6 +14,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::oapi::extract::PathParam;
 use salvo::oapi::{ToResponse, ToSchema};
 use salvo::prelude::*;
+use salvo_extra::sse::{self as sse, SseEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::OnceCell;
@@ -140,7 +141,11 @@ pub fn run_router_with_log_and_store(
         .push(Router::with_path("version").get(version))
         .push(
             Router::with_path("v1")
-                .push(Router::with_path("runs").post(create_run_handler))
+                .push(
+                    Router::with_path("runs")
+                        .post(create_run_handler)
+                        .push(Router::with_path("stream").post(create_run_stream_handler)),
+                )
                 .push(sessions_router_with_events()),
         )
 }
@@ -297,6 +302,65 @@ async fn create_run_handler(
         prompt_tokens: resp.total_prompt_tokens,
         completion_tokens: resp.total_completion_tokens,
     }))
+}
+
+/// POST /v1/runs/stream — P5-8 (Day 97): Server-Sent Events (SSE) 流式响应
+///
+/// 浏览器走 `EventSource("/v1/runs/stream")` 拿 streaming response.
+#[handler]
+async fn create_run_stream_handler(
+    body: JsonBody<CreateRunRequest>,
+    res: &mut Response,
+) -> Result<(), salvo::Error> {
+    use futures::StreamExt;
+    let adapter: Arc<dyn ModelAdapter> = GLOBAL_ADAPTER
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(StubModelAdapter));
+
+    let req = body.0;
+    let session_id = req
+        .session_id
+        .unwrap_or_else(|| format!("http-stream-{}", uuid::Uuid::new_v4()));
+    let run_id = uuid::Uuid::new_v4().to_string();
+
+    // 整个 SSE 逻辑包到 async_stream::stream! 里 (避免 lifetime 撞 stack)
+    // ModelRequest 在 stream 内部构造, outlive 自己
+    let run_id_inner = run_id.clone();
+    let session_id_inner = session_id.clone();
+    let event_stream = async_stream::stream! {
+        let model_req = ma_harness_core::ModelRequest {
+            model: req.model.clone(),
+            messages: vec![ma_harness_core::ModelMessage {
+                role: "user".to_string(),
+                content: req.message.clone(),
+            }],
+            temperature: req.temperature,
+            max_tokens: req.max_tokens,
+            system_prompt: req.system_prompt.clone(),
+        };
+
+        // 调 adapter.complete_stream
+        let token_stream = adapter.complete_stream(&model_req);
+        futures::pin_mut!(token_stream);
+
+        while let Some(token) = token_stream.next().await {
+            let payload = serde_json::json!({
+                "session_id": session_id_inner,
+                "run_id": run_id_inner,
+                "content": token,
+            });
+            yield Ok::<_, std::convert::Infallible>(
+                SseEvent::default()
+                    .name("token")
+                    .id(run_id_inner.clone())
+                    .text(payload.to_string()),
+            );
+        }
+    };
+
+    sse::stream(res, event_stream);
+    Ok(())
 }
 
 // ============================================================================
@@ -807,4 +871,42 @@ mod tests {
         );
     }
 
+    // === P5-8 (Day 97): HTTP /v1/runs/stream SSE endpoint ===
+
+    /// SSE endpoint 走真 StubModelAdapter, 验返回 SSE events
+    #[tokio::test]
+    async fn post_v1_runs_stream_returns_sse_events() {
+        // SSE 走 run_router_with_log_and_store (3-arg 版本)
+        let log = EventLog::open_in_memory().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(crate::session_store::InMemoryStore::new());
+        clear_global_session_store();
+        clear_global_event_log();
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(StubModelAdapter),
+            Arc::new(log),
+            store,
+        ));
+        let body = serde_json::json!({
+            "message": "alpha beta gamma",
+            "model": "stub",
+        });
+        let mut resp = TestClient::post("http://localhost/v1/runs/stream")
+            .json(&body)
+            .send(&service)
+            .await;
+        // SSE 返 200
+        assert_eq!(
+            resp.status_code,
+            Some(salvo::http::StatusCode::OK),
+            "SSE endpoint 应返 200"
+        );
+        // 拿 body 字节
+        let body_bytes = resp.take_bytes(None).await.unwrap();
+        let body_str = String::from_utf8_lossy(&body_bytes);
+        // 应含 3 个 event 字段
+        let event_count = body_str.matches("event:").count();
+        assert!(event_count >= 1, "SSE body 应有 event: 字段, got: {}", body_str);
+        // 也应含 token "alpha"
+        assert!(body_str.contains("alpha"), "SSE 应含 token 'alpha'");
+    }
 }
