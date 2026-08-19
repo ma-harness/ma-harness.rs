@@ -36,6 +36,7 @@
 // 2026-08-18: 删除 #![feature(associated_type_defaults)], stable 不支持
 // Service impl 必须显式 `type Ctx = Context;` (见 decision-log §3 改动原因)
 
+mod approval;
 mod context;
 mod disposable;
 mod error;
@@ -45,6 +46,9 @@ mod listener;
 mod plugin;
 mod service;
 
+pub use approval::{
+    ApprovalDecision, ApprovalPolicy, ApprovalRegistry, ApprovalRequest, ApprovalService, RiskLevel,
+};
 pub use context::Context;
 pub use disposable::{AsyncDisposable, Disposable, Scope};
 pub use error::{BoxedError, CordisError};

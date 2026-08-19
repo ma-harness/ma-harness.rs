@@ -65,6 +65,9 @@ pub struct Context {
     disposables: Arc<parking_lot::Mutex<Vec<DisposableEntry>>>,
     /// async disposable list (Phase 2.4 / T2.4 加, 跟 sync 完全独立)
     async_disposables: Arc<parking_lot::Mutex<Vec<AsyncDisposableEntry>>>,
+    /// 2026-08-19 (Day 101 / P7-2.3): approval registry (P7-2 审批流程)
+    /// 工具执行管道 (P7-3) 走 ctx.approval().check() 调
+    approval: Arc<parking_lot::Mutex<Option<Arc<crate::ApprovalRegistry>>>>,
     /// ctx 是否已 dispose
     disposed: std::sync::atomic::AtomicBool,
 }
@@ -78,6 +81,36 @@ impl Context {
     // ========================================================================
     // Typed key storage
     // ========================================================================
+
+    // ========================================================================
+    // Approval registry (P7-2.3)
+    // ========================================================================
+
+    /// 安装审批服务 (P7-2.3)
+    ///
+    /// 业务方实现 [`crate::ApprovalService`] (CLI / TUI / HTTP / Web UI 任选),
+    /// 然后调 `ctx.install_approval(service, policy)` 安装. 工具执行管道 (P7-3)
+    /// pre-execute hook 自动走 `ctx.approval().check(...)` 调.
+    ///
+    /// 重复安装会**覆盖**之前的服务, 跟 plugin install 一致.
+    pub fn install_approval(
+        &self,
+        service: std::sync::Arc<dyn crate::ApprovalService>,
+        policy: crate::ApprovalPolicy,
+    ) {
+        *self.approval.lock() = Some(std::sync::Arc::new(crate::ApprovalRegistry::new(
+            service, policy,
+        )));
+    }
+
+    /// 拿当前审批 registry 引用 (P7-2.3)
+    ///
+    /// 返 `None` 表示没装 approval, 业务方可以选择:
+    /// - 走 default policy (auto-approve)
+    /// - 直接拒绝所有 tool 调用 (fail-closed)
+    pub fn approval(&self) -> Option<std::sync::Arc<crate::ApprovalRegistry>> {
+        self.approval.lock().clone()
+    }
 
     /// 存一个 typed 值
     pub fn set<T: Send + Sync + 'static>(&self, key: CtxKey<T>, value: T) {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde_json::Value;
 
-use ma_harness_cordis::Context;
+use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, Context, RiskLevel};
 
 /// Tool schema (喂给 LLM 的)
 #[derive(Debug, Clone)]
@@ -54,6 +54,24 @@ impl std::fmt::Debug for ToolRegistry {
     }
 }
 
+/// P7-2.3 启发式: 工具名匹配 risk level
+/// TODO(P7-3): 工具注册时声明 `risk_level`, 走 `ToolEntry.risk_level` 字段
+fn infer_risk_level(tool_name: &str) -> RiskLevel {
+    if tool_name.contains("delete") || tool_name.contains("rm") || tool_name.contains("chmod") {
+        RiskLevel::High
+    } else if tool_name.contains("write")
+        || tool_name.contains("append")
+        || tool_name.contains("edit")
+        || tool_name.contains("create")
+    {
+        RiskLevel::Medium
+    } else if tool_name.contains("plugin") || tool_name.contains("config") {
+        RiskLevel::Critical
+    } else {
+        // read / list / search / log / echo / fetch 等只读
+        RiskLevel::Low
+    }
+}
 impl ToolRegistry {
     /// 新建
     pub fn new() -> Self {
@@ -80,8 +98,38 @@ impl ToolRegistry {
                 .map(|e| e.invoke.clone())
                 .ok_or_else(|| anyhow::anyhow!("tool not found: {}", name))?
         };
+
+        // P7-2.3: pre-execute approval hook (走 ctx.approval().check)
+        // 业务方装了 approval registry 才走审批; 没装 → auto-approve (backward-compat)
+        if let Some(approval) = ctx.approval() {
+            use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, RiskLevel};
+            // 简化: 风险等级跟 tool name 启发式匹配 (P7-3 工具会自带 risk level)
+            // TODO(P7-3): 工具注册时声明 risk_level, 走 ToolEntry.risk_level
+            let risk_level = infer_risk_level(name);
+            let req = ApprovalRequest {
+                tool_name: name.to_string(),
+                arguments: args.clone(),
+                risk_level,
+                context: format!("invoke tool: {name}"),
+                tool_call_id: uuid::Uuid::new_v4().to_string(),
+            };
+            match approval.check(&ctx, &req).await {
+                Ok(ApprovalDecision::Approved | ApprovalDecision::AutoApprove) => {
+                    // 继续 invoke
+                }
+                Ok(ApprovalDecision::Denied { reason }) => {
+                    return Err(anyhow::anyhow!("approval denied: {reason}"));
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("approval service error: {e}"));
+                }
+            }
+        }
+
         invoke(args, ctx).await
     }
+
+
 
     /// 列出所有 tool 的 schema
     pub fn list_schemas(&self) -> Vec<ToolSchema> {

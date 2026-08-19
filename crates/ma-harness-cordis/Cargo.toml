@@ -27,6 +27,10 @@ tokio-util = { workspace = true }
 anyhow = { workspace = true }
 # Phase 2.4 (T2.4): dispose_all_async 走 join_all
 futures = { workspace = true }
+# 2026-08-19 (Day 101 / P7-2.1): ApprovalService trait 用 serde + serde_json 序列化
+# ApprovalRequest (JSON args + risk level), ApprovalPolicy (whitelist)
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # 测试用
