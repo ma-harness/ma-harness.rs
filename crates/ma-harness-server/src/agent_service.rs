@@ -121,9 +121,85 @@ impl AgentService for AgentServiceImpl {
 
     async fn run_stream(
         &self,
-        _request: Request<ma_harness_proto::ma_harness::v1::AgentRunRequest>,
+        request: Request<ma_harness_proto::ma_harness::v1::AgentRunRequest>,
     ) -> Result<Response<Self::RunStreamStream>, Status> {
-        Err(Status::unimplemented("RunStream 留 Phase 2"))
+        use futures::StreamExt;
+        use ma_harness_core::ModelRequest;
+        use ma_harness_proto::ma_harness::v1::{
+            agent_stream_event::Event as StreamEvent, content_block::Content, AgentStreamEvent,
+            ContentBlock, Message, TextBlock, ToolRole,
+        };
+
+        let proto_req = request.into_inner();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let session_id = proto_req.session_id.clone();
+
+        // 1. 构造 ModelRequest (跟 run() 同样的逻辑简化版)
+        let user_message = proto_req
+            .input
+            .as_ref()
+            .and_then(|m| {
+                m.content.first().and_then(|cb| cb.content.as_ref()).and_then(|c| {
+                    match c {
+                        Content::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    }
+                })
+            })
+            .unwrap_or_default();
+        let model_config = proto_req.model_config.as_ref();
+        let model = model_config
+            .map(|c| c.model.clone())
+            .unwrap_or_else(|| "stub".to_string());
+        let temperature = model_config.map(|c| c.temperature).unwrap_or(0.7);
+        let max_tokens = model_config.map(|c| c.max_tokens).unwrap_or(1024);
+        let system_prompt = model_config
+            .map(|c| c.system_prompt.clone())
+            .filter(|s| !s.is_empty());
+
+        // 2. 调 adapter.complete_stream (走 default impl = complete 单 chunk yield)
+        //    用 tokio::task::spawn_blocking 把同步 stream 移到 blocking thread pool
+        //    因为 complete_stream 内部是 sync stream (不是 async, 来自 async_stream::stream!)
+        let adapter = self.adapter.clone();
+        let run_id_for_stream = run_id.clone();
+        let event_stream = async_stream::try_stream! {
+            // 把 ModelRequest 构造到 stream 里 (不超出 stack)
+            let model_req = ModelRequest {
+                model,
+                messages: vec![ma_harness_core::ModelMessage {
+                    role: "user".to_string(),
+                    content: user_message,
+                }],
+                temperature,
+                max_tokens,
+                system_prompt,
+            };
+
+            // 调 complete_stream (返回 `Pin<Box<dyn Stream + Send + 'a>>`, 'a 绑 req/self 生命周期)
+            // 我们手动 pin_mut 拿完整生命周期
+            let token_stream = adapter.complete_stream(&model_req);
+            futures::pin_mut!(token_stream);
+
+            while let Some(token) = token_stream.next().await {
+                let now = prost_types::Timestamp::from(std::time::SystemTime::now());
+                let msg = Message {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: ToolRole::Assistant as i32,
+                    content: vec![ContentBlock {
+                        content: Some(Content::Text(TextBlock { text: token })),
+                    }],
+                    created_at: Some(now),
+                    session_id: session_id.clone(),
+                };
+                yield AgentStreamEvent {
+                    run_id: run_id_for_stream.clone(),
+                    event: Some(StreamEvent::Message(msg)),
+                };
+            }
+        };
+
+        let pinned: Self::RunStreamStream = Box::pin(event_stream);
+        Ok(Response::new(pinned))
     }
 
     async fn cancel(&self, _request: Request<CancelRequest>) -> Result<Response<CancelResponse>, Status> {
@@ -244,5 +320,72 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    // === P5-6 (Day 95): RunStream RPC ===
+
+    /// RunStream RPC 走 StubModelAdapter, 验证 word-by-word streaming
+    /// (StubModelAdapter::complete_stream 把 user message 拆成 word 依次 yield)
+    #[tokio::test]
+    async fn run_stream_yields_words_via_stub() {
+        use futures::StreamExt;
+        use ma_harness_core::StubModelAdapter;
+        use ma_harness_proto::ma_harness::v1::{
+            agent_stream_event::Event, AgentRunRequest, ModelConfig, ContentBlock,
+            content_block::Content, Message, TextBlock, ToolRole,
+        };
+
+        let log = EventLog::open_in_memory().unwrap();
+        let svc = AgentServiceImpl::new(log, Arc::new(StubModelAdapter));
+
+        // 构造 AgentRunRequest, user message 是 3 个 word
+        let req = AgentRunRequest {
+            session_id: "stream-test".to_string(),
+            input: Some(Message {
+                id: "m1".to_string(),
+                role: ToolRole::User as i32,
+                content: vec![ContentBlock {
+                    content: Some(Content::Text(TextBlock {
+                        text: "alpha beta gamma".to_string(),
+                    })),
+                }],
+                created_at: None,
+                session_id: "stream-test".to_string(),
+            }),
+            model_config: Some(ModelConfig {
+                adapter: 0,  // ModelAdapter::Unspecified, 不影响
+                model: "stub".to_string(),
+                temperature: 0.0,
+                max_tokens: 100,
+                system_prompt: "".to_string(),
+            }),
+            options: None,
+        };
+
+        let mut stream = svc
+            .run_stream(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut collected = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            match event.event {
+                Some(Event::Message(msg)) => {
+                    if let Some(ContentBlock {
+                        content: Some(Content::Text(t)),
+                    }) = msg.content.first()
+                    {
+                        collected.push(t.text.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        // 3 个 word: "alpha ", "beta ", "gamma "
+        assert_eq!(collected.len(), 3, "3 words expected, got {:?}", collected);
+        assert_eq!(collected[0], "alpha ");
+        assert_eq!(collected[1], "beta ");
+        assert_eq!(collected[2], "gamma ");
     }
 }

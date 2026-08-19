@@ -7,17 +7,19 @@
 //! 1. 接收 AgentRunRequest
 //! 2. emit RunStart
 //! 3. 构造 ModelRequest, emit ModelRequest
-//! 4. 调 ModelAdapter::complete()
-//! 5. emit ModelResponse
+//! 4. 调 ModelAdapter::complete() 或 complete_stream() (P5-6)
+//! 5. emit ModelResponse (含 streaming token emit)
 //! 6. 终止 (finish_reason=stop)
 //! 7. emit RunEnd
 //!
 //! Phase 1 不支持 tool_call 循环 (no tools), finish_reason 总是 stop.
 //! Phase 2 加: tool_call 循环 + multi-iteration.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::Stream;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +85,7 @@ pub enum FinishReason {
 /// ModelAdapter trait — 抽象 LLM API
 ///
 /// Phase 1 stub: 返回 zero response. Phase 2 加 OpenAI / Anthropic 实现.
+/// **P5-6 (Day 95)**: 加 complete_stream (default impl = complete 单 chunk yield)
 #[async_trait]
 pub trait ModelAdapter: Send + Sync + 'static {
     /// 唯一标识 (例 "openai" / "anthropic" / "stub")
@@ -90,6 +93,24 @@ pub trait ModelAdapter: Send + Sync + 'static {
 
     /// 同步调用 (Phase 1), 返回响应或错误
     async fn complete(&self, req: &ModelRequest) -> anyhow::Result<ModelResponse>;
+
+    /// **P5-6 (Day 95)**: 流式调用, 返 token stream (String = 增量 token)
+    ///
+    /// Default 实现: 走 complete, 把整个 content 当单 chunk yield.
+    /// StubModelAdapter 覆盖: word-by-word 模拟流式 (验证 streaming 基础设施)
+    /// OpenaiAdapter / AnthropicAdapter 暂用 default (SSE 解析 Phase 6 实现)
+    fn complete_stream<'a>(
+        &'a self,
+        req: &'a ModelRequest,
+    ) -> Pin<Box<dyn Stream<Item = String> + Send + 'a>> {
+        let adapter = self.name().to_string();
+        Box::pin(async_stream::stream! {
+            match self.complete(req).await {
+                Ok(resp) => yield resp.content,
+                Err(e) => eprintln!("[{}] complete_stream err: {e}", adapter),
+            }
+        })
+    }
 }
 
 /// StubModelAdapter — Phase 1 默认, 返回零响应
@@ -117,6 +138,30 @@ impl ModelAdapter for StubModelAdapter {
             finish_reason: FinishReason::Stop,
             prompt_tokens: req.messages.len() as u32 * 10,
             completion_tokens: 20,
+        })
+    }
+
+    /// P5-6 覆盖: word-by-word 模拟流式 (用 `last_user` 拆词)
+    fn complete_stream<'a>(
+        &'a self,
+        req: &'a ModelRequest,
+    ) -> Pin<Box<dyn Stream<Item = String> + Send + 'a>> {
+        let last_user = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .unwrap_or_else(|| "(no user message)".to_string());
+        // 拆成 word, 间隔 1 个空格
+        let words: Vec<String> = last_user
+            .split_whitespace()
+            .map(|w| format!("{} ", w))
+            .collect();
+        Box::pin(async_stream::stream! {
+            for w in words {
+                yield w;
+            }
         })
     }
 }
@@ -383,5 +428,66 @@ mod tests {
         for i in 1..all.events.len() {
             assert!(all.events[i].seq > all.events[i - 1].seq);
         }
+    }
+
+    // === P5-6 (Day 95): ModelAdapter::complete_stream ===
+
+    use futures::StreamExt;
+
+    /// StubModelAdapter::complete_stream word-by-word 模拟流式
+    #[tokio::test]
+    async fn stub_complete_stream_yields_words() {
+        use futures::pin_mut;
+        let adapter = StubModelAdapter;
+        let req = ModelRequest {
+            model: "stub".to_string(),
+            messages: vec![ModelMessage {
+                role: "user".to_string(),
+                content: "hello world from stub".to_string(),
+            }],
+            temperature: 0.0,
+            max_tokens: 100,
+            system_prompt: None,
+        };
+        let stream = adapter.complete_stream(&req);
+        pin_mut!(stream);
+        let mut collected = Vec::new();
+        while let Some(token) = stream.next().await {
+            collected.push(token);
+        }
+        // 4 个 word (hello / world / from / stub)
+        assert_eq!(collected.len(), 4, "4 words expected, got {:?}", collected);
+        assert_eq!(collected[0], "hello ");
+        assert_eq!(collected[1], "world ");
+        assert_eq!(collected[2], "from ");
+        assert_eq!(collected[3], "stub ");
+        // 拼回去应是 "hello world from stub "
+        let full: String = collected.iter().map(|s| s.as_str()).collect();
+        assert_eq!(full, "hello world from stub ");
+    }
+
+    /// StubModelAdapter::complete_stream 没 user message 时 yield "(no user message) "
+    #[tokio::test]
+    async fn stub_complete_stream_no_user_yields_placeholder() {
+        use futures::pin_mut;
+        let adapter = StubModelAdapter;
+        let req = ModelRequest {
+            model: "stub".to_string(),
+            messages: vec![],
+            temperature: 0.0,
+            max_tokens: 100,
+            system_prompt: None,
+        };
+        let stream = adapter.complete_stream(&req);
+        pin_mut!(stream);
+        let mut collected = Vec::new();
+        while let Some(token) = stream.next().await {
+            collected.push(token);
+        }
+        // 3 个 word: "(no", "user", "message)"
+        assert_eq!(collected.len(), 3, "3 placeholder words, got {:?}", collected);
+        assert_eq!(collected[0], "(no ");
+        assert_eq!(collected[1], "user ");
+        assert_eq!(collected[2], "message) ");
     }
 }
