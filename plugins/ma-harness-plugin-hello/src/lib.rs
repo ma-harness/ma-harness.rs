@@ -18,6 +18,7 @@
 use ma_harness_cordis::{Context, Listener, ListenerEvent};
 use ma_harness_seam::{
     ctx_key, dsh_listener_priority, dsh_plugin_dual, dsh_service_dual, Plugin, PluginEntry,
+    PluginManifest,
 };
 
 // ============================================================================
@@ -93,6 +94,11 @@ fn _hello_plugin_factory() -> Box<dyn Plugin> {
 
 inventory::submit! {
     PluginEntry::new("hello", _hello_plugin_factory)
+}
+
+// Phase 3.6 (T3.6): hello 不依赖其它 plugin (基础 service)
+inventory::submit! {
+    PluginManifest::new("hello", &[])
 }
 
 // ============================================================================
@@ -424,5 +430,59 @@ mod tests {
         // 调 async dispose, flag 触发
         ctx.dispose_all_async().await.unwrap();
         assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    // === Phase 3.6 (T3.6): plugin manifest / topological sort ===
+
+    /// 验证 hello 提交了 manifest 且 depends = []
+    #[test]
+    fn hello_plugin_manifest_no_depends() {
+        use ma_harness_seam::PluginLoader;
+        let manifests = PluginLoader::manifests();
+        let hello = manifests.iter().find(|m| m.name == "hello");
+        assert!(hello.is_some(), "hello manifest 应被 inventory submit");
+        assert_eq!(hello.unwrap().depends.len(), 0, "hello 不依赖其它 plugin");
+    }
+
+    /// load_all(ctx) 跑拓扑序:hello 是 in_degree=0 起步,
+    /// install 完后 ctx 应有 hello + HelloService
+    #[test]
+    fn load_all_installs_hello_via_topological_order() {
+        use ma_harness_seam::PluginLoader;
+        let ctx = Context::new();
+        let installed = PluginLoader::load_all(&ctx).unwrap();
+        // 至少 hello 在
+        assert!(installed.contains(&"hello".to_string()),
+            "hello 应该在 installed list: {:?}", installed);
+    }
+
+    /// 测试用本地 inventory submit 一个依赖 hello 的 plugin
+    /// 验证拓扑序:hello 先装
+    #[test]
+    fn load_all_topological_order_with_dep() {
+        use ma_harness_seam::{Plugin, PluginEntry, PluginManifest, PluginLoader};
+        use ma_harness_cordis::Context;
+
+        // 定义一个 dummy plugin 依赖 hello
+        struct DepPlugin;
+        impl Plugin for DepPlugin {
+            fn install(&self, _ctx: &Context) -> anyhow::Result<()> { Ok(()) }
+            fn name(&self) -> &str { "dep_plugin" }
+        }
+        fn _dep_factory() -> Box<dyn Plugin> { Box::new(DepPlugin) }
+
+        // 提交到本地 inventory (test scope)
+        inventory::submit! {
+            PluginEntry::new("dep_plugin", _dep_factory)
+        }
+        inventory::submit! {
+            PluginManifest::new("dep_plugin", &["hello"])
+        }
+
+        let ctx = Context::new();
+        let installed = PluginLoader::load_all(&ctx).unwrap();
+        // hello 应在 dep_plugin 之前
+        let hello_idx = installed.iter().position(|n| n == "hello").unwrap();
+        let dep_idx = installed.iter().position(|n| n == "dep_plugin").unwrap();
+        assert!(hello_idx < dep_idx, "hello 应在 dep_plugin 之前 install");
     }
 }

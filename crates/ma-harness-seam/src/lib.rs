@@ -321,11 +321,46 @@ impl PluginEntry {
 // 在 host crate (seam) 注册 PluginEntry 类型, plugin crate 用 inventory::submit! 提交
 inventory::collect!(PluginEntry);
 
+/// **Phase 3.6 (T3.6) 新增**: Plugin 依赖清单
+///
+/// plugin 在 submit 时同时声明依赖其它 plugin (按 name).
+/// PluginLoader::load_all 走拓扑序 install (Kahn 算法).
+///
+/// 用法:
+/// ```ignore
+/// // plugin A 依赖 B
+/// inventory::submit! {
+///     PluginEntry::new("a", || Box::new(APlugin))
+/// }
+/// inventory::submit! {
+///     PluginManifest::new("a", &["b"])
+/// }
+/// ```
+pub struct PluginManifest {
+    /// plugin 名 (跟 PluginEntry.name 一致)
+    pub name: &'static str,
+    /// 依赖的 plugin 名列表 (按 install 顺序)
+    pub depends: &'static [&'static str],
+}
+
+impl PluginManifest {
+    /// 构造一个 manifest
+    pub const fn new(name: &'static str, depends: &'static [&'static str]) -> Self {
+        Self { name, depends }
+    }
+}
+
+// host crate 收集 PluginManifest, plugin crate 用 inventory::submit! 提交
+inventory::collect!(PluginManifest);
+
 /// PluginLoader — 按 plugin name 装载到 ctx
 ///
 /// **Phase 2.2 (T2.2)**: 走 `inventory::iter::<PluginEntry>()` 查 factory, 构造
 /// `Box<dyn Plugin>`, install 到 ctx. 编译时 link 的所有 plugin (workspace member)
 /// 都会自动出现在 inventory 全局表里.
+///
+/// **Phase 3.6 (T3.6)**: `load_all(ctx)` 走拓扑序 (Kahn 算法) install 所有 plugin
+/// (按 PluginManifest depends 字段), 缺依赖返 Err, 循环依赖返 Err.
 pub struct PluginLoader;
 
 impl PluginLoader {
@@ -362,6 +397,93 @@ impl PluginLoader {
     /// 按 name 查 entry 是否存在
     pub fn contains(name: &str) -> bool {
         inventory::iter::<PluginEntry>.into_iter().any(|e| e.name == name)
+    }
+
+    /// **Phase 3.6 (T3.6) 新增**: 列出所有已注册 plugin manifest (name + 依赖)
+    pub fn manifests() -> Vec<&'static PluginManifest> {
+        inventory::iter::<PluginManifest>.into_iter().collect()
+    }
+
+    /// **Phase 3.6 (T3.6) 新增**: 按拓扑序 install 所有 plugin (Kahn 算法)
+    ///
+    /// 流程:
+    /// 1. 收集所有 manifest (name -> [depends])
+    /// 2. 检查所有依赖都注册 (否则 bail "missing dependency")
+    /// 3. Kahn 拓扑排序 (in_degree 起点 = 没依赖的 plugin)
+    /// 4. 按拓扑序 install 每个 plugin
+    ///
+    /// 错误:
+    /// - "plugin 'X' depends on 'Y' which is not registered" — 缺依赖
+    /// - "circular dependency detected: [..]" — 循环依赖
+    /// - 单个 plugin install 失败 (跟 load_by_name 一样)
+    pub fn load_all(ctx: &ma_harness_cordis::Context) -> anyhow::Result<Vec<String>> {
+        use std::collections::{HashMap, VecDeque};
+
+        let manifests: HashMap<&str, &PluginManifest> = inventory::iter::<PluginManifest>
+            .into_iter()
+            .map(|m| (m.name, m))
+            .collect();
+
+        // 检查所有依赖都注册
+        for m in manifests.values() {
+            for dep in m.depends {
+                if !Self::contains(dep) {
+                    anyhow::bail!(
+                        "plugin '{}' depends on '{}' which is not registered",
+                        m.name,
+                        dep
+                    );
+                }
+            }
+        }
+
+        // Kahn 拓扑排序
+        // in_degree[name] = 多少个 plugin 还没装
+        // graph[dep] = 依赖 dep 的 plugin 列表
+        let mut in_degree: HashMap<&str, usize> =
+            manifests.keys().map(|n| (*n, 0)).collect();
+        let mut graph: HashMap<&str, Vec<&str>> =
+            manifests.keys().map(|n| (*n, Vec::new())).collect();
+        for m in manifests.values() {
+            for dep in m.depends {
+                graph.get_mut(dep).unwrap().push(m.name);
+                *in_degree.get_mut(m.name).unwrap() += 1;
+            }
+        }
+
+        let mut queue: VecDeque<&str> = in_degree
+            .iter()
+            .filter(|(_, d)| **d == 0)
+            .map(|(n, _)| *n)
+            .collect();
+        let mut order = Vec::new();
+        while let Some(name) = queue.pop_front() {
+            order.push(name);
+            for next in &graph[name] {
+                let d = in_degree.get_mut(next).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        if order.len() != manifests.len() {
+            let leftover: Vec<&str> = in_degree
+                .iter()
+                .filter(|(_, d)| **d > 0)
+                .map(|(n, _)| *n)
+                .collect();
+            anyhow::bail!("circular dependency detected: {:?}", leftover);
+        }
+
+        // 按拓扑序 install
+        let mut installed = Vec::new();
+        for name in &order {
+            Self::load_by_name(ctx, name)?;
+            installed.push(name.to_string());
+        }
+        Ok(installed)
     }
 }
 
