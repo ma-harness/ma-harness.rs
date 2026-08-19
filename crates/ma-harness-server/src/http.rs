@@ -131,7 +131,11 @@ pub struct CreateRunResponse {
 ///
 /// 从 `GLOBAL_ADAPTER` 拿 model adapter (跟 `run_router(adapter)` 配对).
 /// 拿不到时降级到 `StubModelAdapter` (开发期不 panic).
-#[handler]
+///
+/// **P4-4 (Phase 4)**: 改用 `#[endpoint]` 而非 `#[handler]`,
+/// 让 salvo-oapi 0.79 `merge_router` 能识别 + 提取 OpenAPI 注解.
+/// 业务方 `mah openapi export` 拿到的 spec 包含 /v1/runs.
+#[endpoint]
 async fn create_run_handler(
     body: JsonBody<CreateRunRequest>,
 ) -> Result<Json<CreateRunResponse>, salvo::Error> {
