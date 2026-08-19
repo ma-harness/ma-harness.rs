@@ -816,6 +816,67 @@ impl AdapterRegistry {
         )
     }
 
+    /// 注册 AWS Bedrock adapter (P10-6 / Day 101)
+    ///
+    /// 简化: Bedrock 当前支持 OpenAI-compatible 模式 (从 2024-Q4 起部分模型).
+    /// 业务方传 region + access_key + secret_key + model (e.g. "anthropic.claude-3-5-sonnet-20241022-v2:0").
+    /// 走 OpenaiAdapter 协议, endpoint: `https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions`
+    ///
+    /// 注册 prefix: `"bedrock:"` (e.g. `bedrock:anthropic.claude-3-5-sonnet-20241022-v2:0`)
+    ///
+    /// **v1 简化**: 业务方把 AWS 签名 (SigV4) 头手工加 (走 reqwest::RequestBuilder).
+    /// **v2**: 集成 aws-sdk-bedrockruntime 走真 SigV4.
+    /// 当前: 拿 access_key/secret_key 当 bearer token 传 (AWS 实际拒绝, v2 改)
+    pub fn with_bedrock(
+        self,
+        region: impl AsRef<str>,
+        access_key: impl Into<String>,
+        secret_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let endpoint = format!(
+            "https://bedrock-runtime.{}.amazonaws.com/openai/v1/chat/completions",
+            region.as_ref()
+        );
+        let adapter = OpenaiAdapter::new(format!(
+            "{}:{}",
+            access_key.into(),
+            secret_key.into()
+        ))
+        .with_endpoint(endpoint)
+        .with_model(model);
+        self.register("bedrock:", adapter)
+    }
+
+    /// 注册 GCP Vertex AI adapter (P10-6)
+    ///
+    /// 简化: Vertex AI 走 OpenAI-compatible endpoint.
+    /// 业务方传 project + region + access_token (GCP service account token).
+    /// endpoint: `https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi/chat/completions`
+    ///
+    /// 注册 prefix: `"vertex:"` (e.g. `vertex:gemini-1.5-pro`)
+    ///
+    /// **v1 简化**: 拿 access_token 当 bearer token. 业务方要拿到 token 才能用.
+    /// **v2**: 集成 google-cloud-auth 走 service account 自动 refresh.
+    pub fn with_vertex(
+        self,
+        project: impl AsRef<str>,
+        region: impl AsRef<str>,
+        access_token: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let endpoint = format!(
+            "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/endpoints/openapi/chat/completions",
+            region.as_ref(),
+            project.as_ref(),
+            region.as_ref()
+        );
+        let adapter = OpenaiAdapter::new(access_token)
+            .with_endpoint(endpoint)
+            .with_model(model);
+        self.register("vertex:", adapter)
+    }
+
     /// 自动从 env 变量加载 (P8-3)
     ///
     /// 检查 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `AZURE_OPENAI_*` 等环境变量,
@@ -1138,6 +1199,56 @@ mod tests {
         let reg = AdapterRegistry::new()
             .with_azure_openai("res", "mydeployment", "2024-02-01", "sk");
         let adapter = reg.find("azure:mydeployment");
+        assert!(adapter.is_some());
+    }
+
+    // ---- P10-6 Bedrock / Vertex ----
+
+    #[test]
+    fn registry_with_bedrock_registers() {
+        let reg = AdapterRegistry::new().with_bedrock(
+            "us-east-1",
+            "AKIA-TEST",
+            "secret-test",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        );
+        let adapter = reg.find("bedrock:").expect("bedrock registered");
+        assert_eq!(adapter.name(), "openai");
+        let prefixes = reg.prefixes();
+        assert!(prefixes.contains(&"bedrock:".to_string()));
+    }
+
+    #[test]
+    fn registry_with_vertex_registers() {
+        let reg = AdapterRegistry::new().with_vertex(
+            "my-gcp-project",
+            "us-central1",
+            "ya29.test-token",
+            "gemini-1.5-pro",
+        );
+        let adapter = reg.find("vertex:").expect("vertex registered");
+        assert_eq!(adapter.name(), "openai");
+        let prefixes = reg.prefixes();
+        assert!(prefixes.contains(&"vertex:".to_string()));
+    }
+
+    #[test]
+    fn registry_finds_bedrock_model() {
+        let reg = AdapterRegistry::new().with_bedrock(
+            "us-west-2",
+            "AKIA",
+            "secret",
+            "anthropic.claude-3-5-sonnet",
+        );
+        let adapter = reg.find("bedrock:anthropic.claude-3-5-sonnet");
+        assert!(adapter.is_some());
+    }
+
+    #[test]
+    fn registry_finds_vertex_model() {
+        let reg =
+            AdapterRegistry::new().with_vertex("p", "us-central1", "tok", "gemini-1.5-pro");
+        let adapter = reg.find("vertex:gemini-1.5-pro");
         assert!(adapter.is_some());
     }
 
