@@ -442,6 +442,1668 @@
         }
       }
     },
+    "/v1/sessions": {
+      "get": {
+        "summary": "GET /v1/sessions — 列出所有 session",
+        "operationId": "ma_harness_server.http.list_sessions_handler",
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ma_harness_server.http.ListSessionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request could not be understood by the server due to malformed syntax.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request requires user authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The request could not be processed due to lack of payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server refused to authorize the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested resource could not be found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The request method is not supported for the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "The requested resource is capable of generating only content not acceptable according to the Accept headers sent in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "407": {
+            "description": "Authentication with the proxy is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The server timed out waiting for the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request could not be processed because of a conflict in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource requested is no longer available and will not be available again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "The request did not specify the length of its content, which is required by the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The server does not meet one of the preconditions specified in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request is larger than the server is willing or able to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "414": {
+            "description": "The URI provided was too long for the server to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request entity has a media type which the server or resource does not support.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The portion of the requested file cannot be supplied by the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "417": {
+            "description": "The server cannot meet the requirements of the expect request-header field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "418": {
+            "description": "I was requested to brew coffee, and I am a teapot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The server cannot produce a response for this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request was well-formed but was unable to be followed due to semantic errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "The source or destination resource of a method is locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "424": {
+            "description": "The method could not be performed on the resource because the requested action depended on another action and that action failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Switching to the protocol in the Upgrade header field is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "The server requires the request to be conditional.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests have been received recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "431": {
+            "description": "The server is unwilling to process the request because either  an individual header field, or all the header fields collectively, are too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "451": {
+            "description": "The requested resource is unavailable due to a legal demand to deny access to this resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server encountered an internal error while processing this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The server either does not recognize the request method, or it lacks the ability to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Received an invalid response from an inbound server it accessed while attempting to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is currently unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The server did not receive a timely response from an upstream server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "505": {
+            "description": "The server does not support, or refuses to support, the major version of HTTP that was used in the request message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "506": {
+            "description": "The server has an internal configuration error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The method could not be performed on the resource because the server is unable to store the representation needed to successfully complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "508": {
+            "description": "the server terminated an operation because it encountered an infinite loop while processing a request with \"Depth: infinity\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "510": {
+            "description": "Further extensions to the request are required for the server to fulfill it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "511": {
+            "description": "the client needs to authenticate to gain network access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "POST /v1/sessions — 创建新 session",
+        "operationId": "ma_harness_server.http.create_session_handler",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ma_harness_server.http.CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ma_harness_server.http.ProtoSessionJson"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request could not be understood by the server due to malformed syntax.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request requires user authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The request could not be processed due to lack of payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server refused to authorize the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested resource could not be found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The request method is not supported for the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "The requested resource is capable of generating only content not acceptable according to the Accept headers sent in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "407": {
+            "description": "Authentication with the proxy is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The server timed out waiting for the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request could not be processed because of a conflict in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource requested is no longer available and will not be available again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "The request did not specify the length of its content, which is required by the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The server does not meet one of the preconditions specified in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request is larger than the server is willing or able to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "414": {
+            "description": "The URI provided was too long for the server to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request entity has a media type which the server or resource does not support.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The portion of the requested file cannot be supplied by the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "417": {
+            "description": "The server cannot meet the requirements of the expect request-header field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "418": {
+            "description": "I was requested to brew coffee, and I am a teapot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The server cannot produce a response for this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request was well-formed but was unable to be followed due to semantic errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "The source or destination resource of a method is locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "424": {
+            "description": "The method could not be performed on the resource because the requested action depended on another action and that action failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Switching to the protocol in the Upgrade header field is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "The server requires the request to be conditional.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests have been received recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "431": {
+            "description": "The server is unwilling to process the request because either  an individual header field, or all the header fields collectively, are too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "451": {
+            "description": "The requested resource is unavailable due to a legal demand to deny access to this resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server encountered an internal error while processing this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The server either does not recognize the request method, or it lacks the ability to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Received an invalid response from an inbound server it accessed while attempting to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is currently unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The server did not receive a timely response from an upstream server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "505": {
+            "description": "The server does not support, or refuses to support, the major version of HTTP that was used in the request message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "506": {
+            "description": "The server has an internal configuration error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The method could not be performed on the resource because the server is unable to store the representation needed to successfully complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "508": {
+            "description": "the server terminated an operation because it encountered an infinite loop while processing a request with \"Depth: infinity\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "510": {
+            "description": "Further extensions to the request are required for the server to fulfill it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "511": {
+            "description": "the client needs to authenticate to gain network access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}": {
+      "get": {
+        "summary": "GET /v1/sessions/{id} — 拿单个 session",
+        "operationId": "ma_harness_server.http.get_session_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ma_harness_server.http.ProtoSessionJson"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request could not be understood by the server due to malformed syntax.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request requires user authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The request could not be processed due to lack of payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server refused to authorize the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested resource could not be found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The request method is not supported for the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "The requested resource is capable of generating only content not acceptable according to the Accept headers sent in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "407": {
+            "description": "Authentication with the proxy is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The server timed out waiting for the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request could not be processed because of a conflict in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource requested is no longer available and will not be available again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "The request did not specify the length of its content, which is required by the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The server does not meet one of the preconditions specified in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request is larger than the server is willing or able to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "414": {
+            "description": "The URI provided was too long for the server to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request entity has a media type which the server or resource does not support.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The portion of the requested file cannot be supplied by the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "417": {
+            "description": "The server cannot meet the requirements of the expect request-header field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "418": {
+            "description": "I was requested to brew coffee, and I am a teapot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The server cannot produce a response for this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request was well-formed but was unable to be followed due to semantic errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "The source or destination resource of a method is locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "424": {
+            "description": "The method could not be performed on the resource because the requested action depended on another action and that action failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Switching to the protocol in the Upgrade header field is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "The server requires the request to be conditional.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests have been received recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "431": {
+            "description": "The server is unwilling to process the request because either  an individual header field, or all the header fields collectively, are too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "451": {
+            "description": "The requested resource is unavailable due to a legal demand to deny access to this resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server encountered an internal error while processing this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The server either does not recognize the request method, or it lacks the ability to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Received an invalid response from an inbound server it accessed while attempting to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is currently unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The server did not receive a timely response from an upstream server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "505": {
+            "description": "The server does not support, or refuses to support, the major version of HTTP that was used in the request message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "506": {
+            "description": "The server has an internal configuration error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The method could not be performed on the resource because the server is unable to store the representation needed to successfully complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "508": {
+            "description": "the server terminated an operation because it encountered an infinite loop while processing a request with \"Depth: infinity\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "510": {
+            "description": "Further extensions to the request are required for the server to fulfill it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "511": {
+            "description": "the client needs to authenticate to gain network access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/close": {
+      "post": {
+        "summary": "POST /v1/sessions/{id}/close — 关闭 session",
+        "operationId": "ma_harness_server.http.close_session_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ma_harness_server.http.ProtoSessionJson"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request could not be understood by the server due to malformed syntax.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request requires user authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The request could not be processed due to lack of payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server refused to authorize the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested resource could not be found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The request method is not supported for the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "The requested resource is capable of generating only content not acceptable according to the Accept headers sent in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "407": {
+            "description": "Authentication with the proxy is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The server timed out waiting for the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request could not be processed because of a conflict in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource requested is no longer available and will not be available again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "The request did not specify the length of its content, which is required by the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The server does not meet one of the preconditions specified in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request is larger than the server is willing or able to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "414": {
+            "description": "The URI provided was too long for the server to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request entity has a media type which the server or resource does not support.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The portion of the requested file cannot be supplied by the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "417": {
+            "description": "The server cannot meet the requirements of the expect request-header field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "418": {
+            "description": "I was requested to brew coffee, and I am a teapot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The server cannot produce a response for this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request was well-formed but was unable to be followed due to semantic errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "The source or destination resource of a method is locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "424": {
+            "description": "The method could not be performed on the resource because the requested action depended on another action and that action failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Switching to the protocol in the Upgrade header field is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "The server requires the request to be conditional.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests have been received recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "431": {
+            "description": "The server is unwilling to process the request because either  an individual header field, or all the header fields collectively, are too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "451": {
+            "description": "The requested resource is unavailable due to a legal demand to deny access to this resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server encountered an internal error while processing this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The server either does not recognize the request method, or it lacks the ability to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Received an invalid response from an inbound server it accessed while attempting to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is currently unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The server did not receive a timely response from an upstream server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "505": {
+            "description": "The server does not support, or refuses to support, the major version of HTTP that was used in the request message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "506": {
+            "description": "The server has an internal configuration error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The method could not be performed on the resource because the server is unable to store the representation needed to successfully complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "508": {
+            "description": "the server terminated an operation because it encountered an infinite loop while processing a request with \"Depth: infinity\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "510": {
+            "description": "Further extensions to the request are required for the server to fulfill it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "511": {
+            "description": "the client needs to authenticate to gain network access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/version": {
       "get": {
         "summary": "/version 处理器 (Phase 3.5: 改用 #[endpoint] for OpenAPI export)",
@@ -549,6 +2211,108 @@
           "session_id": {
             "type": "string",
             "description": "Session ID"
+          }
+        }
+      },
+      "ma_harness_server.http.CreateSessionRequest": {
+        "type": "object",
+        "description": "POST /v1/sessions 请求",
+        "properties": {
+          "enabled_plugins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "启用的 plugin 列表 (留空 = 全部)"
+          },
+          "mode": {
+            "type": "integer",
+            "format": "int32",
+            "description": "mode: 0=Default (跟 gRPC OperatingMode 一致)"
+          },
+          "name": {
+            "type": "string",
+            "description": "session 名 (留空 = auto generate \"session-{8-char-id}\")"
+          }
+        }
+      },
+      "ma_harness_server.http.ListSessionsResponse": {
+        "type": "object",
+        "description": "GET /v1/sessions 响应",
+        "required": [
+          "sessions",
+          "total"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ma_harness_server.http.ProtoSessionJson"
+            },
+            "description": "所有 session (按 created_at DESC)"
+          },
+          "total": {
+            "type": "integer",
+            "format": "uint32",
+            "description": "session 总数",
+            "minimum": 0.0
+          }
+        }
+      },
+      "ma_harness_server.http.ProtoSessionJson": {
+        "type": "object",
+        "description": "单个 session 的 JSON 表示 (跟 proto Session 对齐)",
+        "required": [
+          "id",
+          "name",
+          "state",
+          "mode",
+          "enabled_plugins",
+          "user_id"
+        ],
+        "properties": {
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled_plugins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "integer",
+            "format": "int32",
+            "description": "mode: 0=Default, 1=..."
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "integer",
+            "format": "int32",
+            "description": "state: 0=Created, 1=Active, 2=Paused, 3=Closed"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "string"
           }
         }
       },

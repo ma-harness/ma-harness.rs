@@ -24,6 +24,44 @@ impl SessionServiceImpl {
     pub fn new(store: Arc<dyn SessionStore>) -> Self {
         Self { store }
     }
+
+    // ============================================================================
+    // 公开的非 gRPC 方法 (Phase 5.1 / Day 90: HTTP /v1/sessions handler 用)
+    // 跟 gRPC trait impl 共享 store, 逻辑等价但返 Result 不返 Status
+    // ============================================================================
+
+    /// 列出所有 session (等价 gRPC `list`)
+    pub fn list_sessions(&self) -> Result<Vec<ProtoSession>, String> {
+        self.store.list().map_err(|e| format!("session store list: {e}"))
+    }
+
+    /// 拿单个 session (等价 gRPC `get`)
+    pub fn get_session(&self, id: &str) -> Result<Option<ProtoSession>, String> {
+        self.store.get(id).map_err(|e| format!("session store get: {e}"))
+    }
+
+    /// 创建 session (等价 gRPC `create`)
+    pub fn create_session(&self, session: ProtoSession) -> Result<(), String> {
+        self.store
+            .create(&session)
+            .map_err(|e| format!("session store create: {e}"))
+    }
+
+    /// 关闭 session (等价 gRPC `close`, 默认 final_state=Closed)
+    pub fn close_session(&self, id: &str) -> Result<Option<ProtoSession>, String> {
+        let mut session = self
+            .store
+            .get(id)
+            .map_err(|e| format!("session store get: {e}"))?
+            .ok_or_else(|| format!("session not found: {id}"))?;
+        session.state = ProtoSessionState::Closed as i32;
+        session.closed_at = Some(prost_types::Timestamp::from(std::time::SystemTime::now()));
+        session.updated_at = Some(prost_types::Timestamp::from(std::time::SystemTime::now()));
+        self.store
+            .update(&session)
+            .map_err(|e| format!("session store update: {e}"))?;
+        Ok(Some(session))
+    }
 }
 
 #[tonic::async_trait]

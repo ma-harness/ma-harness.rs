@@ -264,16 +264,19 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
     eprintln!("mah start: tonic gRPC on 0.0.0.0:{} + salvo HTTP on 0.0.0.0:{}", grpc_port, http_port);
 
     // Phase 2.10 (Day 64): 业务方指定 store_path → SqliteStore 持久化
+    // Phase 5.1 (Day 90): session store 一次构造, gRPC + HTTP 共用
     // Phase 1 默认 InMemoryStore
-    let mut builder = ServerBuilder::with_stub(log);
-    if let Some(path) = store_path {
+    let session_store: Arc<dyn ma_harness_server::SessionStore> = if let Some(path) = store_path {
         let store = ma_harness_server::SqliteStore::open(path)
             .map_err(|e| anyhow::anyhow!("open sqlite store {}: {e}", path.display()))?;
         eprintln!("mah start: session store = sqlite:{}", path.display());
-        builder = builder.with_session_store(Arc::new(store));
+        Arc::new(store)
     } else {
         eprintln!("mah start: session store = in-memory (no persistence)");
-    }
+        Arc::new(ma_harness_server::InMemoryStore::new())
+    };
+    let mut builder = ServerBuilder::with_stub(log);
+    builder = builder.with_session_store(session_store.clone());
 
     // tonic gRPC server
     let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()
@@ -287,11 +290,15 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
 
     // salvo HTTP server
     // 2026-08-18 (Day 52): TcpAcceptor::try_from(tokio::net::TcpListener) — salvo 0.79 API
+    // 2026-08-19 (Day 90): HTTP /v1/sessions 需要 SessionStore, 走 run_router_with_store (跟 gRPC 共用)
     use salvo::conn::tcp::TcpAcceptor;
     let http_addr = format!("0.0.0.0:{}", http_port);
     let http_addr_parse: std::net::SocketAddr = http_addr.parse()
         .with_context(|| format!("invalid http_port: {}", http_port))?;
-    let http_router = ma_harness_server::http::router();
+    let http_router = ma_harness_server::http::run_router_with_store(
+        Arc::new(ma_harness_core::StubModelAdapter),
+        session_store,
+    );
     let tokio_listener = tokio::net::TcpListener::bind(http_addr_parse).await
         .with_context(|| format!("bind http {}", http_addr))?;
     let acceptor = TcpAcceptor::try_from(tokio_listener)
@@ -657,14 +664,20 @@ fn print_bench_info(crate_name: Option<&str>) -> Result<()> {
 ///   1. 跑 `mah openapi export --output /tmp/new.json`
 ///   2. diff /tmp/new.json docs/api/openapi.json
 ///   3. drift → fail
+///
+/// **Phase 5.1 (Day 90)**: 改用 run_router_with_store 拿 /v1/sessions 4 endpoint
 fn export_openapi(output: &std::path::Path) -> Result<()> {
     use salvo::oapi::OpenApi;
     use ma_harness_core::StubModelAdapter;
     use std::sync::Arc;
 
-    // 构造完整 router (含 /v1/runs) + stub adapter
-    // run_router 内部会 set_global_adapter, OpenAPI 导出只关心 router 结构, 不发真 HTTP
-    let router = ma_harness_server::http::run_router(Arc::new(StubModelAdapter));
+    // 构造完整 router (含 /v1/runs + /v1/sessions) + stub adapter + InMemoryStore
+    // run_router_with_store 内部会 set_global_adapter + set_global_session_store
+    // OpenAPI 导出只关心 router 结构, 不发真 HTTP
+    let router = ma_harness_server::http::run_router_with_store(
+        Arc::new(StubModelAdapter),
+        Arc::new(ma_harness_server::InMemoryStore::new()),
+    );
     let doc = OpenApi::new("ma-harness API", "0.1.0").merge_router(&router);
 
     // 按扩展名决定 json / yaml
