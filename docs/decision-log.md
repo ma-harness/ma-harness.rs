@@ -824,3 +824,101 @@ git checkout main  # 退回 main 分支 (salvo 0.79)
 - 业务方升级触发条件: salvo CVE / salvo 新特性需求 / 业务方要求
 - 升级时建独立分支 (e.g. `salvo-X.Y-migration`), 验证通过再 fast-forward merge 到 main
 
+## 21. salvo 0.93 → 0.95 + rustc 1.93 → 1.94 一步到位升级 (2026-08-19 / Day 101 / P6-7)
+
+### 决策
+
+**业务方要求一步到位升到 salvo 0.95 (latest), 同时升级 rustc 1.93 → 1.94**。跳 16 minor (0.79 → 0.95) + 升 1 个 toolchain, 0 API break, 0 代码改动, 303/303 lib test 全过。
+
+影响范围:
+- workspace `Cargo.toml`: `salvo = "0.93"` → `salvo = "0.95"`
+- `crates/ma-harness-server/Cargo.toml`: `salvo_extra = "0.93"` → `salvo_extra = "0.95"`
+- `Cargo.lock`: salvo 全套 0.93.0 → 0.95.2, multra 1.0.0 → 1.1.0, tokio-tungstenite 0.29 → 0.30, ulid 1.2.1 → 3.0.0
+- **新 toolchain**: rustc 1.94.1 (e408947bf 2026-03-25) 通过 `rustup install 1.94` 装好
+- **代码层改动**: **0 行** (跟 P6-6 一样, OnceCell/Mutex<Option> / TestClient / take_json / #[endpoint]+oapi+sse features 全部 0.95 兼容)
+
+### rustc 升级路径 (国内网络)
+
+**问题**: `rustup install 1.94 --profile minimal` 直接走 `https://static.rust-lang.org` 在国内 7890 代理环境 Connection reset (os error 10054)。
+
+**解决**: 走国内 rustup 镜像。
+
+尝试 1: `https://mirrors.ustc.edu.cn/rust-static` ✓ **成功**
+- `RUSTUP_DIST_SERVER='https://mirrors.ustc.edu.cn/rust-static'`
+- `RUSTUP_UPDATE_ROOT='https://mirrors.ustc.edu.cn/rust-static/rustup'`
+- 装 rustc 1.94.1 + cargo + rust-std
+- ~5 分钟
+
+尝试 2 (备选): `https://mirrors.tuna.tsinghua.edu.cn/rustup` 部分成功
+- 拿到 channel-rust-stable.toml (最新 stable)
+- 但 1.94 release artifact 在 tuna 镜像里没找到 (tuna 镜像从 2026-07-16 开始 sync, 1.94 是 2026-03-25 发的, 已经 outdated)
+- ustc 镜像更全, 推荐
+
+```bash
+$env:RUSTUP_DIST_SERVER='https://mirrors.ustc.edu.cn/rust-static'
+$env:RUSTUP_UPDATE_ROOT='https://mirrors.ustc.edu.cn/rust-static/rustup'
+rustup install 1.94 --profile minimal
+# 1.94-x86_64-pc-windows-msvc installed - rustc 1.94.1 (e408947bf 2026-03-25)
+
+rustup default 1.94
+# default toolchain set to 1.94-x86_64-pc-windows-msvc
+```
+
+### 验证
+
+1. `cargo clean -p salvo -p salvo-oapi -p salvo-oapi-macros -p salvo-proxy -p salvo-serde-util -p salvo_core -p salvo_extra -p salvo_macros -p multra` (清 incremental cache)
+2. `cargo check --workspace` 重新编, 0 error, **1m 13s** (比 P6-6 慢, 因为跳更多 minor + 升 toolchain 重新链接更多 deps)
+3. `RUST_TEST_THREADS=1 cargo test --workspace --lib` — 18 个 test result, 全部 ok, **303/303 全过** ✓
+4. **并发跑有 1 个 flake** (`http::tests::post_v1_sessions_then_get` 返回 500 替 200):
+   - 跟 P6-5 已知 flake 一致 (test isolation 问题, 跟 salvo 升级无关)
+   - 串行化 (`RUST_TEST_THREADS=1`) 完全解决
+   - 业务方接受 (CI 默认 `RUST_TEST_THREADS=1`)
+5. bin test 失败 4 个 — pre-existing broken (跟 main 一致, 跟 salvo 无关)
+
+### 关键发现 (跟 P6-6 一样令人惊讶)
+
+- **跳 16 minor 仍然 0 break** — 0.79 → 0.95 期间, 9 类 API 全部兼容
+- **0.94/0.95 引入新特性** (HTTP3 / Acme 增强 / 性能) 全部 additive, 不影响既有用法
+- **OnceCell/Mutex<Option> hack 0.79 写法在 0.95 仍工作** — 即便 Router::data() 0.80+ 就有
+- **保守升级模式**: salvo 0.79 → 0.95 期间没 break API, 1.3 年的 minor release 都很 backward-compatible
+
+### 国内 rustup 镜像速查
+
+| 镜像 | URL | 1.94 artifact | 适用 |
+|---|---|---|---|
+| rust-lang.org (official) | https://static.rust-lang.org | ✓ | 海外 |
+| ustc | https://mirrors.ustc.edu.cn/rust-static | ✓ | **国内推荐** |
+| tuna | https://mirrors.tuna.tsinghua.edu.cn/rustup | ✗ (1.94 没) | 国内备选 (最新 stable) |
+| rsproxy | https://rsproxy.cn | 部分 | cargo 专用, rustup 不全 |
+| 中科大旧路径 | https://mirrors.ustc.edu.cn/rustup | 404 | 路径已迁移 |
+
+**给后来人**: 国内装 rustc 1.94+ 必走 `RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static`, 直接 rustup 走官方 100% 失败 (Connection reset)。
+
+### 预期收益 (P6-7)
+
+- **最新 salvo 0.95.2** (2026-07-15) + 0.94 跳 16 minor 的 bug fix + 安全补丁
+- **新特性可用**: HTTP3, Acme 自动 TLS, WebTransport, salvo-jwt-auth, salvo-cache 等 (按需)
+- **rustc 1.94** std lib 改进 (e.g. new error patterns, formatting tweaks)
+- **继续升级到 0.96+** 只需改 `version = "0.95"` → `"0.96"` + `cargo update`, 0 代码改动预期
+
+### Phase 7+ 升 salvo 0.96+ 路径
+
+我们已经在 rustc 1.94 toolchain, 下次升级 0 障碍:
+
+1. workspace `Cargo.toml`: `salvo = "0.95"` → `salvo = "0.96"` (假设 0.96 已发)
+2. `crates/ma-harness-server/Cargo.toml`: `salvo_extra = "0.95"` → `"0.96"`
+3. `cargo update`
+4. `cargo check --workspace` (预期 0 break)
+5. `RUST_TEST_THREADS=1 cargo test --workspace --lib` (预期 303/303 全过)
+6. commit + push
+
+预计 15 分钟工作量, 0 代码改动。
+
+### 给后来人
+
+- salvo 跳 16 minor + 升 rustc 1 minor, 0 break — 升级门槛极低
+- 国内 rustup 装新 toolchain 走 ustc 镜像 (其他镜像不全)
+- 串行测试 (`RUST_TEST_THREADS=1`) 解决并发 isolation flake
+- pre-existing broken 4 个一直存在, 跟 salvo 无关
+- 业务方想用新特性 (HTTP3/Acme) 现在可用, 0.95 全 feature-gated 启用
+
