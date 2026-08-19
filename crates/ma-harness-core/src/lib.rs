@@ -34,6 +34,7 @@
 #![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 
 pub mod agent;
+pub mod approval_audit;
 pub mod event;
 pub mod log;
 pub mod tool;

@@ -28,6 +28,8 @@ pub fn event_type_from_str(s: &str) -> Option<EventType> {
         "UserCancel" => Some(EventType::UserCancel),
         "SandboxViolation" => Some(EventType::SandboxViolation),
         "SandboxConfig" => Some(EventType::SandboxConfig),
+        "ApprovalRequest" => Some(EventType::ApprovalRequest),
+        "ApprovalDecision" => Some(EventType::ApprovalDecision),
         _ => None,
     }
 }
@@ -50,6 +52,8 @@ pub fn event_type_to_str(t: EventType) -> &'static str {
         EventType::UserCancel => "UserCancel",
         EventType::SandboxViolation => "SandboxViolation",
         EventType::SandboxConfig => "SandboxConfig",
+        EventType::ApprovalRequest => "ApprovalRequest",
+        EventType::ApprovalDecision => "ApprovalDecision",
     }
 }
 

@@ -73,6 +73,12 @@ pub enum EventType {
     // Sandbox (700 段位)
     SandboxViolation = 700,
     SandboxConfig = 701,
+
+    // 2026-08-19 (Day 101 / P7-2.6): 审批审计 (800 段位)
+    // model_visible = false (内部审计, 不上 model context)
+    // payload: ApprovalRequest / ApprovalDecision (含 who/when/decision/reason)
+    ApprovalRequest = 800,
+    ApprovalDecision = 801,
 }
 
 impl EventType {
@@ -93,6 +99,8 @@ impl EventType {
             601 => Self::UserCancel,
             700 => Self::SandboxViolation,
             701 => Self::SandboxConfig,
+            800 => Self::ApprovalRequest,
+            801 => Self::ApprovalDecision,
             _ => Self::Unspecified,
         }
     }
@@ -118,7 +126,11 @@ impl EventType {
             | Self::UserCancel
             | Self::SandboxViolation => true,
             // 内部 (不上 model context)
-            Self::ModelError | Self::SandboxConfig | Self::Unspecified => false,
+            Self::ModelError
+            | Self::SandboxConfig
+            | Self::ApprovalRequest
+            | Self::ApprovalDecision
+            | Self::Unspecified => false,
         }
     }
 }
@@ -141,6 +153,8 @@ impl fmt::Display for EventType {
             Self::UserCancel => "USER_CANCEL",
             Self::SandboxViolation => "SANDBOX_VIOLATION",
             Self::SandboxConfig => "SANDBOX_CONFIG",
+            Self::ApprovalRequest => "APPROVAL_REQUEST",
+            Self::ApprovalDecision => "APPROVAL_DECISION",
         })
     }
 }

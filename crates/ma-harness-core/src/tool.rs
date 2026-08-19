@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde_json::Value;
 
-use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, Context, RiskLevel};
+use ma_harness_cordis::{Context, RiskLevel};
 
 /// Tool schema (喂给 LLM 的)
 #[derive(Debug, Clone)]
