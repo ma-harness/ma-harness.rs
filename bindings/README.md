@@ -75,6 +75,60 @@ Go 端用 `protoc-gen-go` + `protoc-gen-go-grpc` 走标准 protoc 工具链。
 5. `GetSessionEvents` 拿事件
 6. `defer conn.Close()` + `context.WithTimeout` 优雅退出
 
+## Streaming RPC 演示 (P5-7 / Day 96)
+
+`mah` 的 `AgentService.RunStream` RPC (proto 已定义) 返 server-streaming response。
+业务方用 stub 拿 `Iterator` / `EventEmitter` / `ServerStream`,每个事件是 `AgentStreamEvent { run_id, message: Message }`。
+
+### Python 端 (stream_client.py)
+
+```bash
+cd bindings/python
+python stream_client.py
+```
+
+走 gRPC Python stub 走 `Iterator[AgentStreamEvent]`:
+```python
+stream = stub.RunStream(request)
+for event in stream:
+    token = event.message.content[0].text
+    print(f"[token] {token!r}")
+```
+
+StubModelAdapter 把 user message 拆成 word 依次 yield ("alpha beta gamma" → 3 event)。
+
+### Node.js 端 (stream_client.js)
+
+```bash
+cd bindings/node
+node stream_client.js
+```
+
+走 `@grpc/grpc-js` 返 readable stream:
+```js
+const call = client.RunStream({...});
+call.on('data', (event) => { /* event.message.content[0].text */ });
+call.on('end', () => { /* done */ });
+call.on('error', (err) => { /* err */ });
+```
+
+### Go 端 (stream_client.go)
+
+```bash
+cd bindings/go
+go run stream_client.go
+```
+
+走 `server-stream` 走 `stream.Recv()` + `io.EOF`:
+```go
+stream, _ := stub.RunStream(ctx, req)
+for {
+    event, err := stream.Recv()
+    if err == io.EOF { break }
+    // event.Event 是 oneof, switch 类型拿 token
+}
+```
+
 ## 业务方集成
 
 1. 把 `proto/` 目录 copy 到自己项目(版本锁)
@@ -95,7 +149,7 @@ Go 端用 `protoc-gen-go` + `protoc-gen-go-grpc` 走标准 protoc 工具链。
 
 用 `protobuf-maven-plugin` 编译 .proto → Java class.
 
-## 限制 (Phase 3.10 + P4-6 PoC)
+## 限制 (Phase 3.10 + P4-6 + P5-7 PoC)
 
 - 业务方需自己写 binding (我们只给 Python/Node/Go 起点 + .proto 契约)
 - 不支持 server-streaming RPC wrapper (Python 直接用 stub `Iter` / Node `EventEmitter` / Go channel 即可)
@@ -106,6 +160,6 @@ Go 端用 `protoc-gen-go` + `protoc-gen-go-grpc` 走标准 protoc 工具链。
 
 - ~~加 Go binding example (高频语言)~~ — P4-6 完成 (Day 87)
 - ~~加 TS-proto / d.ts for Node binding~~ — P4-7 完成 (Day 88, 走 tsc + proto-loader 兼容)
+- ~~加 streaming RPC 演示~~ — P5-7 完成 (Day 96, Python/Node/Go stream_client.*)
 - 加 OpenAPI → grpc-web 桥 (业务方浏览器直接调)
-- 加 streaming RPC 演示 (Python `Iter`, Node `EventEmitter`, Go channel)
 - pyo3 评估: 业务方拿 Python extension 不用走 gRPC 网络 (in-process)
