@@ -34,6 +34,7 @@
 #![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 
 pub mod agent;
+pub mod agent_compress;
 pub mod approval_audit;
 pub mod event;
 pub mod log;
@@ -41,6 +42,10 @@ pub mod tool;
 pub mod tool_pipeline;
 
 pub use agent::{AgentLoop, AgentRunRequest, AgentRunResponse, FinishReason, ModelAdapter, ModelMessage, ModelRequest, ModelResponse, StubModelAdapter};
+pub use agent_compress::{
+    compress, estimate_messages_tokens, estimate_tokens, load_history_from_log, should_compress,
+    CompressionPolicy,
+};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
 pub use tool::{ToolEntry, ToolInvokeFn, ToolRegistry, ToolSchema};
