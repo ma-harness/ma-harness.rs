@@ -1980,6 +1980,7 @@ dependencies = [
  "parking_lot",
  "prost",
  "prost-types",
+ "rusqlite",
  "salvo",
  "serde",
  "serde_json",

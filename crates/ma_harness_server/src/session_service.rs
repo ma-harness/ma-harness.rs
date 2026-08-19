@@ -1,10 +1,9 @@
-//! SessionServiceImpl — gRPC SessionService 实现 (内存版 CRUD)
+//! SessionServiceImpl — gRPC SessionService 实现 (Phase 2.6 接 SessionStore trait)
 //!
-//! Week 1 Day 18 实现. Phase 2 加持久化 (rusqlite).
+//! Week 1 Day 18 实现, Phase 2.6 改成接 store trait (InMemory / Sqlite 两套都支持).
+//! 用 `Arc<dyn SessionStore>` 拿 store, 业务方在 ServerBuilder 注入.
 
 use std::sync::Arc;
-
-use dashmap::DashMap;
 
 use ma_harness_proto::ma_harness::v1::{
     session_service_server::SessionService, CloseSessionRequest, CloseSessionResponse,
@@ -13,14 +12,17 @@ use ma_harness_proto::ma_harness::v1::{
 };
 use tonic::{Request, Response, Status};
 
-/// SessionServiceImpl — 内存版 session CRUD
+use crate::session_store::SessionStore;
+
+/// SessionServiceImpl — store-backed session CRUD
 pub struct SessionServiceImpl {
-    sessions: DashMap<String, ProtoSession>,
+    store: Arc<dyn SessionStore>,
 }
 
 impl SessionServiceImpl {
-    pub fn new(sessions: DashMap<String, ProtoSession>) -> Self {
-        Self { sessions }
+    /// 构造 (接 store trait)
+    pub fn new(store: Arc<dyn SessionStore>) -> Self {
+        Self { store }
     }
 }
 
@@ -51,8 +53,12 @@ impl SessionService for SessionServiceImpl {
             enabled_plugins: req.enabled_plugins,
             user_id: String::new(),
         };
-        self.sessions.insert(id.clone(), session.clone());
-        Ok(Response::new(CreateSessionResponse { session: Some(session) }))
+        self.store
+            .create(&session)
+            .map_err(|e| Status::internal(format!("session store create: {e}")))?;
+        Ok(Response::new(CreateSessionResponse {
+            session: Some(session),
+        }))
     }
 
     async fn get(
@@ -60,9 +66,10 @@ impl SessionService for SessionServiceImpl {
         request: Request<GetSessionRequest>,
     ) -> Result<Response<ProtoSession>, Status> {
         let id = request.into_inner().id;
-        self.sessions
+        self.store
             .get(&id)
-            .map(|entry| Response::new(entry.value().clone()))
+            .map_err(|e| Status::internal(format!("session store get: {e}")))?
+            .map(Response::new)
             .ok_or_else(|| Status::not_found(format!("session not found: {}", id)))
     }
 
@@ -71,11 +78,10 @@ impl SessionService for SessionServiceImpl {
         request: Request<ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let _req = request.into_inner();
-        let sessions: Vec<ProtoSession> = self
-            .sessions
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let sessions = self
+            .store
+            .list()
+            .map_err(|e| Status::internal(format!("session store list: {e}")))?;
         let total = sessions.len() as u32;
         Ok(Response::new(ListSessionsResponse {
             sessions,
@@ -97,14 +103,18 @@ impl SessionService for SessionServiceImpl {
             req.final_state
         };
         let mut session = self
-            .sessions
-            .get_mut(&id)
+            .store
+            .get(&id)
+            .map_err(|e| Status::internal(format!("session store get: {e}")))?
             .ok_or_else(|| Status::not_found(format!("session not found: {}", id)))?;
         session.state = final_state;
         session.closed_at = Some(prost_types::Timestamp::from(std::time::SystemTime::now()));
         session.updated_at = Some(prost_types::Timestamp::from(std::time::SystemTime::now()));
+        self.store
+            .update(&session)
+            .map_err(|e| Status::internal(format!("session store update: {e}")))?;
         Ok(Response::new(CloseSessionResponse {
-            session: Some(session.clone()),
+            session: Some(session),
         }))
     }
 }
@@ -115,7 +125,11 @@ mod tests {
     use ma_harness_proto::ma_harness::v1::OperatingMode;
 
     fn service() -> SessionServiceImpl {
-        SessionServiceImpl::new(DashMap::new())
+        SessionServiceImpl::new(Arc::new(crate::session_store::InMemoryStore::new()))
+    }
+
+    fn service_with_sqlite() -> SessionServiceImpl {
+        SessionServiceImpl::new(Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap()))
     }
 
     #[tokio::test]
@@ -215,5 +229,28 @@ mod tests {
             .unwrap();
         let session = close_resp.into_inner().session.unwrap();
         assert_eq!(session.state, ProtoSessionState::Closed as i32);
+    }
+
+    // ---- SqliteStore 集成测试 ----
+
+    #[tokio::test]
+    async fn sqlite_create_and_get_through_service() {
+        // 验 service 接 SqliteStore 真跑通
+        let svc = service_with_sqlite();
+        let resp = svc
+            .create(Request::new(CreateSessionRequest {
+                name: "sqlite-test".to_string(),
+                mode: 0,
+                metadata: None,
+                enabled_plugins: vec![],
+            }))
+            .await
+            .unwrap();
+        let id = resp.into_inner().session.unwrap().id;
+        let got = svc
+            .get(Request::new(GetSessionRequest { id: id.clone() }))
+            .await
+            .unwrap();
+        assert_eq!(got.into_inner().id, id);
     }
 }
