@@ -779,17 +779,28 @@ impl TuiApp {
         drop(plugins);
 
         // Row 2: Events panel (P6-5: 边框高亮当 focus, scroll 偏移按 events_scroll)
+        // P7-5 (Day 101): event_type 着色 + Approval 事件特殊颜色
         let events = self.events.lock();
         let scroll = *self.events_scroll.lock();
-        // events.iter().rev() 后 0 = 最新, 1 = 第二新...
-        // scroll = 0 → 取所有; scroll > 0 → 跳过前 scroll 条
-        // 实现: 先 reverse 拿到 [newest, second_newest, ...]
-        //       然后 skip(scroll) 拿从老到新
         let event_items: Vec<ListItem> = events
             .iter()
             .rev()
             .skip(scroll)
             .map(|e| {
+                // P7-5: 按 event_type 着色
+                let type_color = match e.event_type.as_str() {
+                    "SessionStart" | "SessionEnd" => Color::Blue,
+                    "RunStart" | "RunEnd" => Color::LightBlue,
+                    "ModelRequest" | "ModelResponse" => Color::Green,
+                    "ModelError" => Color::Red,
+                    "ToolCall" | "ToolResult" => Color::Yellow,
+                    "ToolError" => Color::Red,
+                    "UserInput" | "UserCancel" => Color::Magenta,
+                    "SandboxViolation" => Color::Red,
+                    "ApprovalRequest" => Color::LightRed,
+                    "ApprovalDecision" => Color::LightGreen,
+                    _ => Color::DarkGray,
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{}", e.seq), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
@@ -806,7 +817,7 @@ impl TuiApp {
                     Span::raw(" "),
                     Span::styled(
                         format!("{}/{}", e.session_id, e.event_type),
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(type_color),
                     ),
                 ]))
             })
