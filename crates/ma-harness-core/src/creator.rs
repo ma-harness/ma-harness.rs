@@ -91,6 +91,8 @@ pub struct CreatorRegistry {
     plugins: Arc<Mutex<HashMap<String, PluginRecord>>>,
     /// 编译产物目录 (v2 真编译时用)
     pub output_dir: PathBuf,
+    /// P10-1.5: 编译配置 (None = v1 简化, 不真编译)
+    pub(crate) compile_config: Option<crate::creator_compile::CompileConfig>,
 }
 
 impl std::fmt::Debug for CreatorRegistry {
@@ -108,6 +110,7 @@ impl CreatorRegistry {
         Self {
             plugins: Arc::new(Mutex::new(HashMap::new())),
             output_dir: PathBuf::from("./target/creator"),
+            compile_config: None,
         }
     }
 
@@ -144,48 +147,117 @@ impl CreatorRegistry {
             .collect()
     }
 
-    /// 编译 (P10-1 / Day 101)
+    /// 编译 (P10-1.5 + P10-1.6 / Day 101)
     ///
-    /// v1 简化: 标 Loaded (不真编译)
-    /// v2 真编译: 写 plugin 到 `<output_dir>/<name>/Cargo.toml` + `src/lib.rs`,
-    /// 调 `cargo build --release`, 产物 `.so`/`.dll` 走 libloading 加载.
+    /// 业务方设 `CreatorRegistry::compile_config` 后, 调 `compile()` 走真 cargo subprocess.
+    /// 默认行为: 标 Loaded (v1 简化, 不真编译).
+    /// 业务方调 `set_compile_config(CompileConfig::default())` 启用真编译.
     ///
-    /// 当前 v2 简化: 检查 source_code 不空 + 长度 < 1MB, 标 Loaded.
-    /// 业务方真要 dynamic plugin 编译需 P10-1.5 (rustc subprocess).
+    /// **P10-1.6 改进**: 真编译走 `tokio::task::spawn_blocking` 包装, 不阻塞 async runtime.
+    /// cargo 编译可达分钟级, 同步跑在 tokio worker 上会 block 其他 task.
     pub async fn compile(&self, name: &str) -> Result<CompileStatus, CreatorError> {
+        let (spec, compile_cfg) = {
+            let mut plugins = self.plugins.lock();
+            let record = plugins
+                .get_mut(name)
+                .ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
+            record.status = CompileStatus::Compiling;
+
+            // 简化校验: source 不空 + 不超大
+            if record.spec.source_code.trim().is_empty() {
+                record.status = CompileStatus::Failed;
+                let err = "source_code is empty".to_string();
+                record.compile_error = Some(err.clone());
+                return Err(CreatorError::Compile(err));
+            }
+            if record.spec.source_code.len() > 1_000_000 {
+                record.status = CompileStatus::Failed;
+                let err = format!(
+                    "source_code too large: {} bytes (max 1MB)",
+                    record.spec.source_code.len()
+                );
+                record.compile_error = Some(err.clone());
+                return Err(CreatorError::Compile(err));
+            }
+
+            (record.spec.clone(), self.compile_config.clone())
+        };
+
+        // P10-1.5: 真编译 (if compile_config set)
+        if let Some(cfg) = compile_cfg {
+            // P10-1.6: 走 spawn_blocking 包装, 不阻塞 async runtime
+            let compile_result = tokio::task::spawn_blocking(move || {
+                crate::creator_compile::compile_plugin(&spec, &cfg)
+            })
+            .await
+            .map_err(|join_err| {
+                CreatorError::Compile(format!("spawn_blocking join 失败: {join_err}"))
+            })?;
+
+            match compile_result {
+                Ok(_output) => {
+                    // 成功, 标 Loaded
+                    let mut plugins = self.plugins.lock();
+                    if let Some(record) = plugins.get_mut(name) {
+                        record.status = CompileStatus::Loaded;
+                        record.compile_error = None;
+                    }
+                    return Ok(CompileStatus::Loaded);
+                }
+                Err(e) => {
+                    let mut plugins = self.plugins.lock();
+                    if let Some(record) = plugins.get_mut(name) {
+                        record.status = CompileStatus::Failed;
+                        record.compile_error = Some(e.to_string());
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        // v1 fallback: 标 Loaded 不真编译
         let mut plugins = self.plugins.lock();
-        let record = plugins
-            .get_mut(name)
-            .ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
-        record.status = CompileStatus::Compiling;
-
-        // 简化校验: source 不空 + 不超大
-        if record.spec.source_code.trim().is_empty() {
-            record.status = CompileStatus::Failed;
-            let err = "source_code is empty".to_string();
-            record.compile_error = Some(err.clone());
-            return Err(CreatorError::Compile(err));
+        if let Some(record) = plugins.get_mut(name) {
+            record.status = CompileStatus::Loaded;
+            record.compile_error = None;
         }
-        if record.spec.source_code.len() > 1_000_000 {
-            record.status = CompileStatus::Failed;
-            let err = format!(
-                "source_code too large: {} bytes (max 1MB)",
-                record.spec.source_code.len()
-            );
-            record.compile_error = Some(err.clone());
-            return Err(CreatorError::Compile(err));
-        }
-
-        // v1: 标 Loaded (P10-1.5 改真编译)
-        record.status = CompileStatus::Loaded;
-        record.compile_error = None;
         Ok(CompileStatus::Loaded)
+    }
+
+    /// 设编译配置 (P10-1.5)
+    ///
+    /// 设为 `None` 走 v1 简化 (不真编译, 标 Loaded).
+    /// 设为 `Some(CompileConfig::default())` 启用真 cargo build subprocess.
+    pub fn set_compile_config(&mut self, cfg: Option<crate::creator_compile::CompileConfig>) {
+        self.compile_config = cfg;
     }
 
     /// 加载到 ToolRegistry (P9-2 v1 简化: 占位, v2 libloading)
     pub fn load_into(&self, _name: &str, _registry: &ToolRegistry) -> Result<(), CreatorError> {
         // v1: 简化, 仅 mark as loaded
         Ok(())
+    }
+
+    /// P10-1.6: 业务方拿 dylib 实际路径 (用 crate::creator_compile::dylib_filename 算跨平台文件名)
+    ///
+    /// 返 `Result<PathBuf, CreatorError>` (artifact 路径), 业务方 P10-1.7 拿这个 libloading 加载.
+    /// 找不到 plugin 或没 Loaded 时返错.
+    pub fn dylib_artifact_path(&self, name: &str) -> Result<PathBuf, CreatorError> {
+        let record = self.get(name).ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
+        if record.status != CompileStatus::Loaded {
+            return Err(CreatorError::NotLoaded(name.to_string(), record.status));
+        }
+        let dylib_name = crate::creator_compile::dylib_filename(&record.spec.name);
+        Ok(self
+            .output_dir
+            .join(&record.spec.name)
+            .join("target")
+            .join(if record.status == CompileStatus::Loaded {
+                "release"
+            } else {
+                "debug"
+            })
+            .join(dylib_name))
     }
 
     /// P10-1 v1.5 placeholder: 真正走 rustc subprocess 编译
@@ -213,16 +285,14 @@ impl CreatorRegistry {
             record.spec.name,
             record.spec.entry_fn,
         );
+        // P10-1.6: 用 creator_compile::dylib_filename 算跨平台文件名 (避免硬编码 .so)
+        let dylib = crate::creator_compile::dylib_filename(&record.spec.name);
         let commands = vec![
             format!("mkdir -p {}", src_dir.display()),
             format!("write {} ({} bytes)", dir.join("Cargo.toml").display(), cargo_toml.len()),
             format!("write {} ({} bytes)", src_dir.join("lib.rs").display(), lib_rs.len()),
             format!("cargo build --release --manifest-path={}/Cargo.toml", dir.display()),
-            format!(
-                "load_dylib: {}/target/release/lib{}.so (or .dll on Windows)",
-                dir.display(),
-                record.spec.name.replace('-', "_")
-            ),
+            format!("load_dylib: {}/target/release/{}", dir.display(), dylib),
         ];
         Ok(commands)
     }

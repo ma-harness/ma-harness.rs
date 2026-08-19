@@ -38,6 +38,7 @@ pub mod agent_compress;
 pub mod agents_md;
 pub mod approval_audit;
 pub mod creator;
+pub mod creator_compile;
 pub mod event;
 pub mod log;
 pub mod operating_mode;
@@ -52,6 +53,7 @@ pub use agent_compress::{
 };
 pub use agents_md::{load_agents_md, AgentsMdConfig, AgentsMdResult};
 pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, PluginRecord, PluginSpec};
+pub use creator_compile::{compile_plugin, dylib_filename, find_cargo, CompileConfig, CompileOutput};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
 pub use operating_mode::{OperatingMode, OperatingModeConfig, OPERATING_MODE};
