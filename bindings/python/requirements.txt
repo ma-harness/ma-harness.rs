@@ -1,0 +1,13 @@
+# ma-harness Python binding (Phase 3.10 / T3.10)
+#
+# 安装:
+#   pip install -r requirements.txt
+# 跑 example:
+#   python example_client.py
+#
+# 业务方依赖:
+# - grpcio: 纯 Python gRPC runtime (跨平台)
+# - grpcio-tools: 编译 .proto → Python stub (一次性, dev dep)
+
+grpcio>=1.60.0
+grpcio-tools>=1.60.0

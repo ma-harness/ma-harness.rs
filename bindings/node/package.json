@@ -1,0 +1,14 @@
+{
+  "name": "ma-harness-node-client",
+  "version": "0.1.0",
+  "description": "ma-harness Node.js gRPC client example (Phase 3.10 / T3.10)",
+  "private": true,
+  "scripts": {
+    "build": "node compile_proto.js",
+    "example": "node example_client.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.0"
+  }
+}
