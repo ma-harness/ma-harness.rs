@@ -44,6 +44,8 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 prost-types = { workspace = true }
+serde = { workspace = true }  # P11-4 (Day 101+1): ACP JSON-RPC 2.0
+serde_json = { workspace = true }  # P11-4 (Day 101+1): ACP JSON-RPC 2.0
 
 [dev-dependencies]
 tempfile = { workspace = true }

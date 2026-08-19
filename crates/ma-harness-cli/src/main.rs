@@ -9,6 +9,8 @@
 //! - `bench` — benchmark 信息 / 跑 cargo bench 提示
 //! - `version` — 打印版本
 
+mod acp;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -173,6 +175,18 @@ enum Commands {
         #[arg(long, default_value = "stub")]
         model: String,
     },
+    /// **P11-4 (Day 101+1)**: ACP (Agent Communication Protocol) 互通 (跟 dsh / Codex 生态)
+    ///
+    /// `mah acp serve` 起 JSON-RPC 2.0 stdio server, 跟 dsh `dsh-jsonrpc-agent` 风格一致.
+    /// 业务方 (Python / Node / Rust) 写 JSON-RPC 到 stdin, 从 stdout 读响应/通知.
+    ///
+    /// 例子:
+    ///   mah acp serve --model stub < input.jsonl > output.jsonl
+    ///   # 跟 dsh SDK 互通: `from deepseek_harness import DeepSeekHarness` 调 mah
+    Acp {
+        #[command(subcommand)]
+        action: AcpAction,
+    },
     /// **Phase 3.7 / T3.7**: 显式 enforce landlock (Linux) / seatbelt (Mac) / stub (其他)
     ///
     /// ⚠️ **警告**: 一旦 enforce 是全进程 (不可逆). 业务方决定要不要跑.
@@ -268,6 +282,20 @@ enum CodeAction {
     },
 }
 
+/// **P11-4 (Day 101+1)**: ACP sub-actions
+#[derive(Subcommand, Debug)]
+enum AcpAction {
+    /// 启 JSON-RPC 2.0 stdio server (跟 dsh 互通)
+    ///
+    /// 例子:
+    ///   mah acp serve --model stub
+    Serve {
+        /// 模型 (默认 "stub")
+        #[arg(long, default_value = "stub")]
+        model: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -318,6 +346,9 @@ async fn main() -> Result<()> {
         Commands::RunStream { prompt, grpc_url, session, model } => {
             Box::pin(run_stream_cmd(&prompt, &grpc_url, session.as_deref(), &model)).await
         }
+        Commands::Acp { action } => match action {
+            AcpAction::Serve { model } => Box::pin(acp::run_acp_server(&model)).await,
+        },
     }
 }
 
