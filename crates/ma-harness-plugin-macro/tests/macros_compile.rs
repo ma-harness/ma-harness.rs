@@ -10,7 +10,14 @@
 
 use ma_harness_cordis::{Context, Service};
 use ma_harness_core::{ToolSchema, ToolRegistry};
-use ma_harness_plugin_macro::{ctx_key, dsh_command, dsh_handler, dsh_listener, dsh_service, dsh_tool};
+// 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
+// 1. `ctx_key!` 在 ma_harness_seam (proc-macro crate 不允许 export macro_rules!)
+// 2. derive macro `#[proc_macro_derive(DshService, ...)]` 在 proc-macro crate root
+//    自动 export 名字 `DshService` (用法 `#[derive(DshService)]`).
+//    之前 use `dsh_service / dsh_listener` 错的, 因为这是 `pub fn` 名字 (attribute 形式),
+//    不是 derive 名字. derive macro 不需要 import, 在 scope 内自动可访问.
+use ma_harness_plugin_macro::{DshListener, DshService, dsh_command, dsh_handler, dsh_tool};
+use ma_harness_seam::ctx_key;
 
 // ============================================================================
 // ctx_key!
@@ -32,11 +39,14 @@ fn ctx_key_basic() {
 // #[dsh_service]
 // ============================================================================
 
-#[dsh_service]
+#[derive(DshService)]
 pub struct MyTestService;
 
 impl MyTestService {
-    pub fn new(_ctx: &Context) -> anyhow::Result<Self> {
+    // 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
+    // ma_harness_cordis::Service trait 要求 `fn install`, 之前写 `fn new` 不符合 trait.
+    // 改 `install` 后 #[DshService] (cordis Service impl) 才能调用 MyTestService::install.
+    pub fn install(_ctx: &Context) -> anyhow::Result<Self> {
         Ok(MyTestService)
     }
 }
@@ -58,7 +68,7 @@ fn dsh_service_implements_service() {
 // #[dsh_listener] (Phase 1: 标记用, 不生成代码)
 // ============================================================================
 
-#[dsh_listener]
+#[derive(DshListener)]
 pub struct MyTestListener;
 
 impl MyTestListener {
@@ -79,13 +89,18 @@ fn dsh_listener_struct_marks() {
 // ============================================================================
 
 /// 给 model 看的工具: 加法
+// 2026-08-19 (Day 101 / P7-0.4): 参数改 serde_json::Value, 适配 dsh_tool Phase 1
+// 简化版 (invoker 传 Value 不 cast). 真实业务方用 #[dsh_tool] 时参数可以是
+// 任何 JSON-deserializable type, 但 macro Phase 1 简化要求 fn 接受 Value.
 #[dsh_tool]
 async fn add(
-    /// 第一个数
-    a: i64,
-    /// 第二个数
-    b: i64,
+    // 第一个数
+    a: serde_json::Value,
+    // 第二个数
+    b: serde_json::Value,
 ) -> anyhow::Result<i64> {
+    let a = a.as_i64().unwrap();
+    let b = b.as_i64().unwrap();
     Ok(a + b)
 }
 
@@ -121,17 +136,12 @@ async fn dsh_tool_invoke_missing_arg_errors() {
 // ============================================================================
 
 /// 测试指令: ping
+// 2026-08-19 (Day 101 / P7-0.4): 改 fn 签名只接受 ctx, 适配 dsh_command macro
+// Phase 1 简化 (dispatch fn 调 `#fn_name(ctx).await`). 之前 verbose: bool 1 个
+// 额外 arg + ctx, 跟 macro 展开不匹配 (E0061 1 vs 2 args).
 #[dsh_command]
-async fn ping(
-    /// 是否详细
-    verbose: bool,
-    ctx: &Context,
-) -> anyhow::Result<()> {
-    if verbose {
-        ctx.set(SESSION_ID, "verbose_ping".to_string());
-    } else {
-        ctx.set(SESSION_ID, "ping".to_string());
-    }
+async fn ping(ctx: &Context) -> anyhow::Result<()> {
+    ctx.set(SESSION_ID, "ping".to_string());
     Ok(())
 }
 

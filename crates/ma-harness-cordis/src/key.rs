@@ -103,7 +103,7 @@ impl<T: ?Sized + 'static> CtxKey<T> {
     ///
     /// ```should_panic
     /// use ma_harness_cordis::CtxKey;
-    /// let _: CtxKey<String> = CtxKey::new("NotSnakeCase");
+    /// let _: CtxKey<String> = CtxKey::new_checked("NotSnakeCase");
     /// ```
     #[track_caller]
     pub const fn new(name: &'static str) -> Self {

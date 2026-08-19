@@ -37,5 +37,10 @@ anyhow = { workspace = true }
 [dev-dependencies]
 # 集成测试用 (dsh_tool / dsh_command 生成的代码引用这些)
 ma-harness-core = { path = "../ma-harness-core" }
+# 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
+# ctx_key! macro 在 seam (proc-macro crate 不允许 export macro_rules!)
+ma-harness-seam = { path = "../ma-harness-seam" }
+# trybuild 编译 fixtures 用 (e.g. dsh_listener async fn 展开需要 tokio)
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 # trybuild: 编译失败 fixture 测试 (Phase 2.4)
 trybuild = { workspace = true }

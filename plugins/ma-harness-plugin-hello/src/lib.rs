@@ -53,6 +53,11 @@ impl HelloService {
             .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
         template.replace("{who}", who)
     }
+
+    /// 跟 `#[dsh_service_dual(name = "hello", ...)]` 一致, 方便 plugin 暴露 name
+    pub fn name(&self) -> &'static str {
+        "hello"
+    }
 }
 
 // ============================================================================

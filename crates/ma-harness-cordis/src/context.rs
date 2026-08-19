@@ -570,31 +570,11 @@ impl Context {
     }
 }
 
-// Reentrancy guard (Phase 1 简化: thread-local bool + RAII guard 防止 panic 泄漏)
+// Reentrancy guard — 2026-08-19 (Day 101 / P7-0.4) 删整段死代码.
 // 2026-08-18 (Day 61): Phase 2.7 改走 deferred queue, IN_EMIT / EmitGuard 不再需要.
-// 保留 IN_EMIT thread_local 跟 EmitGuard struct 以防外部依赖 (实际 dead code, allow).
-#[allow(dead_code)]
-thread_local! {
-    static IN_EMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[allow(dead_code)]
-struct EmitGuard;
-
-#[allow(dead_code)]
-impl EmitGuard {
-    fn new() -> Self {
-        IN_EMIT.with(|b| b.set(true));
-        EmitGuard
-    }
-}
-
-#[allow(dead_code)]
-impl Drop for EmitGuard {
-    fn drop(&mut self) {
-        IN_EMIT.with(|b| b.set(false));
-    }
-}
+// 之前用 `#[allow(dead_code)]` 抑制 warning, 但 Rust 2024 不允许 `#[allow]` 在
+// macro invocation (e.g. thread_local!) 上, 触发 "allow is ignored" warning.
+// 删整段, deferred queue 是新实现 (下面).
 
 // ============================================================================
 // Deferred emit queue (Phase 2.7 / Day 61)
