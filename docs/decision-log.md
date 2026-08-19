@@ -211,3 +211,51 @@ dsh 用 camelCase (例 `agentLoop` / `sessionId`),我们统一改成 snake_case:
 - salvo 的 `#[endpoint]` macro 配 OpenAPI 导出 (REST API 阶段)
 - salvo 跟 tonic 共享 hyper runtime, 性能对齐
 - salvo 0.79 → 0.80+ 升级路径 (semver-friendly, minor 升级)
+
+
+## 13. Phase 4 路线图 (2026-08-19 / Day 82-88)
+
+### 决策
+
+**Phase 4 = 接真数据 + 多语言 binding + 4 panel UI。** 7 个子项全部完成:
+
+| 项 | 内容 | 业务价值 | commit |
+|---|---|---|---|
+| P4-1 | TUI 接真 EventLog (sqlite) | session 跟 event 跟磁盘同步, 重启可恢复 | 9bf4352 |
+| P4-2 | ma-harness-seam / core / plugin-macro 发 crates.io | 业务方 `cargo add ma-harness-seam` 拿稳定 API | 39b35e5 |
+| P4-3 | TUI 接真 SessionStore (SqliteStore) | session 显示 name / state (Active/Closed) 真值 | 5d7cab9 |
+| P4-4 | OpenAPI /v1/runs 注解修复 (`#[handler]` → `#[endpoint]`) | spec 跟实际 endpoint 同步, SDK 可生成 | 97bdc22 |
+| P4-5 | TUI 4 panel UI 加 events 滚动 | 业务方看 4 路数据: sessions / plugins / events / status | 583741c |
+| P4-6 | Go gRPC binding (高频 backend 语言) | 跟 Python/Node 同样的 4 RPC demo | d8d8bb8 |
+| P4-7 | TypeScript Node binding (走 tsc) | 现代 Node.js 业务方强类型, IntelliSense | d8f7e8a |
+
+### 关键设计决策
+
+- **TUI 优先级链 (P4-3)**: `SessionStore > EventLog > stub`, 三层 fallback, 都 None 走 stub
+- **crates.io publish 顺序 (P4-2)**: `cordis → code → core → macro → seam` (dependency order, 每 30s sleep)
+- **OpenAPI 必须用 `#[endpoint]` (P4-4)**: `#[handler]` 不进 spec, merge_router 跳过
+- **gRPC binding 模式 (P4-6/7)**: 4 RPC demo (List / Create / Run / Events) 一致, 业务方跨语言学习曲线短
+- **TS 走 tsc + proto-loader 兼容 (P4-7)**: 业务方想 100% 类型可换 ts-proto, 默认最小依赖
+
+### 踩坑 (P4 阶段 5 个)
+
+1. **refresh() stub fallback bug (P4-3)**: store+log 都 None 时 else 分支空, session_rows_include_default fail
+2. **proto i32 state 字段 (P4-3)**: `format!("{:?}", s.state)` 输出 "2" 不是 "Active", 用 `SessionState::try_from` 转
+3. **cargo package 不 honor [patch.crates-io] (P4-2)**: 本地 dry-run 找不到 cordis on crates.io → CI 才是真验证路径
+4. **internal path dep 必须 version (P4-2)**: `path = "..."` 不写 version 直接 fail, 用 `version = "0.1.0"` 对齐
+5. **Mutex 锁顺序 (P4-5)**: status bar 跟 row2 events 渲染抢锁, 先 `let count = events.len(); drop(events);`
+
+### Phase 5 路线 (后续)
+
+- **RunStream 实现**: 当前 proto 定义了 `RunStream(AgentRunRequest) returns (stream AgentStreamEvent)`, Rust 端没真实现. 需 ModelAdapter 加 streaming 变体 (OpenAI / Anthropic SSE), AgentLoop 拆 token emit. 多日工程
+- **TUI session detail view**: ratatui List 交互, 选 session 拿 detail events / tool call history / model response
+- **OpenAPI 扩 endpoints**: 加 /v1/sessions (List/Create/Get/Close) + /v1/sessions/{id}/events 跟 gRPC SessionService 对齐
+- **streaming RPC demo**: Python `Iter`, Node `EventEmitter`, Go channel, TS `AsyncIterable`
+- **OpenAPI → grpc-web 桥**: 业务方浏览器直接调, 不走后端
+- **pyo3 评估**: Python 业务方拿 in-process extension 不用 gRPC 网络
+
+### 测试覆盖
+
+P4 阶段测试: 257 lib tests + 18 trybuild fixtures + 5 README files + 3 binding demo (Python/Node/Go + JS/TS).
+
+workspace lib test 全过, integration test (server http/gRPC) 28/0 全过, plugin_hello 集成测试全过.
