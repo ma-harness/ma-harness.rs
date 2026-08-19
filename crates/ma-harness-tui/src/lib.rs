@@ -31,7 +31,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
 use std::sync::Arc;
@@ -40,6 +40,15 @@ use std::time::{Duration, Instant};
 
 use ma_harness_core::EventLog;
 use ma_harness_server::SessionStore;
+
+/// TUI app mode (P5-2 / Day 91)
+#[derive(Debug, Clone, PartialEq)]
+enum AppMode {
+    /// 4-panel 主 view: sessions / plugins / events / status
+    List,
+    /// Detail view: 单个 session 的 events + metadata
+    Detail { session_id: String },
+}
 
 /// TUI app state
 pub struct TuiApp {
@@ -57,6 +66,10 @@ pub struct TuiApp {
     started_at: Instant,
     /// tick 计数
     ticks: u64,
+    /// **P5-2**: 当前 mode (List / Detail)
+    mode: Arc<Mutex<AppMode>>,
+    /// **P5-2**: List mode 当前选中 session 的 index (j/k 上下移)
+    selected_session: Arc<Mutex<usize>>,
 }
 
 /// 一行 session 信息
@@ -114,6 +127,8 @@ impl TuiApp {
             session_store: None,  // P4-3 单独 API: TuiApp::new_with_log_and_store
             started_at: Instant::now(),
             ticks: 0,
+            mode: Arc::new(Mutex::new(AppMode::List)),
+            selected_session: Arc::new(Mutex::new(0)),
         };
         app.refresh()?;
         Ok(app)
@@ -145,6 +160,8 @@ impl TuiApp {
             session_store: store,
             started_at: Instant::now(),
             ticks: 0,
+            mode: Arc::new(Mutex::new(AppMode::List)),
+            selected_session: Arc::new(Mutex::new(0)),
         };
         app.refresh()?;
         Ok(app)
@@ -285,8 +302,9 @@ impl TuiApp {
     fn run_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         let mut last_refresh = Instant::now();
         let refresh_interval = Duration::from_millis(500);
+        let mut running = true;
 
-        loop {
+        while running {
             // 1. 刷新数据 (每 500ms)
             if last_refresh.elapsed() >= refresh_interval {
                 self.ticks += 1;
@@ -301,39 +319,128 @@ impl TuiApp {
             if crossterm::event::poll(Duration::from_millis(50))? {
                 if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
                     if key.kind == crossterm::event::KeyEventKind::Press {
-                        match key.code {
-                            crossterm::event::KeyCode::Char('q') => return Ok(()),
-                            crossterm::event::KeyCode::Esc => return Ok(()),
-                            crossterm::event::KeyCode::Char('c')
-                                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
-                            {
-                                return Ok(());
+                        let mode = self.mode.lock().clone();
+                        match mode {
+                            AppMode::List => {
+                                running = self.handle_list_key(key)?;
                             }
-                            _ => {}
+                            AppMode::Detail { session_id: _ } => {
+                                self.handle_detail_key(key)?;
+                            }
                         }
                     }
                 }
             }
         }
+        Ok(())
     }
 
-    /// 画 UI: 4 个 panel (Phase 4 改进: 加 events panel)
+    /// List mode 按键处理 (P5-2)
     ///
-    /// - Title bar (3 行): ma-harness TUI
-    /// - Row 1: Sessions (左 50%) | Plugins (右 50%)
-    /// - Row 2: Events (全宽, 滚动最新 20 条)
-    /// - Status bar (3 行): ticks / uptime / events count
+    /// - `q` / `Esc` / `Ctrl-C`: 退出 (返 false 让 run_loop 停)
+    /// - `j` / `↓`: 下一个 session
+    /// - `k` / `↑`: 上一个 session
+    /// - `Enter`: 进 Detail view
+    ///
+    /// Returns: true = 继续 loop, false = 退出
+    fn handle_list_key(&self, key: crossterm::event::KeyEvent) -> Result<bool> {
+        match key.code {
+            crossterm::event::KeyCode::Char('q') => return Ok(false),
+            crossterm::event::KeyCode::Esc => return Ok(false),
+            crossterm::event::KeyCode::Char('c')
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                return Ok(false);
+            }
+            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
+                self.move_selection(1i64);
+            }
+            crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
+                self.move_selection(-1i64);
+            }
+            crossterm::event::KeyCode::Enter => {
+                self.enter_detail();
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Detail mode 按键处理 (P5-2)
+    ///
+    /// - `q` / `Esc` / `Ctrl-C` / `Backspace`: 退回 List
+    fn handle_detail_key(&self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Char('q')
+            | crossterm::event::KeyCode::Esc
+            | crossterm::event::KeyCode::Backspace => {
+                *self.mode.lock() = AppMode::List;
+            }
+            crossterm::event::KeyCode::Char('c')
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                *self.mode.lock() = AppMode::List;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// 移动选中 session (clamp 到 [0, len))
+    fn move_selection(&self, delta: i64) {
+        let sessions = self.sessions.lock();
+        if sessions.is_empty() {
+            return;
+        }
+        let cur = *self.selected_session.lock() as i64;
+        let len = sessions.len() as i64;
+        let next = if delta >= 0 {
+            (cur + delta).min(len - 1)
+        } else {
+            (cur + delta).max(0)
+        };
+        *self.selected_session.lock() = next as usize;
+    }
+
+    /// 进 detail view (拿当前选中 session 的 id)
+    fn enter_detail(&self) {
+        let sessions = self.sessions.lock();
+        let idx = *self.selected_session.lock();
+        if let Some(row) = sessions.get(idx) {
+            // 跳过 placeholder 行: "(no events yet)" / "(no sessions yet)" / "default" stub
+            if row.id.starts_with('(') || row.id == "default" {
+                return;
+            }
+            *self.mode.lock() = AppMode::Detail {
+                session_id: row.id.clone(),
+            };
+        }
+    }
+
+    /// 画 UI: 根据 mode 选 view (P5-2)
+    ///
+    /// - List mode: 4 个 panel (title + sessions/plugins + events + status)
+    /// - Detail mode: 单 session 的 events + metadata
     fn ui(&self, frame: &mut Frame) {
+        let mode = self.mode.lock().clone();
+        match mode {
+            AppMode::List => self.ui_list(frame),
+            AppMode::Detail { session_id } => self.ui_detail(frame, &session_id),
+        }
+    }
+
+    /// List mode 4 panel UI (P4-5 布局 + P5-2 高亮选中)
+    fn ui_list(&self, frame: &mut Frame) {
         let area = frame.area();
 
         // 主布局: title (3) + row1 (Min 5) + row2 (Min 8) + status (3)
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),   // title
-                Constraint::Min(5),      // row1: sessions + plugins
-                Constraint::Min(8),      // row2: events (滚动)
-                Constraint::Length(3),   // status
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Min(8),
+                Constraint::Length(3),
             ])
             .split(area);
 
@@ -347,34 +454,45 @@ impl TuiApp {
             ),
             Span::raw(" "),
             Span::styled(
-                "(Phase 4 — press 'q' to quit)",
+                "(Phase 5 — 'j/k' nav, 'Enter' detail, 'q' quit)",
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
         .block(Block::default().borders(Borders::ALL).title("ma-harness"));
         frame.render_widget(title, main_chunks[0]);
 
-        // Row 1: Sessions | Plugins (左右 1:1)
+        // Row 1: Sessions | Plugins
         let row1_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_chunks[1]);
 
-        // Sessions panel
+        // Sessions panel (P5-2: 高亮 selected_session)
+        let selected = *self.selected_session.lock();
         let sessions = self.sessions.lock();
         let session_items: Vec<ListItem> = sessions
             .iter()
-            .map(|s| {
-                ListItem::new(Line::from(vec![
+            .enumerate()
+            .map(|(i, s)| {
+                let marker = if i == selected { "▶" } else { " " };
+                let style = if i == selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let line = Line::from(vec![
+                    Span::styled(marker, style),
+                    Span::raw(" "),
                     Span::styled(
                         format!("{:16}", s.id),
-                        Style::default().fg(Color::Yellow),
+                        if i == selected { style } else { Style::default().fg(Color::Yellow) },
                     ),
                     Span::raw(" "),
                     Span::styled(&s.state, Style::default().fg(Color::Green)),
                     Span::raw(" "),
                     Span::styled(&s.age, Style::default().fg(Color::DarkGray)),
-                ]))
+                ]);
+                ListItem::new(line)
             })
             .collect();
         let sessions_list = List::new(session_items)
@@ -406,22 +524,16 @@ impl TuiApp {
         frame.render_widget(plugins_list, row1_chunks[1]);
         drop(plugins);
 
-        // Row 2: Events panel (滚动最新 20 条)
+        // Row 2: Events panel
         let events = self.events.lock();
         let event_items: Vec<ListItem> = events
             .iter()
-            .rev() // 最新在最上
+            .rev()
             .map(|e| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("#{}", e.seq),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!("#{}", e.seq), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(
-                        format!("[{}]", e.timestamp),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!("[{}]", e.timestamp), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
                     Span::styled(
                         format!("{:8}", e.severity.to_lowercase()),
@@ -439,35 +551,123 @@ impl TuiApp {
                 ]))
             })
             .collect();
-        let events_list = List::new(event_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Events (latest {})", events.len())),
-            );
+        let events_list = List::new(event_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Events (latest {})", events.len())),
+        );
         frame.render_widget(events_list, main_chunks[2]);
         let event_count = events.len();
         drop(events);
 
         // Status bar
         let status = Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("ticks: {}", self.ticks),
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled(format!("ticks: {}", self.ticks), Style::default().fg(Color::Cyan)),
             Span::raw("  "),
             Span::styled(
                 format!("uptime: {:.1}s", self.started_at.elapsed().as_secs_f32()),
                 Style::default().fg(Color::Green),
             ),
             Span::raw("  "),
-            Span::styled(
-                format!("events: {}", event_count),
-                Style::default().fg(Color::Yellow),
-            ),
+            Span::styled(format!("events: {}", event_count), Style::default().fg(Color::Yellow)),
         ]))
         .block(Block::default().borders(Borders::ALL).title("status"));
         frame.render_widget(status, main_chunks[3]);
+    }
+
+    /// Detail mode 单 session view (P5-2)
+    ///
+    /// 显示选中 session 的:
+    /// - 顶部: id / state / name / age
+    /// - 中间: 全部 events (model_visible) for that session
+    /// - 底部: "press 'q' to back"
+    fn ui_detail(&self, frame: &mut Frame, session_id: &str) {
+        let area = frame.area();
+
+        // 主布局: header (5) + body (Min 10) + footer (3)
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),  // header
+                Constraint::Min(10),    // body (events for session)
+                Constraint::Length(3),  // footer
+            ])
+            .split(area);
+
+        // Header: session metadata
+        let session_meta = self.sessions.lock().iter().find(|s| s.id == session_id).cloned();
+        let header_text = if let Some(s) = session_meta {
+            format!(
+                "Session: {}\n  state: {}\n  name/age: {}",
+                s.id, s.state, s.age
+            )
+        } else {
+            format!("Session: {}\n  (not in current list)", session_id)
+        };
+        let header = Paragraph::new(header_text)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).title("Session Detail"));
+        frame.render_widget(header, main_chunks[0]);
+
+        // Body: events for this session (走 EventLog::get_model_visible)
+        let body_items: Vec<ListItem> = if let Some(log) = &self.event_log {
+            match log.get_model_visible(session_id) {
+                Ok(page) => page
+                    .events
+                    .iter()
+                    .map(|s| {
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                format!("#{}", s.seq),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::raw(" "),
+                            Span::styled(
+                                format!("[{}]", s.event.ts.format("%H:%M:%S")),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::raw(" "),
+                            Span::styled(
+                                format!("{:8}", format!("{:?}", s.event.severity).to_lowercase()),
+                                Style::default().fg(match format!("{:?}", s.event.severity).as_str() {
+                                    "Error" => Color::Red,
+                                    "Warn" => Color::Magenta,
+                                    _ => Color::Cyan,
+                                }),
+                            ),
+                            Span::raw(" "),
+                            Span::styled(
+                                format!("{:?}", s.event.event_type),
+                                Style::default().fg(Color::Yellow),
+                            ),
+                        ]))
+                    })
+                    .collect(),
+                Err(e) => vec![ListItem::new(Line::from(Span::styled(
+                    format!("ERR: get_model_visible: {e}"),
+                    Style::default().fg(Color::Red),
+                )))],
+            }
+        } else {
+            vec![ListItem::new(Line::from(Span::styled(
+                "(no EventLog — pass --log <db>)",
+                Style::default().fg(Color::DarkGray),
+            )))]
+        };
+        let body = List::new(body_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Events for {} (model_visible)", &session_id[..8.min(session_id.len())])),
+        );
+        frame.render_widget(body, main_chunks[1]);
+
+        // Footer: "press q to back"
+        let footer = Paragraph::new(Line::from(vec![Span::styled(
+            "press 'q' / Esc / Backspace to back to list",
+            Style::default().fg(Color::DarkGray),
+        )]))
+        .block(Block::default().borders(Borders::ALL).title("nav"));
+        frame.render_widget(footer, main_chunks[2]);
     }
 }
 
@@ -691,5 +891,229 @@ mod tests {
         // 5. events 仍走 EventLog (store 跟 events 无关)
         let events = app.events.lock();
         assert!(events.len() >= 1, "events 走 EventLog, 应有 1+ 条");
+    }
+
+    // === P5-2: TUI session detail view (j/k/Enter/Esc 交互) ===
+
+    /// 初始 mode = List
+    #[test]
+    fn tui_initial_mode_is_list() {
+        let app = TuiApp::new().unwrap();
+        let mode = app.mode.lock();
+        assert_eq!(*mode, AppMode::List, "初始 mode 应是 List");
+    }
+
+    /// 按 j/k 移动 selection
+    #[test]
+    fn tui_move_selection_jk() {
+        let app = TuiApp::new().unwrap();
+        // 默认 sessions: 1 条 "default"
+        assert_eq!(*app.selected_session.lock(), 0, "初始 selected=0");
+
+        // k 上移 (0 - 1 = max(0, -1) = 0)
+        app.move_selection(-1i64);
+        assert_eq!(*app.selected_session.lock(), 0, "k 在 0 应不动");
+
+        // j 下移 (0 + 1 = min(0, 0) = 0, 因为只有 1 个)
+        app.move_selection(1i64);
+        assert_eq!(*app.selected_session.lock(), 0, "j 在 only-1 应不动");
+    }
+
+    /// 多个 session 时 j/k 真的移动
+    #[test]
+    fn tui_move_selection_with_multiple_sessions() {
+        use ma_harness_core::{EventLog, EventType, SessionEvent};
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let log_path = tmpdir.path().join("events.db");
+        let log = EventLog::open(&log_path).unwrap();
+        for sid in ["alpha", "beta", "gamma"] {
+            let mut ev = SessionEvent::new(sid, EventType::SessionStart);
+            ev.payload_json = Some(format!(r#"{{"session":"{}"}}"#, sid));
+            let _ = log.append(ev);
+        }
+
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        for (i, (id, name)) in [("a-1", "alpha"), ("a-2", "beta"), ("a-3", "gamma")].iter().enumerate() {
+            let proto = ProtoSession {
+                id: id.to_string(),
+                name: name.to_string(),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec![],
+                user_id: String::new(),
+            };
+            store.create(&proto).unwrap();
+            // 给 store session 加 events (用 count 标志)
+            let _ = i;
+        }
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+
+        let app = TuiApp::new_with_log_and_store(Some(&log_path), Some(store_arc)).unwrap();
+        // 应有 3 个 session (a-1, a-2, a-3)
+        let sessions = app.sessions.lock();
+        assert_eq!(sessions.len(), 3, "应有 3 个 session, got {}", sessions.len());
+        drop(sessions);
+
+        // j 从 0 → 1
+        app.move_selection(1i64);
+        assert_eq!(*app.selected_session.lock(), 1);
+
+        // j 1 → 2
+        app.move_selection(1i64);
+        assert_eq!(*app.selected_session.lock(), 2);
+
+        // j 2 → 2 (clamp, 不会越界)
+        app.move_selection(1i64);
+        assert_eq!(*app.selected_session.lock(), 2, "j 在末位应 clamp");
+
+        // k 2 → 1
+        app.move_selection(-1i64);
+        assert_eq!(*app.selected_session.lock(), 1);
+
+        // k 0 → 0 (clamp)
+        app.move_selection(-1i64);
+        app.move_selection(-1i64);
+        assert_eq!(*app.selected_session.lock(), 0, "k 在 0 应 clamp");
+    }
+
+    /// Enter 触发进 Detail view
+    #[test]
+    fn tui_enter_detail_switches_mode() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        for (id, name) in [("real-1", "first"), ("real-2", "second")] {
+            let proto = ProtoSession {
+                id: id.to_string(),
+                name: name.to_string(),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec![],
+                user_id: String::new(),
+            };
+            store.create(&proto).unwrap();
+        }
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(None, Some(store_arc)).unwrap();
+
+        // selected = 0 (默认)
+        app.enter_detail();
+        let mode = app.mode.lock();
+        match &*mode {
+            AppMode::Detail { session_id } => {
+                assert!(
+                    session_id == "real-1" || session_id == "real-2",
+                    "session_id 应是 real-1 或 real-2, got {}",
+                    session_id
+                );
+            }
+            AppMode::List => panic!("进 detail 后 mode 应是 Detail"),
+        }
+    }
+
+    /// Enter 跳过占位行 ("(no events yet)")
+    #[test]
+    fn tui_enter_detail_skips_placeholder() {
+        let app = TuiApp::new().unwrap();
+        // TuiApp::new() 没 log/store, sessions 只有 "default" placeholder
+        app.enter_detail();
+        // 不应切到 detail (因为只有 1 个 placeholder, selected=0 是 "default")
+        let mode = app.mode.lock();
+        assert_eq!(*mode, AppMode::List, "只有 placeholder 时 Enter 不应切 mode");
+    }
+
+    /// Detail 模式按 q/Esc/Backspace 退回 List
+    #[test]
+    fn tui_detail_q_esc_back_returns_to_list() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        let proto = ProtoSession {
+            id: "back-test".to_string(),
+            name: "back".to_string(),
+            state: ProtoSessionState::Active as i32,
+            mode: OperatingMode::Default as i32,
+            created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            closed_at: None,
+            metadata: None,
+            stats: None,
+            enabled_plugins: vec![],
+            user_id: String::new(),
+        };
+        store.create(&proto).unwrap();
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(None, Some(store_arc)).unwrap();
+
+        // 强制进 Detail mode
+        *app.mode.lock() = AppMode::Detail {
+            session_id: "back-test".to_string(),
+        };
+
+        // 模拟按 'q'
+        let key_q = KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        app.handle_detail_key(key_q).unwrap();
+        assert_eq!(*app.mode.lock(), AppMode::List, "'q' 应退回 List");
+
+        // 再进 detail
+        *app.mode.lock() = AppMode::Detail {
+            session_id: "back-test".to_string(),
+        };
+        // 模拟按 Esc
+        let key_esc = KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        app.handle_detail_key(key_esc).unwrap();
+        assert_eq!(*app.mode.lock(), AppMode::List, "Esc 应退回 List");
+    }
+
+    /// List 模式按 q 应该让 run_loop 停 (handle_list_key 返 false)
+    #[test]
+    fn tui_list_q_returns_false_to_exit() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let app = TuiApp::new().unwrap();
+        let key_q = KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        };
+        let cont = app.handle_list_key(key_q).unwrap();
+        assert!(!cont, "'q' 应返 false 让 loop 停");
     }
 }
