@@ -6,8 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
-description = "ma-harness 元框架 (Cordis-rs, 内部 crate, API 频繁变)"
+publish = true
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["cordis","di","plugin","context","service"]
+categories = ["development-tools","no-std"]
+description = "Cordis-style DI container + plugin/typed-key/disposable framework. Internal but used by all ma-harness plugins. Stable enough to publish for plugin authors who want stable API surface."
 
 [lints]
 workspace = true

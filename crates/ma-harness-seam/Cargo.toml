@@ -7,7 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "ma-harness 插件抽象层 (公开, #[non_exhaustive], 插件作者 use 这个)"
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["plugin","seam","facade","non_exhaustive","public-api"]
+categories = ["development-tools","api-bindings"]
+description = "Public plugin API facade for ma-harness. Plugin authors use this crate (not cordis directly). Trait-isolated Service/Plugin/Listener/Disposable/Tool with #[non_exhaustive] for stable evolution."
 
 [lints]
 workspace = true

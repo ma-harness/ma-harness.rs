@@ -6,8 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
-description = "ma-harness Code Mode (LLM-generated code in wasm sandbox)"
+publish = true
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["wasm","wasmtime","llm","sandbox","code-mode"]
+categories = ["wasm","development-tools"]
+description = "Code Mode: run LLM-generated WAT/WASM in a wasmtime sandbox. 4-layer defense (fuel / epoch / memory+table / fs whitelist). Host-import API for log + read_file."
 
 [lints]
 workspace = true
