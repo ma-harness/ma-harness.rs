@@ -67,12 +67,14 @@ pub fn dsh_service(input: TokenStream) -> TokenStream {
     let name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
 
+    // 2026-08-18 (Day 58): 改成纯 marker. Phase 2.1 推荐用 `#[dsh_service_dual]`
+    // (attribute 形式) 一次生成 cordis + seam 两套 Service impl.
+    // DshService derive 保留仅为 backward compat, 只生成 const marker, user 自己手写 impl.
     let expanded = quote! {
-        impl #impl_generics ::ma_harness_cordis::Service for #name #ty_generics #where_clause {
-            type Ctx = ::ma_harness_cordis::Context;
-            // Error 由用户在自己 impl 里指定, 这里 default = anyhow::Error
-            type Error = ::anyhow::Error;
-            // install 由用户自己 impl, 这里只确保 Service trait bound 满足
+        impl #impl_generics #name #ty_generics #where_clause {
+            /// 标记: 这个 struct 是 dsh service. 推荐改用 `#[dsh_service_dual]`.
+            #[allow(dead_code)]
+            pub const __DSH_SERVICE: () = ();
         }
     };
     expanded.into()

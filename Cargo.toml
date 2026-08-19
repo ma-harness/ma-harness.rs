@@ -95,6 +95,7 @@ proptest = "1"
 mockall = "0.13"
 insta = { version = "1", features = ["yaml", "redactions"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+trybuild = "1"
 tokio-test = "0.4"
 pretty_assertions = "1"
 wiremock = "0.6"
