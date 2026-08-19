@@ -14,6 +14,7 @@ members = [
     "crates/ma-harness-model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
     "crates/ma-harness-code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
     "crates/ma-harness-tui",  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard (ratatui)
+    "crates/ma-harness-registry",  # 2026-08-20 (Day 101+1): P11-6 Plugin Registry
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
@@ -124,6 +125,9 @@ tempfile = "3"
 
 # 编码 (P11-5: vision model 图像 base64)
 base64 = "0.22"
+
+# 版本 (P11-6: Plugin Registry 用 semver)
+semver = { version = "1", features = ["serde"] }
 
 # proc-macro
 syn = { version = "2", features = ["full", "extra-traits"] }

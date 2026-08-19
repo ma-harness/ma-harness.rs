@@ -1,0 +1,29 @@
+[package]
+name = "ma-harness-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness plugin registry (P11-6, Day 101+1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-core = { path = "../ma-harness-core" }
+
+# 外部
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+semver = { workspace = true }  # Plugin version 解析 (P11-6)
+
+[dev-dependencies]
+tempfile = { workspace = true }  # registry 持久化测试
