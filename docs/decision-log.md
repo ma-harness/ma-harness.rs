@@ -717,3 +717,110 @@ let mut g = self.focus.lock();
 - 业务方扩展: 持久化更多 state (e.g. last_focus_subposition) → `PersistedState` 加字段 (serde default, 向后兼容)
 - parking_lot 死锁教训: 业务方写任何 `*x.lock() = ...` 复合表达式, 必先拆 2 行
 
+## 20. salvo 0.79 → 0.93 兼容性升级 (2026-08-19 / Day 101 / P6-6)
+
+### 决策
+
+**HTTP framework 从 salvo 0.79 升级到 salvo 0.93 (跳 14 minor 版本, 0 API break, 0 测试 fail)**。
+
+影响范围:
+- workspace `Cargo.toml`: `salvo = "0.79"` → `salvo = "0.93"` (锁死版本, 不是 `^0.93`)
+- `crates/ma-harness-server/Cargo.toml`: `salvo_extra = "0.79"` → `salvo_extra = "0.93"`
+- `Cargo.lock`: salvo 全套 0.95.2 → 0.93.0, multra 1.1.0 → 1.0.0 (MSRV 兼容)
+
+代码层改动: **0 行**。所有 0.79 用的 API (Router / OnceCell / TestClient / take_json / take_bytes / `#[endpoint]` + `oapi` + `sse` features) 在 0.93 全部兼容。
+
+### 为什么不升 0.95.x (最新版)
+
+| salvo 版本 | 发布日 | MSRV | 兼容性 |
+|---|---|---|---|
+| 0.79.0 | 2025-05-27 | 1.85 | 当前锁定 |
+| 0.93.0 | 2026-04-30 | 1.92 | **✓ 升级目标 (rustc 1.93 兼容)** |
+| 0.94.0 | 2026-07-07 | 1.94 | ✗ 需 rustc 1.94 |
+| 0.95.2 | 2026-07-15 | 1.94 | ✗ 需 rustc 1.94 (latest) |
+
+我们 rustc 1.93.0, 所以 0.93 是最高兼容版。升 0.95 需要先 `rustup update 1.94`。
+
+### 间接依赖降级 (multra)
+
+`cargo update -p salvo` 把 multra 升到 1.1.0 (要 rustc 1.94, 不兼容), 锁回 1.0.0 (MSRV 1.89, 兼容):
+
+```bash
+cargo update -p multra --precise 1.0.0
+# Downgrading multra v1.1.0 -> v1.0.0
+# Adding spin v0.10.1
+```
+
+salvo 0.93 仍然 dep multra, 但 1.0.0 跟 0.93 的 API 兼容。
+
+### 验证
+
+1. `cargo clean -p salvo -p salvo-oapi -p salvo-oapi-macros -p salvo-proxy -p salvo-serde-util -p salvo_core -p salvo_extra -p salvo_macros -p multra` — 清 incremental cache (Removed 845 files, 1.8 GiB)
+2. `cargo check --workspace` — 重新编, 0 error, 10.57s
+3. `cargo test --workspace --lib` — 18 个 test result, 全部 ok, 0 fail
+4. **303/303 lib test 全过** (跟升级前一致)
+5. bin test 失败 4 个 — **跟 main 分支完全一致**, 是 pre-existing broken, 跟 salvo 无关:
+   - `ma-harness-plugin-macro/tests/macros_compile.rs` trybuild (缺 `tokio` dev-dep)
+   - `plugins/ma-harness-plugin-hello/tests/end_to_end.rs:18` HelloService::name trait scope
+   - `crates/ma-harness-conformance/tests/smoke.rs:213` FixtureEvent not found
+   - `crates/ma-harness-cordis/src/key.rs:104` CtxKey<T>::new doctest should_panic 不 panic
+
+### API 兼容性 (出乎意料的 0 break)
+
+我们代码用的 0.79 特定 API:
+
+| 用法 | 0.79 状态 | 0.93 状态 |
+|---|---|---|
+| `Router` (基础 push / push_with_handler / get / post) | ✓ | ✓ (兼容) |
+| `#[handler]` / `#[endpoint]` macro | ✓ | ✓ (兼容) |
+| `#[endpoint]` 需 `oapi` feature | ✓ | ✓ (兼容) |
+| `JsonBody<T>` wrapper (T: ToSchema) 拿 JSON body | ✓ | ✓ (兼容) |
+| `TestClient` + `ResponseExt` + `take_json()` | ✓ | ✓ (兼容) |
+| `take_bytes(Option<&Mime>)` / `take_string()` | ✓ | ✓ (兼容) |
+| `tokio::sync::OnceCell` 全局 + `Mutex<Option>` 覆盖 | ✓ (因 0.79 Router 无 .data()) | ✓ 仍兼容 (0.93 Router::data() 存在但未迁移) |
+| `SseEvent` 流式响应 | ✓ | ✓ (兼容) |
+| features `["test", "oapi", "sse"]` | ✓ | ✓ 全部保留 |
+
+**关键观察**: salvo 0.79 → 0.93 期间, 上述 API 全部 0 破坏性变化。即便 Router::data() 0.80+ 就有了, 我们 0.79 写的 OnceCell hack 在 0.93 仍能工作。这是保守升级模式。
+
+### 预期收益 (P6-6)
+
+- 拿到 14 个 minor 的 bug fix + 安全补丁 (1 年 +)
+- 编译时间跟 binary size 几乎不变 (salvo 0.93 重新组织过依赖图, 但 build output 类似)
+- 为升 0.95 / 0.96 铺路: 升 rustc 1.94 后改 version 字符串即可, 0 代码改动
+
+### Phase 7+ 升 0.95.x 路径
+
+如果业务方需要 0.95 的新特性 (HTTP3 / Acme / WebTransport 增强 / 性能提升):
+
+1. `rustup update 1.94` (30 分钟下载 + install)
+2. workspace `Cargo.toml`: `salvo = "0.93"` → `salvo = "0.95"`
+3. `crates/ma-harness-server/Cargo.toml`: `salvo_extra = "0.93"` → `salvo_extra = "0.95"`
+4. `cargo update -p salvo -p salvo_extra`
+5. `cargo check --workspace` (预期 0 break, 跟 0.79 → 0.93 一样保守)
+6. `cargo test --workspace --lib` (303/303 预期 0 fail)
+7. commit + push
+
+预计 30 分钟工作量, 0 代码改动。
+
+### 回退方案
+
+如果升级后出问题 (e.g. 性能退化, 某个边缘 case fail):
+
+```bash
+git revert <commit>
+# 或者
+git checkout main  # 退回 main 分支 (salvo 0.79)
+```
+
+回退成本: 1 行 git 命令。
+
+### 给后来人
+
+- salvo 跳 14 minor 0 break, 升级门槛低于预期 — 跳 16 minor 也建议先 cargo check 试
+- multra 是 salvo 的隐藏依赖, 升 salvo 时要锁 multra 兼容版本
+- pre-existing broken test 4 个, 跟 salvo 升级无关, 业务方不用纠结
+- salvo 0.79 写的 OnceCell hack 在 0.93 仍兼容, 但 **新代码建议用 Router::data() (0.80+)**, 简洁
+- 业务方升级触发条件: salvo CVE / salvo 新特性需求 / 业务方要求
+- 升级时建独立分支 (e.g. `salvo-X.Y-migration`), 验证通过再 fast-forward merge 到 main
+

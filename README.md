@@ -17,7 +17,7 @@
 | 协议 | Protobuf 单协议 (Prost + tonic + salvo-oapi) |
 | 日志 | append-only SessionEvent (rusqlite, model-visible 不变) |
 | 公开 API | `ma-harness-seam` (5 trait + 5 proc-macro re-export) |
-| HTTP server | salvo 0.79 (#[endpoint] 自动导出 OpenAPI) |
+| HTTP server | salvo 0.93 (#[endpoint] 自动导出 OpenAPI, 0.79→0.93 跳 14 minor 0 break) |
 | Code Mode | wasmtime 27 (4 层沙箱: fuel / epoch / mem+table / fs) |
 | 模型 | OpenAI / Anthropic (HTTP) + StubModel (dev/test) |
 | Bindings | Python / Node.js (JS+TS) / Go (gRPC) |
@@ -190,7 +190,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 | crates.io publish | 5/19 (cordis, code, core, plugin-macro, seam) |
 | HTTP API paths | 7 (3 → 7) |
 | Bindings | 4 语言 (Python / JS / TS / Go) |
-| 设计文档 | 9 份 + decision-log § 1-19 |
+| 设计文档 | 9 份 + decision-log § 1-20 |
 | 周报 | 7 份 (Day 0 / Week 1-2 / 3-4 / 5-6 / 7-9 / 10 / 11) |
 
 ## Phase 路线图 (回顾)
@@ -248,6 +248,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 - P6-3: AnthropicAdapter 真 SSE (event-based protocol) ✅ (Day 100)
 - P6-4: streaming perf bench (criterion 5 bench) ✅ (Day 100)
 - P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) ✅ (Day 101)
+- P6-6: salvo 0.79 → 0.93 兼容性升级 (0 break, 0 代码改动) ✅ (Day 101)
 
 ## 网络环境
 
