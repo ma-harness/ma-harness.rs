@@ -36,6 +36,12 @@ static GLOBAL_ADAPTER: OnceCell<Arc<dyn ModelAdapter>> = OnceCell::const_new();
 static GLOBAL_SESSION_STORE: parking_lot::Mutex<Option<Arc<dyn SessionStore>>> =
     parking_lot::Mutex::new(None);
 
+/// 全局 EventLog 容器 (Phase 5.3 / Day 92).
+///
+/// 跟 GLOBAL_SESSION_STORE 同样模式: Mutex 允许 test 多次覆盖.
+static GLOBAL_EVENT_LOG: parking_lot::Mutex<Option<Arc<EventLog>>> =
+    parking_lot::Mutex::new(None);
+
 /// 初始化全局 adapter (跟 `run_router` 配对调用)
 pub fn set_global_adapter(adapter: Arc<dyn ModelAdapter>) {
     let _ = GLOBAL_ADAPTER.set(adapter);
@@ -51,6 +57,21 @@ pub fn set_global_session_store(store: Arc<dyn SessionStore>) {
 /// 清除全局 SessionStore (测试用, 跑下一个 test 前调)
 pub fn clear_global_session_store() {
     *GLOBAL_SESSION_STORE.lock() = None;
+}
+
+/// 初始化全局 EventLog (跟 `run_router_with_log_and_store` 配对调用)
+pub fn set_global_event_log(log: Arc<EventLog>) {
+    *GLOBAL_EVENT_LOG.lock() = Some(log);
+}
+
+/// 清除全局 EventLog (测试用)
+pub fn clear_global_event_log() {
+    *GLOBAL_EVENT_LOG.lock() = None;
+}
+
+/// 拿 EventLog (从 GLOBAL_EVENT_LOG), 拿不到返 None
+fn get_global_event_log() -> Option<Arc<EventLog>> {
+    GLOBAL_EVENT_LOG.lock().clone()
 }
 
 /// 拿 SessionStore (从 GLOBAL_SESSION_STORE), 拿不到返 None
@@ -102,7 +123,29 @@ pub fn run_router_with_store(
         )
 }
 
-/// /v1/sessions 嵌套 router (Phase 5.1 / Day 90)
+/// 构造含 /v1/runs + /v1/sessions + /v1/sessions/{id}/events 的 Router (Phase 5.3 / Day 92)
+///
+/// 全 3 个 global 都设: adapter + session store + event log.
+/// event log 必传才能用 /events endpoint (跟 SessionServiceImpl 风格一致).
+pub fn run_router_with_log_and_store(
+    adapter: Arc<dyn ModelAdapter>,
+    log: Arc<EventLog>,
+    store: Arc<dyn SessionStore>,
+) -> Router {
+    set_global_adapter(adapter);
+    set_global_event_log(log);
+    set_global_session_store(store);
+    Router::new()
+        .push(Router::with_path("health").get(health))
+        .push(Router::with_path("version").get(version))
+        .push(
+            Router::with_path("v1")
+                .push(Router::with_path("runs").post(create_run_handler))
+                .push(sessions_router_with_events()),
+        )
+}
+
+/// /v1/sessions 嵌套 router (Phase 5.1 / Day 90, 不含 events endpoint)
 ///
 /// - GET /v1/sessions — list
 /// - POST /v1/sessions — create
@@ -115,6 +158,22 @@ fn sessions_router() -> Router {
         .push(Router::with_path("{id}").get(get_session_handler))
         .push(
             Router::with_path("{id}").push(Router::with_path("close").post(close_session_handler)),
+        )
+}
+
+/// /v1/sessions 嵌套 router (Phase 5.3 / Day 92, 含 events endpoint)
+///
+/// 同 sessions_router, 加 GET /v1/sessions/{id}/events.
+fn sessions_router_with_events() -> Router {
+    Router::with_path("sessions")
+        .get(list_sessions_handler)
+        .post(create_session_handler)
+        .push(Router::with_path("{id}").get(get_session_handler))
+        .push(
+            Router::with_path("{id}").push(Router::with_path("close").post(close_session_handler)),
+        )
+        .push(
+            Router::with_path("{id}").push(Router::with_path("events").get(get_session_events_handler)),
         )
 }
 
@@ -402,6 +461,83 @@ async fn close_session_handler(id: PathParam<String>) -> Result<Json<ProtoSessio
     Ok(Json(proto_session_to_json(&s)))
 }
 
+// ============================================================================
+// GET /v1/sessions/{id}/events — Phase 5.3 (Day 92)
+// 跟 gRPC SessionService.GetSessionEvents 对齐
+// ============================================================================
+
+/// GET /v1/sessions/{id}/events 响应
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct GetSessionEventsResponse {
+    /// session id
+    pub session_id: String,
+    /// 事件列表 (model_visible only, 按 seq 升序)
+    pub events: Vec<SessionEventJson>,
+    /// 事件总数 (拿前)
+    pub total: u32,
+}
+
+/// 单个 event 的 JSON 表示
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SessionEventJson {
+    /// 自增 seq
+    pub seq: i64,
+    /// 事件类型 (i32, 跟 EventType enum 对齐)
+    pub event_type: i32,
+    /// 严重度 (i32, 跟 Severity enum 对齐)
+    pub severity: i32,
+    /// 业务方 payload (JSON 字符串, 跟 proto SessionEvent.payload_json 对齐)
+    pub payload_json: Option<String>,
+    /// 业务方 session id (跟 URL 里的 {id} 一样, 冗余方便客户端)
+    pub session_id: String,
+    /// 事件时间 (RFC3339 字符串)
+    pub timestamp: String,
+}
+
+/// GET /v1/sessions/{id}/events — 拿 session 的 model_visible events
+///
+/// 可选 query param `limit` (默认 50, 最大 1000).
+#[endpoint]
+async fn get_session_events_handler(
+    id: PathParam<String>,
+) -> Result<Json<GetSessionEventsResponse>, salvo::Error> {
+    let log = get_global_event_log().ok_or_else(|| {
+        salvo::Error::other(
+            "EventLog 未初始化. 业务方应调 run_router_with_log_and_store(adapter, log, store) 而非 run_router_with_store",
+        )
+    })?;
+    let session_id = id.0.clone();
+    let id_for_log = id.0;
+    // 同步 EventLog::get_model_visible (走 rusqlite, 阻塞)
+    let page = tokio::task::spawn_blocking(move || log.get_model_visible(&id_for_log))
+        .await
+        .map_err(|e| salvo::Error::other(format!("join error: {e}")))?
+        .map_err(|e| salvo::Error::other(format!("get model visible: {e}")))?;
+
+    let total = page.events.len() as u32;
+    let events: Vec<SessionEventJson> = page
+        .events
+        .into_iter()
+        .map(|stored| {
+            // ts 是 chrono::DateTime<Utc> (不是 prost Timestamp), 直接 RFC3339
+            SessionEventJson {
+                seq: stored.seq,
+                event_type: stored.event.event_type as i32,
+                severity: stored.event.severity as i32,
+                payload_json: stored.event.payload_json,
+                session_id: stored.event.session_id,
+                timestamp: stored.event.ts.to_rfc3339(),
+            }
+        })
+        .collect();
+
+    Ok(Json(GetSessionEventsResponse {
+        session_id,
+        events,
+        total,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     // 2026-08-18: 用 salvo::test::TestClient 标准 API
@@ -483,6 +619,16 @@ mod tests {
         // 先清, 再设 (避免跟其他并行 test 抢)
         clear_global_session_store();
         run_router_with_store(Arc::new(StubModelAdapter), store)
+    }
+
+    fn full_router() -> Router {
+        // 拿 log + store 都设, 走 /v1/sessions/{id}/events
+        let log = EventLog::open_in_memory().unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(crate::session_store::InMemoryStore::new());
+        let _ = SESSION_TEST_LOCK.lock();
+        clear_global_session_store();
+        clear_global_event_log();
+        run_router_with_log_and_store(Arc::new(StubModelAdapter), Arc::new(log), store)
     }
 
     /// 拿 session-test lock (整个 test 期间持有)
@@ -595,4 +741,70 @@ mod tests {
             resp.status_code
         );
     }
+
+    // === P5-3 (Day 92): HTTP /v1/sessions/{id}/events 跟 gRPC GetSessionEvents 对齐 ===
+
+    /// /events endpoint 拿指定 session 的 events
+    #[tokio::test]
+    async fn get_v1_session_events_returns_events() {
+        let _lock = session_test_lock();
+        // 1. 准备 log, append 2 个 event for session "ev-1"
+        let log = EventLog::open_in_memory().unwrap();
+        for evt_type in [
+            ma_harness_core::EventType::SessionStart,
+            ma_harness_core::EventType::ToolCall,
+        ] {
+            let mut ev = ma_harness_core::SessionEvent::new("ev-1", evt_type);
+            ev.payload_json = Some(format!(r#"{{"tool":"echo","seq":{}}}"#, evt_type as i32));
+            let _ = log.append(ev);
+        }
+        // 别的 session, 不应返回
+        let mut other = ma_harness_core::SessionEvent::new("other", ma_harness_core::EventType::SessionStart);
+        other.payload_json = Some(r#"{"session":"other"}"#.to_string());
+        let _ = log.append(other);
+
+        // 2. 构造 router
+        let store: Arc<dyn SessionStore> = Arc::new(crate::session_store::InMemoryStore::new());
+        clear_global_session_store();
+        clear_global_event_log();
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(StubModelAdapter),
+            Arc::new(log),
+            store,
+        ));
+
+        // 3. 拿 ev-1 events
+        let mut resp = TestClient::get("http://localhost/v1/sessions/ev-1/events")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let json: GetSessionEventsResponse = resp.take_json().await.unwrap();
+        assert_eq!(json.session_id, "ev-1");
+        // 至少 2 个 (SessionStart + ToolCall)
+        assert!(json.total >= 2, "ev-1 应有 >= 2 events, got {}", json.total);
+        assert!(json.events.len() >= 2);
+        // payload_json 应有
+        for e in &json.events {
+            assert!(e.payload_json.is_some(), "payload 应有, got {:?}", e);
+        }
+    }
+
+    /// /events endpoint 没设 log 时 404
+    #[tokio::test]
+    async fn get_v1_session_events_no_log_404() {
+        let _lock = session_test_lock();
+        // 用 session_router() (无 log)
+        let service = Service::new(session_router());
+        let resp = TestClient::get("http://localhost/v1/sessions/some-id/events")
+            .send(&service)
+            .await;
+        // 没 log 时该 endpoint 不存在 → 404
+        assert_eq!(
+            resp.status_code,
+            Some(salvo::http::StatusCode::NOT_FOUND),
+            "/events endpoint 不应存在 (session_router 不含), got {:?}",
+            resp.status_code
+        );
+    }
+
 }

@@ -291,12 +291,16 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
     // salvo HTTP server
     // 2026-08-18 (Day 52): TcpAcceptor::try_from(tokio::net::TcpListener) — salvo 0.79 API
     // 2026-08-19 (Day 90): HTTP /v1/sessions 需要 SessionStore, 走 run_router_with_store (跟 gRPC 共用)
+    // 2026-08-19 (Day 92): HTTP /v1/sessions/{id}/events 需要 EventLog, 走 run_router_with_log_and_store
     use salvo::conn::tcp::TcpAcceptor;
     let http_addr = format!("0.0.0.0:{}", http_port);
     let http_addr_parse: std::net::SocketAddr = http_addr.parse()
         .with_context(|| format!("invalid http_port: {}", http_port))?;
-    let http_router = ma_harness_server::http::run_router_with_store(
+    // 跟 gRPC 共用同一个 EventLog (in-memory) + SessionStore
+    let http_event_log = EventLog::open_in_memory()?;
+    let http_router = ma_harness_server::http::run_router_with_log_and_store(
         Arc::new(ma_harness_core::StubModelAdapter),
+        Arc::new(http_event_log),
         session_store,
     );
     let tokio_listener = tokio::net::TcpListener::bind(http_addr_parse).await
@@ -671,11 +675,12 @@ fn export_openapi(output: &std::path::Path) -> Result<()> {
     use ma_harness_core::StubModelAdapter;
     use std::sync::Arc;
 
-    // 构造完整 router (含 /v1/runs + /v1/sessions) + stub adapter + InMemoryStore
-    // run_router_with_store 内部会 set_global_adapter + set_global_session_store
+    // 构造完整 router (含 /v1/runs + /v1/sessions + /v1/sessions/{id}/events) + stub + InMemoryStore
+    // run_router_with_log_and_store 内部会 set 3 个 global
     // OpenAPI 导出只关心 router 结构, 不发真 HTTP
-    let router = ma_harness_server::http::run_router_with_store(
+    let router = ma_harness_server::http::run_router_with_log_and_store(
         Arc::new(StubModelAdapter),
+        Arc::new(ma_harness_core::EventLog::open_in_memory().map_err(|e| anyhow::anyhow!("event log: {e}"))?),
         Arc::new(ma_harness_server::InMemoryStore::new()),
     );
     let doc = OpenApi::new("ma-harness API", "0.1.0").merge_router(&router);
