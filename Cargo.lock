@@ -2122,6 +2122,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "futures",
  "ma-harness-code",
@@ -2135,7 +2136,9 @@ dependencies = [
  "ma-harness-seam",
  "ma-harness-server",
  "ma-harness-tui",
+ "prost-types",
  "salvo",
+ "tempfile",
  "tokio",
  "tonic",
  "tracing",

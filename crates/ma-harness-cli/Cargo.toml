@@ -40,3 +40,8 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+chrono = { workspace = true }
+prost-types = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

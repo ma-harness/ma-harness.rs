@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand};
 use ma_harness_conformance::{
     fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat, ReportWriter,
 };
-use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
+use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, SessionEvent, StubModelAdapter};
 // 2026-08-18 (Day 52): ma_harness_proto 恢复 (用本地 vendor/protoc), gRPC service 恢复
 use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
@@ -26,7 +26,7 @@ use ma_harness_seam::{PluginLoader, PluginRegistry};
 // Phase 2.2 (T2.2): 引用 hello plugin 触发 link, inventory::submit! 才有 effect
 #[allow(unused_imports)]
 use ma_harness_plugin_hello as _hello;
-use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
+use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl, SessionStore};
 
 #[derive(Parser, Debug)]
 #[command(name = "mah", about = "ma-harness AI agent orchestrator")]
@@ -79,6 +79,19 @@ enum Commands {
     Events {
         /// Session ID
         session: String,
+    },
+    /// **P5-5 (Day 94)**: Session CRUD via local SqliteStore + EventLog
+    ///
+    /// 不连 server, 业务方传 --store-path 直接读本地 db
+    /// (跟 `mah start --store-path <x>` 启动的 db 一致就能查)
+    ///
+    /// 例子:
+    ///   mah sessions list --store-path ~/.ma-harness/sessions.db
+    ///   mah sessions get <id> --store-path <db>
+    ///   mah sessions events <id> --log <events.db>
+    Sessions {
+        #[command(subcommand)]
+        action: SessionsAction,
     },
     /// 跑 conformance fixture, 比对实际事件 vs 期望, 出报告
     ///
@@ -170,6 +183,33 @@ enum Commands {
     },
 }
 
+/// **P5-5 (Day 94)**: Session CRUD sub-actions
+#[derive(Subcommand, Debug)]
+enum SessionsAction {
+    /// 列出所有 session (走本地 SqliteStore)
+    List {
+        /// SqliteStore 路径 (跟 `mah start --store-path <x>` 启动的 db 一致)
+        #[arg(long)]
+        store_path: PathBuf,
+    },
+    /// 拿单个 session metadata
+    Get {
+        /// SqliteStore 路径
+        #[arg(long)]
+        store_path: PathBuf,
+        /// Session ID
+        id: String,
+    },
+    /// 拿 session 的 events (走本地 EventLog)
+    Events {
+        /// EventLog sqlite 路径 (跟 `mah start` 启动时拿的 events.db 一致)
+        #[arg(long)]
+        log: PathBuf,
+        /// Session ID
+        session: String,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum OpenApiAction {
     /// 从 server router 导出当前 OpenAPI spec
@@ -225,6 +265,11 @@ async fn main() -> Result<()> {
         Commands::Plugins => list_plugins(),
         Commands::LoadPlugin { name, ctx_id } => load_plugin(&name, &ctx_id),
         Commands::Events { session } => list_events(&session),
+        Commands::Sessions { action } => match action {
+            SessionsAction::List { store_path } => sessions_list(&store_path),
+            SessionsAction::Get { store_path, id } => sessions_get(&store_path, &id),
+            SessionsAction::Events { log, session } => sessions_events(&log, &session),
+        },
         Commands::Conformance { fixtures, dsh, output, verbose } => {
             run_conformance(&fixtures, dsh, &output, verbose)
         }
@@ -384,6 +429,131 @@ fn list_events(session: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+// ============================================================================
+// P5-5 (Day 94): `mah sessions list/get/events` — 走本地 SqliteStore / EventLog
+// 不连 server, 业务方传 db 路径直接读, debug 工具
+// ============================================================================
+
+/// `mah sessions list --store-path <db>` — 列出 SqliteStore 里所有 session
+fn sessions_list(store_path: &std::path::Path) -> Result<()> {
+    let store = ma_harness_server::SqliteStore::open(store_path)
+        .map_err(|e| anyhow::anyhow!("open sqlite store {}: {e}", store_path.display()))?;
+    let sessions = store
+        .list()
+        .map_err(|e| anyhow::anyhow!("list: {e}"))?;
+    if sessions.is_empty() {
+        println!("(no sessions in {})", store_path.display());
+        return Ok(());
+    }
+    println!("Sessions ({} total) from {}:", sessions.len(), store_path.display());
+    for s in &sessions {
+        let state_name = ma_harness_proto::ma_harness::v1::SessionState::try_from(s.state)
+            .map(|st| format!("{:?}", st))
+            .unwrap_or_else(|_| format!("unknown({})", s.state));
+        let created = s
+            .created_at
+            .as_ref()
+            .map(|t| format_ts(t))
+            .unwrap_or_else(|| "—".to_string());
+        println!(
+            "  {:36}  state={:9}  name={:20}  created={}",
+            &s.id[..36.min(s.id.len())],
+            state_name,
+            format!("{:20}", s.name),
+            created,
+        );
+    }
+    Ok(())
+}
+
+/// `mah sessions get <id> --store-path <db>` — 拿单个 session
+fn sessions_get(store_path: &std::path::Path, id: &str) -> Result<()> {
+    let store = ma_harness_server::SqliteStore::open(store_path)
+        .map_err(|e| anyhow::anyhow!("open sqlite store {}: {e}", store_path.display()))?;
+    match store.get(id) {
+        Ok(Some(s)) => {
+            let state_name = ma_harness_proto::ma_harness::v1::SessionState::try_from(s.state)
+                .map(|st| format!("{:?}", st))
+                .unwrap_or_else(|_| format!("unknown({})", s.state));
+            println!("Session:");
+            println!("  id:     {}", s.id);
+            println!("  name:   {}", s.name);
+            println!("  state:  {} ({})", state_name, s.state);
+            println!("  mode:   {}", s.mode);
+            println!(
+                "  created: {}",
+                s.created_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+            );
+            println!(
+                "  updated: {}",
+                s.updated_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+            );
+            println!(
+                "  closed:  {}",
+                s.closed_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+            );
+            println!("  user_id: {}", s.user_id);
+            if !s.enabled_plugins.is_empty() {
+                println!("  enabled_plugins: {}", s.enabled_plugins.join(", "));
+            }
+        }
+        Ok(None) => {
+            anyhow::bail!("session not found: {id}");
+        }
+        Err(e) => anyhow::bail!("get session: {e}"),
+    }
+    Ok(())
+}
+
+/// `mah sessions events <id> --log <events.db>` — 拿 session 的 events
+fn sessions_events(log_path: &std::path::Path, session: &str) -> Result<()> {
+    let log = EventLog::open(log_path)
+        .map_err(|e| anyhow::anyhow!("open event log {}: {e}", log_path.display()))?;
+    let page = log
+        .get_model_visible(session)
+        .map_err(|e| anyhow::anyhow!("get model visible: {e}"))?;
+    if page.events.is_empty() {
+        println!("(no events for session {} in {})", session, log_path.display());
+        return Ok(());
+    }
+    println!(
+        "Session {} ({} events) from {}:",
+        session,
+        page.events.len(),
+        log_path.display()
+    );
+    for e in &page.events {
+        let payload = e
+            .event
+            .payload_json
+            .as_deref()
+            .unwrap_or("");
+        let payload_short = if payload.len() > 60 {
+            format!("{}...", &payload[..60])
+        } else {
+            payload.to_string()
+        };
+        println!(
+            "  #{} [{}] {:12} {:20} {}",
+            e.seq,
+            e.event.ts.format("%H:%M:%S"),
+            format!("{:?}", e.event.severity).to_lowercase(),
+            format!("{:?}", e.event.event_type),
+            payload_short,
+        );
+    }
+    Ok(())
+}
+
+/// 格式化 prost_types::Timestamp (跟 http.rs 同样的方式)
+fn format_ts(ts: &prost_types::Timestamp) -> String {
+    let secs = ts.seconds;
+    let nanos = ts.nanos as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| format!("{}s+{}ns", secs, nanos))
 }
 
 /// 跑 conformance fixture, 出报告
@@ -839,6 +1009,108 @@ fn print_sandbox_status() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // === P5-5 (Day 94): mah sessions CLI ===
+
+    /// sessions_list 在 db 不存在时报错 (清晰错误信息)
+    #[test]
+    fn sessions_list_missing_db_errors() {
+        let result = sessions_list(&std::path::PathBuf::from("/nonexistent/path/x.db"));
+        assert!(result.is_err());
+    }
+
+    /// sessions_list 走真 SqliteStore, 创 2 session + 验 list 拿到
+    #[test]
+    fn sessions_list_works() {
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("sessions.db");
+        let store = ma_harness_server::SqliteStore::open(&db_path).unwrap();
+        for (id, name) in [("alpha", "first"), ("beta", "second")] {
+            store
+                .create(&ProtoSession {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    state: ProtoSessionState::Active as i32,
+                    mode: OperatingMode::Default as i32,
+                    created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                    updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                    closed_at: None,
+                    metadata: None,
+                    stats: None,
+                    enabled_plugins: vec![],
+                    user_id: String::new(),
+                })
+                .unwrap();
+        }
+        // sessions_list 走 SqliteStore, 不 panic, 返 Result
+        let result = sessions_list(&db_path);
+        assert!(result.is_ok(), "sessions_list 走通: {:?}", result);
+    }
+
+    /// sessions_get 拿存在的 session
+    #[test]
+    fn sessions_get_works() {
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("sessions.db");
+        let store = ma_harness_server::SqliteStore::open(&db_path).unwrap();
+        store
+            .create(&ProtoSession {
+                id: "get-test".to_string(),
+                name: "getname".to_string(),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec!["hello".to_string()],
+                user_id: String::new(),
+            })
+            .unwrap();
+        let result = sessions_get(&db_path, "get-test");
+        assert!(result.is_ok(), "sessions_get 走通: {:?}", result);
+    }
+
+    /// sessions_get 拿不存在的 session 返 Err
+    #[test]
+    fn sessions_get_missing_errors() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("sessions.db");
+        let _ = ma_harness_server::SqliteStore::open(&db_path).unwrap();
+        let result = sessions_get(&db_path, "nonexistent-id");
+        assert!(result.is_err(), "missing session 应返 Err");
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("not found"), "错误信息应含 not found, got: {}", err);
+    }
+
+    /// sessions_events 走真 EventLog
+    #[test]
+    fn sessions_events_works() {
+        use ma_harness_core::EventType;
+        let tmpdir = tempfile::tempdir().unwrap();
+        let log_path = tmpdir.path().join("events.db");
+        let log = EventLog::open(&log_path).unwrap();
+        let mut ev = SessionEvent::new("ev-test", EventType::SessionStart);
+        ev.payload_json = Some(r#"{"hello":"world"}"#.to_string());
+        let _ = log.append(ev);
+        let result = sessions_events(&log_path, "ev-test");
+        assert!(result.is_ok(), "sessions_events 走通: {:?}", result);
+    }
+
+    /// format_ts 走 prost_types::Timestamp → RFC3339
+    #[test]
+    fn format_ts_works() {
+        let ts = prost_types::Timestamp::from(std::time::SystemTime::UNIX_EPOCH);
+        let s = format_ts(&ts);
+        assert!(s.contains("1970") || s.contains("+"), "应含 1970 或 + (UTC offset), got {}", s);
+    }
 
     // === T3.3 WAT extraction helper 测试 ===
 
