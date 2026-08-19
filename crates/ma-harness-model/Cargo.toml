@@ -28,5 +28,10 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }
+
+[[bench]]
+name = "streaming"
+harness = false

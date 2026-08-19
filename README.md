@@ -244,7 +244,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 - P6-1: `mah run-stream` CLI (gRPC RunStream 客户端) ✅ (Day 99)
 - P6-2: OpenaiAdapter 真 SSE (reqwest + bytes_stream + parse) ✅ (Day 100)
 - P6-3: AnthropicAdapter 真 SSE (event-based protocol) ✅ (Day 100)
-- P6-4: 性能 benchmark — TODO
+- P6-4: streaming perf bench (criterion 5 bench) ✅ (Day 100)
 - P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) — TODO
 
 ## 网络环境

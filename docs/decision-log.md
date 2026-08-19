@@ -533,3 +533,68 @@ data: {"type":"message_stop"}
 - OpenAI/Anthropic parser 都没处理 keepalive (`:` comment line): 业务方 SSE buffer `\n\n` 切到空 event 静默 skip, 行为正确
 - Phase 7+ 业务方反馈 streaming latency / token rate 时, 加 perf test
 
+
+## 18. Streaming perf benchmark (2026-08-19 / Day 100 / P6-4)
+
+### 目标
+
+P5-6/P6-2/P6-3 streaming infra 落地后, P6-4 跑 criterion 性能 baseline, 业务方优化前后对比, 后续 CI perf regression check 起点.
+
+### Bench 列表 (5 bench, commit TBD)
+
+| Bench | 测什么 | 业务方场景 |
+|---|---|---|
+| `parse_sse_data_line` | OpenAI `data: {json}` 单行 parse | 高 QPS streaming 路径, 每行 ~µs 级 |
+| `parse_sse_event_anthropic` | Anthropic `event: <type>` + `data: {json}` 两行 parse | 跟 OpenAI 对比, 验证 protocol overhead |
+| `stub_complete_stream` | StubModelAdapter 端到端 word-by-word | 测 in-process streaming overhead |
+| `openai_complete_stream_e2e` | OpenAI 端到端 wiremock (含 HTTP) | 测真 HTTP + 解析总 latency |
+| `parse_sse_data_line_throughput` | 同上, group + Throughput::Elements(1) | 测 per-line throughput (Melem/s) |
+
+### Baseline 数字 (1.4 GHz 笔记本, criterion 默认 sample=100 / 3s)
+
+```
+parse_sse_data_line            time:   [1.2965 µs 1.4309 µs 1.5482 µs]
+parse_sse_event_anthropic      time:   [1.1141 µs 1.1485 µs 1.1850 µs]
+stub_complete_stream           time:   [3.7808 µs 3.8346 µs 3.8939 µs]
+openai_complete_stream_e2e     time:   [673.21 µs 692.97 µs 712.75 µs]
+parse_sse_data_line/group      time:   [988.48 ns 1.0032 µs 1.0188 µs]
+                               thrpt:  [981.57 Kelem/s 996.82 Kelem/s 1.0117 Melem/s]
+```
+
+### 业务方怎么读 baseline
+
+- **`parse_sse_data_line` ~1.4 µs**: 1 line parse 开销可忽略, 业务方 1000 token/response ≈ 1.4 ms parse 总开销
+- **`stub_complete_stream` ~3.8 µs**: stub 端到端 (24 word 拆 24 chunk + stream yield), 业务方 in-process 走 <10 µs
+- **`openai_complete_stream_e2e` ~693 µs**: wiremock HTTP latency + parse, 业务方生产 OpenAI 实际 ~200-500ms (网络主导), parser overhead 可忽略
+- **Anthropic parser 比 OpenAI 快 ~20%**: 因为 Anthropic 走 2 行解析但只查 1 个 `text` 字段; OpenAI parser 多 1 个 `choices` array 取
+
+### 关键设计决策
+
+- **`OnceLock<&'static ModelRequest>`**: criterion async iter 要求 `'static` future, ModelRequest 走 OnceLock 一次构造, 后续 iter 拿 `&'static`, 避免每次 iter 重新构造
+- **wiremock 在 iter 内启**: MockServer 不 `Send` 不可 share, 每次 iter 新启一个. 牺牲一些 setup overhead, 换真实 e2e 路径
+- **criterion `async_tokio` feature** (不是 `async_trait`!): criterion 0.5 走 `async_tokio` 拿 `b.to_async(&rt)`, `async_trait` 是错的
+- **业务方加新 bench**: 5 行 pattern, 跟现有 4 个 stub bench 一致. 设计文档 `docs/benchmark-design.md` 留 P6-4 follow-up
+- **不依赖真 LLM key**: 全部 wiremock + stub, 业务方 CI 无 key 也能跑
+
+### 踩坑 (P6-4 阶段 3 个)
+
+1. **criterion `to_async` 找不到方法**: criterion 默认 features 没有 async runtime. 修: 加 `async_tokio` feature (不是 `async_trait`, 早期猜错)
+2. **E0515 cannot return value referencing local variable**: `complete_stream(&req)` 返的 stream 绑 `&'a req`, async move block 跨 await 引用 local req. 修: `OnceLock<&'static ModelRequest>` 拿 `'static` req, async move 干净
+3. **MockServer 不 Send**: 不能跨 `await` 共享. 修: 每次 bench iter 启新 MockServer, 给定 SSE body 复用一个 `String` (轻量 clone, 不影响 benchmark 真实数据)
+
+### 测试
+
+- 5 bench 全跑过 (criterion 0.5 + tokio runtime)
+- workspace 全过 (除 4 pre-existing broken: plugin-macro trybuild / plugin-hello trait scope / conformance FixtureEvent / cordis doctest)
+- 业务方 CI 加 perf regression: `cargo bench --workspace` 跟踪 baseline, > 20% 退化报警
+
+### 给后来人
+
+- 业务方跑 streaming perf: `cargo bench -p ma-harness-model --bench streaming`
+- 加新 bench: 跟 `bench_stub_complete_stream` 同样 pattern, OnceLock + `static_request()`
+- 真 LLM 跑 perf (有 key): 改 `openai_complete_stream_e2e` 用真 endpoint, wiremock 替换, 拿 network latency
+- 跟踪 streaming latency regression: 加 `perf-targets.json` + CI step 比较 baseline, 业务方设阈值 (e.g. < 5x baseline)
+- 不依赖真 LLM: 5 bench 全 stub / wiremock, CI 无 key 也能跑 baseline
+- Phase 7+ 业务方反馈 streaming 卡顿: 先跑 `cargo bench` 看哪个 bench 退化, 再针对性优化
+- 业务方对 streaming latency 严格 (e.g. < 100ms P50): 加 `time` bench + histogram output, criterion 不直接支持, 改用 `divan` 或 `iai`
+
