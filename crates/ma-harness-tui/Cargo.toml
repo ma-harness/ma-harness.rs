@@ -17,6 +17,9 @@ workspace = true
 ma-harness-cordis = { path = "../ma-harness-cordis" }
 ma-harness-core = { path = "../ma-harness-core" }
 ma-harness-seam = { path = "../ma-harness-seam" }
+ma-harness-server = { path = "../ma-harness-server" }  # P4-3: SessionStore trait
+# P4-3: 拿 proto SessionState enum 转 state name
+ma-harness-proto = { path = "../ma-harness-proto" }
 # Phase 3.9: inventory 走 hello plugin 验证
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
 # 外部
@@ -30,3 +33,5 @@ tracing = { workspace = true }
 [dev-dependencies]
 # P4-1: EventLog test
 tempfile = { workspace = true }
+# P4-3: SessionStore test (用 prost_types::Timestamp)
+prost-types = { workspace = true }

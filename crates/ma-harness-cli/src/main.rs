@@ -163,6 +163,10 @@ enum Commands {
         /// 缺省: stub fallback (Phase 3.9 行为)
         #[arg(long)]
         log: Option<std::path::PathBuf>,
+        /// **P4-3**: SessionStore sqlite path (走真 sessions)
+        /// 缺省: 走 EventLog 推 session / 全 stub fallback
+        #[arg(long)]
+        store_path: Option<std::path::PathBuf>,
     },
 }
 
@@ -247,7 +251,7 @@ async fn main() -> Result<()> {
             } => apply_sandbox(read_paths, write_paths, exec_paths, temp_dir),
             SandboxAction::Status => print_sandbox_status(),
         },
-        Commands::Tui { log } => run_tui(log.as_deref()),
+        Commands::Tui { log, store_path } => run_tui(log.as_deref(), store_path.as_deref()),
     }
 }
 
@@ -760,8 +764,27 @@ fn apply_sandbox(
 /// 'q' / Esc / Ctrl-C 退出. 走 ratatui::init() + ratatui::restore() 保证 terminal 状态恢复.
 ///
 /// **P4-1** 增强: log 参数走真 EventLog (sqlite 读), 缺省走 stub.
-fn run_tui(log: Option<&std::path::Path>) -> Result<()> {
-    let mut app = ma_harness_tui::TuiApp::new_with_log(log)
+/// **P4-3** 增强: store_path 参数走真 SessionStore (sqlite 读), 缺省走 log 推 / stub.
+fn run_tui(log: Option<&std::path::Path>, store_path: Option<&std::path::Path>) -> Result<()> {
+    // P4-3: 业务方传 --store-path → SqliteStore 接真 sessions
+    let store: Option<Arc<dyn ma_harness_server::SessionStore>> = match store_path {
+        Some(p) => match ma_harness_server::SqliteStore::open(p) {
+            Ok(s) => {
+                eprintln!("mah tui: session store = sqlite:{}", p.display());
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                eprintln!(
+                    "mah tui: WARN failed to open session store {}: {e}; using stub",
+                    p.display()
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    let mut app = ma_harness_tui::TuiApp::new_with_log_and_store(log, store)
         .map_err(|e| anyhow::anyhow!("init TuiApp: {e}"))?;
     app.run().map_err(|e| anyhow::anyhow!("tui run: {e}"))
 }

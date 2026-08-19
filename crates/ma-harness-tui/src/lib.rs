@@ -31,7 +31,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     DefaultTerminal, Frame,
 };
 use std::sync::Arc;
@@ -39,6 +39,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ma_harness_core::EventLog;
+use ma_harness_server::SessionStore;
 
 /// TUI app state
 pub struct TuiApp {
@@ -50,6 +51,8 @@ pub struct TuiApp {
     plugins: Arc<Mutex<Vec<String>>>,
     /// EventLog 可选 (None = stub fallback)
     event_log: Option<Arc<EventLog>>,
+    /// **P4-3**: SessionStore 可选 (None = fallback stub / event_log 推 session)
+    session_store: Option<Arc<dyn SessionStore>>,
     /// 启动时间
     started_at: Instant,
     /// tick 计数
@@ -108,6 +111,7 @@ impl TuiApp {
             events: Arc::new(Mutex::new(Vec::new())),
             plugins: Arc::new(Mutex::new(Vec::new())),
             event_log,
+            session_store: None,  // P4-3 单独 API: TuiApp::new_with_log_and_store
             started_at: Instant::now(),
             ticks: 0,
         };
@@ -115,7 +119,38 @@ impl TuiApp {
         Ok(app)
     }
 
-    /// 刷新数据 (从 inventory + EventLog / stub)
+    /// **P4-3 (Phase 4) 新增**: 构造 + 接 EventLog + SessionStore
+    ///
+    /// 业务方传:
+    /// - log_path: 走 EventLog 拿真 events (P4-1)
+    /// - store: 走 SessionStore 拿真 sessions (P4-3)
+    /// 都 None → 走 stub fallback
+    pub fn new_with_log_and_store(
+        log_path: Option<&Path>,
+        store: Option<Arc<dyn SessionStore>>,
+    ) -> Result<Self> {
+        // 1. EventLog (同 new_with_log)
+        let event_log = match log_path {
+            Some(p) => match EventLog::open(p) {
+                Ok(log) => Some(Arc::new(log)),
+                Err(_) => None,
+            },
+            None => None,
+        };
+        let app = Self {
+            sessions: Arc::new(Mutex::new(Vec::new())),
+            events: Arc::new(Mutex::new(Vec::new())),
+            plugins: Arc::new(Mutex::new(Vec::new())),
+            event_log,
+            session_store: store,
+            started_at: Instant::now(),
+            ticks: 0,
+        };
+        app.refresh()?;
+        Ok(app)
+    }
+
+    /// 刷新数据 (从 inventory + SessionStore + EventLog / stub)
     fn refresh(&self) -> Result<()> {
         // 1. plugin list (从 inventory, 永远真)
         let plugins: Vec<String> = ma_harness_seam::PluginLoader::list()
@@ -124,16 +159,51 @@ impl TuiApp {
             .collect();
         *self.plugins.lock() = plugins;
 
-        // 2-3. sessions + events: 优先 EventLog, fallback stub
-        if let Some(log) = &self.event_log {
-            self.refresh_from_log(log)?;
+        // 2. sessions: 优先 SessionStore (P4-3), fallback event_log 推 (P4-1), 再 fallback stub
+        if let Some(store) = &self.session_store {
+            self.refresh_sessions_from_store(store);
+        } else if let Some(log) = &self.event_log {
+            self.refresh_sessions_from_log(log);
         } else {
-            self.refresh_stub();
+            self.refresh_sessions_stub();
+        }
+
+        // 3. events: 优先 EventLog, fallback stub
+        if let Some(log) = &self.event_log {
+            self.refresh_events_from_log(log)?;
+        } else {
+            self.refresh_events_stub();
         }
         Ok(())
     }
 
-    fn refresh_from_log(&self, log: &EventLog) -> Result<()> {
+    /// P4-3: 从 SessionStore 拿 session list
+    fn refresh_sessions_from_store(&self, store: &Arc<dyn SessionStore>) {
+        let sessions_vec = store.list().unwrap_or_default();
+        let mut sessions = self.sessions.lock();
+        sessions.clear();
+        for s in sessions_vec.iter().take(20) {
+            // s.state 是 proto i32 (SessionState enum as i32), 转成 enum 变体名
+            use ma_harness_proto::ma_harness::v1::SessionState;
+            let state_name = SessionState::try_from(s.state)
+                .map(|st| format!("{:?}", st))
+                .unwrap_or_else(|_| format!("unknown({})", s.state));
+            sessions.push(SessionRow {
+                id: s.id.clone(),
+                state: state_name,
+                age: s.name.clone(),
+            });
+        }
+        if sessions.is_empty() {
+            sessions.push(SessionRow {
+                id: "(no sessions yet)".to_string(),
+                state: "—".to_string(),
+                age: "—".to_string(),
+            });
+        }
+    }
+
+    fn refresh_sessions_from_log(&self, log: &EventLog) {
         let session_ids = log.list_sessions().unwrap_or_default();
         let mut sessions = self.sessions.lock();
         sessions.clear();
@@ -152,8 +222,9 @@ impl TuiApp {
                 age: "—".to_string(),
             });
         }
-        drop(sessions);
+    }
 
+    fn refresh_events_from_log(&self, log: &EventLog) -> Result<()> {
         let stored = log.recent_events(20).unwrap_or_default();
         let mut events = self.events.lock();
         events.clear();
@@ -169,7 +240,7 @@ impl TuiApp {
         Ok(())
     }
 
-    fn refresh_stub(&self) {
+    fn refresh_sessions_stub(&self) {
         let mut sessions = self.sessions.lock();
         sessions.clear();
         sessions.push(SessionRow {
@@ -177,8 +248,9 @@ impl TuiApp {
             state: "stub".to_string(),
             age: format!("{:.0}s", self.started_at.elapsed().as_secs_f32()),
         });
-        drop(sessions);
+    }
 
+    fn refresh_events_stub(&self) {
         let mut events = self.events.lock();
         events.clear();
         let tick = self.ticks;
@@ -396,7 +468,6 @@ mod tests {
     #[test]
     fn tui_with_real_event_log_reads_sessions() {
         use ma_harness_core::{EventLog, EventType, SessionEvent};
-        use ma_harness_core::event::Severity;
 
         // 1. 准备一个 sqlite, append 2 个 session + 3 events
         let tmpdir = tempfile::tempdir().unwrap();
@@ -450,5 +521,126 @@ mod tests {
         // events 应 fallback 到 stub (20 条)
         let events = app.events.lock();
         assert_eq!(events.len(), 20, "fallback 后 events 应有 20 条");
+    }
+
+    // === P4-3: 接真 SessionStore ===
+
+    /// 业务方传 --store-path <sqlite db> → SessionStore 拿真 sessions (P4-3)
+    /// 走 SqliteStore 写 2 session → TuiApp::new_with_log_and_store → sessions 应含这 2 个
+    #[test]
+    fn tui_with_real_session_store_reads_sessions() {
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        // 1. SqliteStore 写 2 个 session
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&db_path).unwrap();
+
+        for (id, name) in [("s-1", "alpha"), ("s-2", "beta")] {
+            let proto = ProtoSession {
+                id: id.to_string(),
+                name: name.to_string(),
+                state: ProtoSessionState::Active as i32,
+                mode: OperatingMode::Default as i32,
+                created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+                closed_at: None,
+                metadata: None,
+                stats: None,
+                enabled_plugins: vec![],
+                user_id: String::new(),
+            };
+            store.create(&proto).unwrap();
+        }
+
+        // 2. TUI 接 SqliteStore
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(None, Some(store_arc)).unwrap();
+
+        // 3. 验 sessions 含 s-1, s-2
+        let sessions = app.sessions.lock();
+        let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(ids.contains(&"s-1".to_string()), "s-1 应在 sessions: {:?}", ids);
+        assert!(ids.contains(&"s-2".to_string()), "s-2 应在 sessions: {:?}", ids);
+
+        // 4. state 是 "Active" Debug 形式 (ProtoSessionState::Active)
+        for s in sessions.iter() {
+            if s.id == "s-1" || s.id == "s-2" {
+                assert!(
+                    s.state.contains("Active"),
+                    "session {} state 应含 Active, got {}",
+                    s.id,
+                    s.state
+                );
+                // age 是 name
+                assert!(
+                    s.age == "alpha" || s.age == "beta",
+                    "session {} age 应是 name, got {}",
+                    s.id,
+                    s.age
+                );
+            }
+        }
+    }
+
+    /// SessionStore 跟 EventLog 优先级: 都传 → store 拿 sessions, log 拿 events (P4-3)
+    #[test]
+    fn tui_store_takes_priority_over_event_log_for_sessions() {
+        use ma_harness_core::{EventLog, EventType, SessionEvent};
+        use ma_harness_server::{SessionStore, SqliteStore};
+        use ma_harness_proto::ma_harness::v1::{
+            OperatingMode, Session as ProtoSession, SessionState as ProtoSessionState,
+        };
+
+        // 1. EventLog: 含 session "log-only", 但没 "store-only"
+        let tmpdir = tempfile::tempdir().unwrap();
+        let log_path = tmpdir.path().join("events.db");
+        let log = EventLog::open(&log_path).unwrap();
+        let mut ev = SessionEvent::new("log-only", EventType::SessionStart);
+        ev.payload_json = Some(r#"{"session":"log-only"}"#.to_string());
+        let _ = log.append(ev);
+
+        // 2. SessionStore: 含 session "store-only", 但没 "log-only"
+        let store_path = tmpdir.path().join("sessions.db");
+        let store = SqliteStore::open(&store_path).unwrap();
+        let proto = ProtoSession {
+            id: "store-only".to_string(),
+            name: "store-session".to_string(),
+            state: ProtoSessionState::Active as i32,
+            mode: OperatingMode::Default as i32,
+            created_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            updated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            closed_at: None,
+            metadata: None,
+            stats: None,
+            enabled_plugins: vec![],
+            user_id: String::new(),
+        };
+        store.create(&proto).unwrap();
+
+        // 3. TUI 都接 (store 优先)
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let app = TuiApp::new_with_log_and_store(Some(&log_path), Some(store_arc)).unwrap();
+
+        // 4. sessions 应是 store 拿的: "store-only" 在, "log-only" 不在
+        let sessions = app.sessions.lock();
+        let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(
+            ids.contains(&"store-only".to_string()),
+            "store-only 应在: {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&"log-only".to_string()),
+            "log-only 不应在 (store 优先): {:?}",
+            ids
+        );
+
+        // 5. events 仍走 EventLog (store 跟 events 无关)
+        let events = app.events.lock();
+        assert!(events.len() >= 1, "events 走 EventLog, 应有 1+ 条");
     }
 }
