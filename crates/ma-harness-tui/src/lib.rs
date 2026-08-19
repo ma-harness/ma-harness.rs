@@ -43,13 +43,19 @@ use std::time::{Duration, Instant};
 use ma_harness_core::EventLog;
 use ma_harness_server::SessionStore;
 
-/// TUI app mode (P5-2 / Day 91)
+/// TUI app mode (P5-2 / Day 91, P10-2.5 加 Approval modal)
 #[derive(Debug, Clone, PartialEq)]
 enum AppMode {
     /// 4-panel 主 view: sessions / plugins / events / status
     List,
     /// Detail view: 单个 session 的 events + metadata
     Detail { session_id: String },
+    /// 审批 modal: tool invoke 需用户 y/n (P10-2.5)
+    Approval {
+        tool_call_id: String,
+        tool_name: String,
+        context: String,
+    },
 }
 
 /// TUI panel focus (P6-5 / Day 101) — j/k 作用在哪一个 panel
@@ -98,6 +104,10 @@ pub struct TuiApp {
     ticks: u64,
     /// **P5-2**: 当前 mode (List / Detail)
     mode: Arc<Mutex<AppMode>>,
+    /// P10-2.5: 当前 pending approval (TUI 主循环轮询 TuiApprover.peek_pending 拿)
+    pending_approval: Arc<Mutex<Option<crate::approval::PendingApproval>>>,
+    /// P10-2.5: TuiApprover 引用 (主循环轮询 + key 路由调 approve/deny)
+    tui_approver: Arc<Mutex<Option<Arc<crate::approval::TuiApprover>>>>,
     /// **P5-2**: List mode 当前选中 session 的 index (j/k 上下移, Sessions panel focus)
     selected_session: Arc<Mutex<usize>>,
     /// **P6-5**: 当前 focus panel (j/k 作用在哪个 panel)
@@ -141,6 +151,11 @@ struct PersistedState {
 }
 
 impl TuiApp {
+    /// P10-2.5: 业务方装 TuiApprover (主循环会轮询 + key 路由 y/n)
+    pub fn install_tui_approver(&self, approver: Arc<crate::approval::TuiApprover>) {
+        *self.tui_approver.lock() = Some(approver);
+    }
+
     /// 构造一个新 TUI app (无 EventLog, 全 stub fallback)
     pub fn new() -> Result<Self> {
         Self::new_with_log(None)
@@ -177,6 +192,8 @@ impl TuiApp {
             started_at: Instant::now(),
             ticks: 0,
             mode: Arc::new(Mutex::new(AppMode::List)),
+            pending_approval: Arc::new(Mutex::new(None)),
+            tui_approver: Arc::new(Mutex::new(None)),
             selected_session: Arc::new(Mutex::new(0)),
             focus: Arc::new(Mutex::new(Panel::Sessions)),
             events_scroll: Arc::new(Mutex::new(0)),
@@ -221,6 +238,8 @@ impl TuiApp {
             started_at: Instant::now(),
             ticks: 0,
             mode: Arc::new(Mutex::new(AppMode::List)),
+            pending_approval: Arc::new(Mutex::new(None)),
+            tui_approver: Arc::new(Mutex::new(None)),
             selected_session: Arc::new(Mutex::new(0)),
             focus: Arc::new(Mutex::new(Panel::Sessions)),
             events_scroll: Arc::new(Mutex::new(0)),
@@ -509,9 +528,17 @@ impl TuiApp {
                             AppMode::Detail { session_id: _ } => {
                                 self.handle_detail_key(key)?;
                             }
+                            AppMode::Approval { .. } => {
+                                self.handle_approval_key(key)?;
+                            }
                         }
                     }
                 }
+            }
+
+            // 4. P10-2.5: 轮询 pending approval (每 100ms)
+            if last_refresh.elapsed() >= Duration::from_millis(100) {
+                self.poll_approval();
             }
         }
         Ok(())
@@ -593,6 +620,59 @@ impl TuiApp {
         Ok(())
     }
 
+    /// P10-2.5: 轮询 TuiApprover pending 列表, 自动切到 Approval modal
+    fn poll_approval(&self) {
+        // 已经处于 Approval mode, 不重复进
+        {
+            let mode = self.mode.lock();
+            if matches!(*mode, AppMode::Approval { .. }) {
+                return;
+            }
+        }
+        let approver_opt = self.tui_approver.lock().clone();
+        if let Some(approver) = approver_opt {
+            // 拿第一个 pending 当 modal
+            if let Some(pending) = approver.peek_pending().into_iter().next() {
+                *self.mode.lock() = AppMode::Approval {
+                    tool_call_id: pending.tool_call_id,
+                    tool_name: pending.tool_name,
+                    context: pending.context,
+                };
+            }
+        }
+    }
+
+    /// P10-2.5: 审批 modal 按键 (y/n/Esc)
+    fn handle_approval_key(&self, key: crossterm::event::KeyEvent) -> Result<()> {
+        let mode = self.mode.lock().clone();
+        let (tool_call_id, _tool_name) = match mode {
+            AppMode::Approval { tool_call_id, tool_name, .. } => (tool_call_id, tool_name),
+            _ => return Ok(()),
+        };
+        match key.code {
+            crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
+                if let Some(approver) = self.tui_approver.lock().clone() {
+                    approver.approve(&tool_call_id);
+                }
+                *self.mode.lock() = AppMode::List;
+            }
+            crossterm::event::KeyCode::Char('n') | crossterm::event::KeyCode::Char('N') => {
+                if let Some(approver) = self.tui_approver.lock().clone() {
+                    approver.deny(&tool_call_id, "user declined via TUI");
+                }
+                *self.mode.lock() = AppMode::List;
+            }
+            crossterm::event::KeyCode::Esc => {
+                if let Some(approver) = self.tui_approver.lock().clone() {
+                    approver.deny(&tool_call_id, "cancelled via Esc");
+                }
+                *self.mode.lock() = AppMode::List;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// 移动选中 session (clamp 到 [0, len))
     fn move_selection(&self, delta: i64) {
         let sessions = self.sessions.lock();
@@ -664,7 +744,79 @@ impl TuiApp {
         match mode {
             AppMode::List => self.ui_list(frame),
             AppMode::Detail { session_id } => self.ui_detail(frame, &session_id),
+            AppMode::Approval { tool_call_id, tool_name, context } => {
+                self.ui_approval(frame, &tool_call_id, &tool_name, &context)
+            }
         }
+    }
+
+    /// P10-2.5: Approval modal UI (覆盖在 List view 上)
+    fn ui_approval(&self, frame: &mut Frame, tool_call_id: &str, tool_name: &str, context: &str) {
+        use ratatui::layout::{Constraint, Direction, Layout};
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+
+        let area = frame.area();
+        // 60% 宽, 30% 高的 modal, 居中
+        let modal_width = (area.width as f32 * 0.6) as u16;
+        let modal_height = 9u16;
+        let x = (area.width.saturating_sub(modal_width)) / 2;
+        let y = (area.height.saturating_sub(modal_height)) / 2;
+        let modal_area = ratatui::layout::Rect {
+            x: area.x + x,
+            y: area.y + y,
+            width: modal_width,
+            height: modal_height,
+        };
+
+        // 清空 modal 区域 (半透明 overlay 效果简化)
+        frame.render_widget(Clear, modal_area);
+
+        // modal 内容
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(modal_area);
+
+        let title = Paragraph::new("⚠ Approval required")
+            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        frame.render_widget(title, chunks[0]);
+
+        let id_line = Paragraph::new(format!("Tool call: {}", tool_call_id))
+            .style(Style::default().fg(Color::Cyan));
+        frame.render_widget(id_line, chunks[1]);
+
+        let name_line = Paragraph::new(format!("Tool: {}", tool_name))
+            .style(Style::default().fg(Color::White));
+        frame.render_widget(name_line, chunks[2]);
+
+        let ctx_line = Paragraph::new(format!("Context: {}", context))
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(ctx_line, chunks[3]);
+
+        frame.render_widget(
+            Paragraph::new(""),
+            chunks[4],
+        );
+
+        let hint = Paragraph::new("[Y] approve    [N] deny    [Esc] cancel")
+            .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
+        frame.render_widget(hint, chunks[5]);
+
+        // 边框
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+        frame.render_widget(block, modal_area);
     }
 
     /// List mode 4 panel UI (P4-5 布局 + P5-2 高亮选中 + P6-5 focus 高亮 + Events scroll)
@@ -1315,6 +1467,8 @@ mod tests {
                 );
             }
             AppMode::List => panic!("进 detail 后 mode 应是 Detail"),
+            &AppMode::Approval { .. } => panic!("进 detail 后 mode 应是 Detail 或 Approval"),
+            AppMode::Approval { .. } => panic!("进 detail 后 mode 应是 Detail 或 Approval"),
         }
     }
 

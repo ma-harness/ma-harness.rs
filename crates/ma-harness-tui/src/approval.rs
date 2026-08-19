@@ -39,6 +39,17 @@ use parking_lot::Mutex;
 /// P7-2.4: 永远 auto-approve (适合测试 / benchmark)
 pub struct AlwaysApprove;
 
+/// P10-2.5: Pending approval 描述 (TUI modal 显示用)
+///
+/// TuiApprover.peek_pending() 当前返 `(tool_call_id, tool_name, context)` 三元组
+/// (`context` 当前 placeholder). 业务方拿这个 struct 拿完整信息.
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub context: String,
+}
+
 #[async_trait]
 impl ApprovalService for AlwaysApprove {
     async fn request_approval(
@@ -116,13 +127,19 @@ impl TuiApprover {
         }
     }
 
-    /// 业务方 (TUI 主循环) 调: 拿当前最新 pending request
-    pub fn peek_pending(&self) -> Vec<(String, String, String)> {
-        // (tool_call_id, tool_name, context)
+    /// 业务方 (TUI 主循环) 调: 拿当前最新 pending request 列表
+    ///
+    /// v2 TODO: 在 channel service 里存 tool_name + context, 不再 placeholder
+    pub fn peek_pending(&self) -> Vec<PendingApproval> {
+        // 当前 v1 简化: tool_name / context placeholder, v2 跟 ChannelApprovalService 集成存
         self.channel
             .pending_ids()
             .into_iter()
-            .map(|id| (id, "<unknown>".to_string(), "<pending>".to_string()))
+            .map(|id| PendingApproval {
+                tool_call_id: id,
+                tool_name: "<unknown>".to_string(),
+                context: "<pending>".to_string(),
+            })
             .collect()
     }
 
