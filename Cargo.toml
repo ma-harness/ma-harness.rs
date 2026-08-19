@@ -122,6 +122,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # 测试临时文件
 tempfile = "3"
 
+# 编码 (P11-5: vision model 图像 base64)
+base64 = "0.22"
+
 # proc-macro
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"

@@ -26,11 +26,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }  # P11-5: vision model image base64 encoding
 
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }
+tempfile = { workspace = true }  # P11-5: ImageAttachment::from_path test
 
 [[bench]]
 name = "streaming"

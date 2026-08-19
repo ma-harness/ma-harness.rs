@@ -61,6 +61,15 @@ use std::pin::Pin;
 use thiserror::Error;
 
 // ============================================================================
+// P11-5: Multi-modal (vision / audio)
+// ============================================================================
+
+pub mod multimodal;
+pub use multimodal::{
+    build_anthropic_vision_content, build_openai_vision_content, ImageAttachment,
+};
+
+// ============================================================================
 // AdapterError
 // ============================================================================
 
@@ -142,6 +151,28 @@ impl OpenaiAdapter {
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = endpoint.into();
         self
+    }
+
+    /// **P11-5**: 构造 OpenAI Vision 请求 body (text + 1+ images)
+    ///
+    /// 业务方用法 (vision model):
+    /// ```ignore
+    /// let adapter = OpenaiAdapter::new("sk-...").with_model("gpt-4o");
+    /// let body = adapter.build_vision_request_body("describe this image", &[img]);
+    /// ```
+    pub fn build_vision_request_body(
+        &self,
+        text: &str,
+        images: &[crate::multimodal::ImageAttachment],
+    ) -> serde_json::Value {
+        let content = crate::multimodal::build_openai_vision_content(text, images);
+        serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": content}
+            ],
+            "max_tokens": 1024,
+        })
     }
 
     /// 构造 OpenAI Chat Completions 请求 body
@@ -437,6 +468,22 @@ impl AnthropicAdapter {
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = endpoint.into();
         self
+    }
+
+    /// **P11-5**: 构造 Anthropic Vision 请求 body (text + 1+ images)
+    pub fn build_vision_request_body(
+        &self,
+        text: &str,
+        images: &[crate::multimodal::ImageAttachment],
+    ) -> serde_json::Value {
+        let content = crate::multimodal::build_anthropic_vision_content(text, images);
+        serde_json::json!({
+            "model": self.model,
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "user", "content": content}
+            ],
+        })
     }
 
     /// 构造 Anthropic Messages 请求 body
@@ -1524,5 +1571,71 @@ data: {\"type\":\"message_stop\"}\n\n";
         assert_eq!(collected[0], "Hello");
         assert_eq!(collected[1], " world");
         assert_eq!(collected.join(""), "Hello world");
+    }
+
+    // === P11-5: Vision tests ===
+
+    fn png_bytes() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00,
+            0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ]
+    }
+
+    #[test]
+    fn openai_vision_request_body_format() {
+        let img = crate::multimodal::ImageAttachment::from_bytes("image/png", png_bytes());
+        let adapter = OpenaiAdapter::new("sk-test").with_model("gpt-4o");
+        let body = adapter.build_vision_request_body("describe", &[img]);
+
+        // model 应 = gpt-4o
+        assert_eq!(body["model"], "gpt-4o");
+        // messages[0].content 应是 array (text + image)
+        let content = &body["messages"][0]["content"];
+        assert!(content.is_array(), "content should be array, got: {content}");
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "describe");
+        assert_eq!(arr[1]["type"], "image_url");
+        let url = arr[1]["image_url"]["url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn anthropic_vision_request_body_format() {
+        let img = crate::multimodal::ImageAttachment::from_bytes("image/jpeg", vec![0xFF, 0xD8, 0xFF]);
+        let adapter = AnthropicAdapter::new("sk-ant-test").with_model("claude-3-5-sonnet-20241022");
+        let body = adapter.build_vision_request_body("what is this?", &[img]);
+
+        // model 应 = claude-3-5-sonnet
+        assert_eq!(body["model"], "claude-3-5-sonnet-20241022");
+        // Anthropic 没有 system 在 messages 里 (top-level)
+        let content = &body["messages"][0]["content"];
+        assert!(content.is_array());
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "what is this?");
+        assert_eq!(arr[1]["type"], "image");
+        assert_eq!(arr[1]["source"]["type"], "base64");
+        assert_eq!(arr[1]["source"]["media_type"], "image/jpeg");
+        // data 应非空
+        assert!(!arr[1]["source"]["data"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn vision_request_body_no_images_falls_back_to_text() {
+        // 业务方传 0 images, 应只 text content
+        let adapter = OpenaiAdapter::new("sk-test").with_model("gpt-4o-mini");
+        let body = adapter.build_vision_request_body("just text", &[]);
+        let content = &body["messages"][0]["content"];
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "text");
     }
 }
