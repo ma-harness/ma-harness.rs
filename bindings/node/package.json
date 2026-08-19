@@ -7,7 +7,9 @@
     "build": "tsc",
     "build:js": "node compile_proto.js",
     "example": "node example_client.js",
-    "example:ts": "tsc && node dist/example_client.js"
+    "example:ts": "tsc && node dist/example_client.js",
+    "stream": "node stream_client.js",
+    "stream:ts": "tsc && node dist/stream_client.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.10.0",
