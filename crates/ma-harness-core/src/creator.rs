@@ -144,22 +144,87 @@ impl CreatorRegistry {
             .collect()
     }
 
-    /// 编译 (P9-2 v1 简化: 永远返 "not implemented" 错误, v2 走 rustc subprocess)
+    /// 编译 (P10-1 / Day 101)
+    ///
+    /// v1 简化: 标 Loaded (不真编译)
+    /// v2 真编译: 写 plugin 到 `<output_dir>/<name>/Cargo.toml` + `src/lib.rs`,
+    /// 调 `cargo build --release`, 产物 `.so`/`.dll` 走 libloading 加载.
+    ///
+    /// 当前 v2 简化: 检查 source_code 不空 + 长度 < 1MB, 标 Loaded.
+    /// 业务方真要 dynamic plugin 编译需 P10-1.5 (rustc subprocess).
     pub async fn compile(&self, name: &str) -> Result<CompileStatus, CreatorError> {
         let mut plugins = self.plugins.lock();
         let record = plugins
             .get_mut(name)
             .ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
         record.status = CompileStatus::Compiling;
-        // v1: 不真编译, 标 Loaded 直接走 (实际业务方需要真编译时改 v2)
+
+        // 简化校验: source 不空 + 不超大
+        if record.spec.source_code.trim().is_empty() {
+            record.status = CompileStatus::Failed;
+            let err = "source_code is empty".to_string();
+            record.compile_error = Some(err.clone());
+            return Err(CreatorError::Compile(err));
+        }
+        if record.spec.source_code.len() > 1_000_000 {
+            record.status = CompileStatus::Failed;
+            let err = format!(
+                "source_code too large: {} bytes (max 1MB)",
+                record.spec.source_code.len()
+            );
+            record.compile_error = Some(err.clone());
+            return Err(CreatorError::Compile(err));
+        }
+
+        // v1: 标 Loaded (P10-1.5 改真编译)
         record.status = CompileStatus::Loaded;
+        record.compile_error = None;
         Ok(CompileStatus::Loaded)
     }
 
-    /// 加载到 ToolRegistry (P9-2 v1 简化: 占位, 真集成 libloading 留 v2)
+    /// 加载到 ToolRegistry (P9-2 v1 简化: 占位, v2 libloading)
     pub fn load_into(&self, _name: &str, _registry: &ToolRegistry) -> Result<(), CreatorError> {
-        // v1: 简化, 仅 mark as loaded (如果还没 compile)
+        // v1: 简化, 仅 mark as loaded
         Ok(())
+    }
+
+    /// P10-1 v1.5 placeholder: 真正走 rustc subprocess 编译
+    ///
+    /// 当前简化: 仅打印 commands (不真执行), 让业务方知道 P10-1.5 完整版的步骤:
+    /// 1. 写 `<output_dir>/<name>/Cargo.toml` (含 dependencies)
+    /// 2. 写 `<output_dir>/<name>/src/lib.rs` (source_code)
+    /// 3. 调 `cargo build --release` 在 `<output_dir>/<name>/target/`
+    /// 4. libloading 加载 `.so`/`.dll` 拿到 register 函数指针
+    /// 5. 调 register(registry) 把 tool 注入 ToolRegistry
+    pub fn planned_subprocess_commands(&self, name: &str) -> Result<Vec<String>, CreatorError> {
+        let record = self.get(name).ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
+        let dir = self.output_dir.join(&record.spec.name);
+        let src_dir = dir.join("src");
+        let cargo_toml = format!(
+            "[package]\nname = \"{}\"\nversion = \"{}\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n{}\n",
+            record.spec.name,
+            record.spec.version,
+            record.spec.dependencies.join("\n"),
+        );
+        let lib_rs = format!(
+            "// auto-generated from PluginSpec {}\n{}\n\npub fn register() {{\n    // {} entry: {}\n}}\n",
+            record.spec.name,
+            record.spec.source_code,
+            record.spec.name,
+            record.spec.entry_fn,
+        );
+        let commands = vec![
+            format!("mkdir -p {}", src_dir.display()),
+            format!("write {} ({} bytes)", dir.join("Cargo.toml").display(), cargo_toml.len()),
+            format!("write {} ({} bytes)", src_dir.join("lib.rs").display(), lib_rs.len()),
+            format!("cargo build --release --manifest-path={}/Cargo.toml", dir.display()),
+            format!(
+                "load_dylib: {}/target/release/lib{}.so (or .dll on Windows)",
+                dir.display(),
+                record.spec.name.replace('-', "_")
+            ),
+        ];
+        Ok(commands)
     }
 }
 
@@ -272,5 +337,38 @@ mod tests {
         let _ = log;
         let id = factory.create_and_load(sample_spec(), &reg).await.unwrap();
         assert!(!id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compile_empty_source_errors() {
+        let reg = CreatorRegistry::new();
+        let mut spec = sample_spec();
+        spec.source_code = "".into();
+        reg.register_spec(spec).unwrap();
+        let result = reg.compile("test_plugin").await;
+        assert!(matches!(result, Err(CreatorError::Compile(_))));
+        let rec = reg.get("test_plugin").unwrap();
+        assert_eq!(rec.status, CompileStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn compile_oversized_source_errors() {
+        let reg = CreatorRegistry::new();
+        let mut spec = sample_spec();
+        spec.source_code = "x".repeat(1_000_001);
+        reg.register_spec(spec).unwrap();
+        let result = reg.compile("test_plugin").await;
+        assert!(matches!(result, Err(CreatorError::Compile(_))));
+    }
+
+    #[test]
+    fn planned_subprocess_commands_lists_steps() {
+        let reg = CreatorRegistry::new();
+        reg.register_spec(sample_spec()).unwrap();
+        let cmds = reg.planned_subprocess_commands("test_plugin").unwrap();
+        assert!(cmds.iter().any(|c| c.contains("mkdir")));
+        assert!(cmds.iter().any(|c| c.contains("Cargo.toml")));
+        assert!(cmds.iter().any(|c| c.contains("cargo build")));
+        assert!(cmds.iter().any(|c| c.contains("load_dylib")));
     }
 }
