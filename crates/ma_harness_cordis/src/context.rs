@@ -260,6 +260,37 @@ impl Context {
         self.listeners.on(listener);
     }
 
+    /// 订阅事件 E + priority (Phase 2.9 / T2.3)
+    ///
+    /// **priority 升序 dispatch** (低 priority 先 fire). 同 priority 按注册顺序.
+    /// 默认 `on()` 等价于 `on_with_priority(0, listener)`.
+    ///
+    /// 用法:
+    /// ```ignore
+    /// use ma_harness_plugin_macro::dsh_listener;
+    ///
+    /// #[dsh_listener(priority = 10)]
+    /// pub struct HighPriorityListener;
+    ///
+    /// impl Listener<MyEvent> for HighPriorityListener { ... }
+    ///
+    /// // 注册 (DshListener macro 生成 DSH_LISTENER_PRIORITY 常量)
+    /// ctx.on_with_priority::<MyEvent, _>(
+    ///     HighPriorityListener::DSH_LISTENER_PRIORITY,
+    ///     Arc::new(HighPriorityListener),
+    /// );
+    /// ```
+    ///
+    /// **关联 macro**: `#[dsh_listener(priority = N)]` 生成 `DSH_LISTENER_PRIORITY` 常量,
+    /// 业务方传这个常量到 `on_with_priority`.
+    pub fn on_with_priority<E: ListenerEvent, L: Listener<E>>(
+        &self,
+        priority: i32,
+        listener: Arc<L>,
+    ) {
+        self.listeners.on_with_priority(priority, listener);
+    }
+
     /// 订阅异步事件 E
     ///
     /// 跟 `on` 并存, 业务方选 sync / async. 闭包 `async |ctx, ev| { ... }` 自动 impl AsyncListener.

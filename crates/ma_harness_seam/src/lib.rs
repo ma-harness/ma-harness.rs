@@ -35,8 +35,8 @@
 // attribute: dsh_tool, dsh_command, dsh_handler (写 `#[dsh_tool(...)]`)
 // 公开 API 名字保持 dsh_ 开头 (用户一致), derive 没办法, attribute 不变
 pub use ma_harness_plugin_macro::{
-    DshListener, DshService, dsh_command, dsh_handler, dsh_plugin_dual, dsh_service_dual, dsh_tool,
-    on as dsh_listener_on,
+    DshListener, DshService, dsh_command, dsh_handler, dsh_listener_priority, dsh_plugin_dual,
+    dsh_service_dual, dsh_tool, on as dsh_listener_on,
 };
 
 // 2026-08-18: re-export CtxKey + is_snake_case 让 ctx_key! macro 能用

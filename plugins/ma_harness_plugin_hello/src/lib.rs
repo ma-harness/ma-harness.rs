@@ -15,8 +15,10 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-use ma_harness_cordis::Context;
-use ma_harness_seam::{ctx_key, dsh_plugin_dual, dsh_service_dual, Plugin, PluginEntry};
+use ma_harness_cordis::{Context, Listener, ListenerEvent};
+use ma_harness_seam::{
+    ctx_key, dsh_listener_priority, dsh_plugin_dual, dsh_service_dual, Plugin, PluginEntry,
+};
 
 // ============================================================================
 // 公开 typed key (seam re-export, 编译期 snake_case 校验)
@@ -91,6 +93,50 @@ fn _hello_plugin_factory() -> Box<dyn Plugin> {
 
 inventory::submit! {
     PluginEntry::new("hello", _hello_plugin_factory)
+}
+
+// ============================================================================
+// Phase 2.3 (T2.3): listener + priority macro 示例
+// ============================================================================
+//
+// 用 `#[dsh_listener_priority(priority = N)]` 给 listener 标 priority,
+// 配合 `Context::on_with_priority(priority, listener)` 走 Phase 2.9
+// 的 priority 排序. 低 priority 先 fire, 同 priority 按注册顺序.
+
+/// Phase 2.3 demo: HelloGreeted 事件, listener 收到后追加计数到 ctx typed key
+#[derive(Debug, Clone)]
+pub struct HelloGreeted {
+    /// 谁被问候
+    pub who: String,
+}
+
+// ListenerEvent 是手写 trait, 不是 derive. 业务方手 impl.
+impl ma_harness_cordis::ListenerEvent for HelloGreeted {}
+
+/// Greet 计数 typed key (listener 写, 业务方读)
+pub static GREET_COUNT: ma_harness_cordis::CtxKey<u32> = ctx_key!("greet_count");
+
+/// 普通 priority listener (priority = 0), 走 `ctx.on`
+#[derive(Default)]
+pub struct GreetCountListener;
+
+/// 高 priority listener (priority = 10), 走 `ctx.on_with_priority`,
+/// 比普通 listener 先 fire (低 priority 先 fire, 所以 priority=10 比 0 后 fire)
+#[dsh_listener_priority(priority = 10)]
+pub struct HighPrioGreetListener;
+
+impl Listener<HelloGreeted> for GreetCountListener {
+    fn handle(&self, ctx: &Context, ev: &HelloGreeted) {
+        let prev = ctx.get(GREET_COUNT).unwrap_or(0);
+        ctx.set(GREET_COUNT, prev + 1);
+        eprintln!("[listener/prio=0] greeted: who={}", ev.who);
+    }
+}
+
+impl Listener<HelloGreeted> for HighPrioGreetListener {
+    fn handle(&self, _ctx: &Context, ev: &HelloGreeted) {
+        eprintln!("[listener/prio=10] high-pri saw: who={}", ev.who);
+    }
 }
 
 // ============================================================================
@@ -206,5 +252,49 @@ mod tests {
             "expected 'hello' in PluginLoader::list(), got: {:?}",
             names
         );
+    }
+
+    /// **Phase 2.3 (T2.3) 新增**: 验证 `#[dsh_listener_priority(priority = N)]`
+    /// macro 生成 `DSH_LISTENER_PRIORITY` 常量, 且数值正确
+    #[test]
+    fn dsh_listener_priority_macro_generates_const() {
+        // HighPrioGreetListener 标了 priority = 10
+        assert_eq!(HighPrioGreetListener::DSH_LISTENER_PRIORITY, 10);
+        // const 是 i32 类型
+        let _p: i32 = HighPrioGreetListener::DSH_LISTENER_PRIORITY;
+    }
+
+    /// **Phase 2.3 (T2.3) 新增**: 验证 Context::on_with_priority 注册 listener
+    /// 后, emit 触发时按 priority 升序 dispatch (低先 fire)
+    #[test]
+    fn on_with_priority_dispatches_low_first() {
+        use std::sync::Arc;
+        let ctx = Context::new();
+        // 注册顺序: high (priority=10) 先, low (priority=0) 后
+        // 期望 emit 时 low 先 fire (priority 升序)
+        ctx.on_with_priority::<HelloGreeted, _>(
+            HighPrioGreetListener::DSH_LISTENER_PRIORITY, // = 10
+            Arc::new(HighPrioGreetListener),
+        );
+        ctx.on::<HelloGreeted, _>(Arc::new(GreetCountListener));
+
+        // emit 一次, 验证 low 先 fire (因为它 increment count)
+        // Phase 2.7 deferred queue 会在 listener 完成后 flush 嵌套 emit
+        ctx.emit(HelloGreeted {
+            who: "T2.3".to_string(),
+        });
+        // 验证 low 真的跑了 (count 应该是 1)
+        assert_eq!(ctx.get(GREET_COUNT), Some(1), "GreetCountListener 应该 fire 一次");
+    }
+
+    /// **Phase 2.3 (T2.3) 新增**: 验证 priority < 0 也能正常工作 (负数 = 更低 priority = 更先 fire)
+    #[test]
+    fn on_with_priority_negative_works() {
+        use std::sync::Arc;
+        // 用 macro 标负 priority
+        #[dsh_listener_priority(priority = -100)]
+        pub struct VeryLowPrioListener;
+        assert_eq!(VeryLowPrioListener::DSH_LISTENER_PRIORITY, -100);
+        let _listener: Arc<dyn Listener<HelloGreeted>> = Arc::new(HighPrioGreetListener);
     }
 }

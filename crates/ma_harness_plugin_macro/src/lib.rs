@@ -139,6 +139,104 @@ pub fn on(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 // ============================================================================
+// #[dsh_listener_priority(priority = N)] — Phase 2.3 / T2.3
+// ============================================================================
+//
+// 给 listener struct 标 priority 常量, 跟 `Context::on_with_priority` 配合.
+//
+// # 用法
+//
+// ```ignore
+// use ma_harness_plugin_macro::dsh_listener_priority;
+// use ma_harness_cordis::{Context, Listener, ListenerEvent};
+//
+// #[dsh_listener_priority(priority = 10)]
+// pub struct HighPriorityLogger;
+//
+// #[derive(ListenerEvent)]
+// pub struct LogEvent { msg: String }
+//
+// impl Listener<LogEvent> for HighPriorityLogger {
+//     fn handle(&self, _ctx: &Context, _ev: &LogEvent) {
+//         println!("[HIGH] {}", _ev.msg);
+//     }
+// }
+//
+// // 注册 (用 macro 生成的 DSH_LISTENER_PRIORITY 常量)
+// ctx.on_with_priority::<LogEvent, _>(
+//     HighPriorityLogger::DSH_LISTENER_PRIORITY,
+//     Arc::new(HighPriorityLogger),
+// );
+// ```
+//
+// # attribute
+//
+// - `priority = N` — i32 整数, 低 priority 先 dispatch. 缺省 0 (跟 `ctx.on` 等价).
+//
+// # 跟现有 `#[derive(DshListener)]` 关系
+//
+// 互不冲突. derive 是 marker const, attribute 是 priority const.
+// 业务方可以同时用:
+// ```ignore
+// #[derive(DshListener)]
+// #[dsh_listener_priority(priority = 5)]
+// pub struct MyListener;
+// ```
+
+/// 解析 `priority = N` 形式 (单 key, i32)
+#[derive(Default, Debug)]
+struct ListenerPriorityAttrs {
+    priority: Option<i32>,
+}
+
+impl Parse for ListenerPriorityAttrs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut priority: Option<i32> = None;
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            if key != "priority" {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "dsh_listener_priority: only `priority = N` supported",
+                ));
+            }
+            input.parse::<Token![=]>()?;
+            let lit: syn::LitInt = input.parse()?;
+            priority = Some(lit.base10_parse::<i32>()?);
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self { priority })
+    }
+}
+
+#[proc_macro_attribute]
+pub fn dsh_listener_priority(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attrs: ListenerPriorityAttrs = syn::parse2(attr.into()).unwrap_or_default();
+    let priority = attrs.priority.unwrap_or(0);
+    let input: DeriveInput = parse_macro_input!(item as DeriveInput);
+
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+    let attrs_doc = &input.attrs;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let expanded = quote! {
+        #(#attrs_doc)*
+        #vis struct #struct_name #impl_generics #where_clause;
+
+        impl #impl_generics #struct_name #ty_generics #where_clause {
+            /// **Phase 2.3 (T2.3)**: `#[dsh_listener_priority(priority = N)]` macro 生成的常量.
+            /// 配合 `Context::on_with_priority(priority, listener)` 显式 priority 注册.
+            /// 低 priority 先 dispatch. 同 priority 按注册顺序.
+            pub const DSH_LISTENER_PRIORITY: i32 = #priority;
+        }
+    };
+    expanded.into()
+}
+
+// ============================================================================
 // #[dsh_tool] — attribute (model-callable 工具)
 // ============================================================================
 
