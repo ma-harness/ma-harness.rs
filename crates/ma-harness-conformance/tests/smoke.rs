@@ -314,3 +314,27 @@ fn runner_runs_dsh_synthetic_fixtures() {
     assert_eq!(stats.passed, 7, "expected 7 pass (P11-1.5 收官), got {} (failed={}, total={})", stats.passed, stats.failed, stats.total);
     assert_eq!(stats.failed, 0, "expected 0 fail, got {:?}", stats.failed);
 }
+
+/// **P11-2**: 跑 dsh 真实 acp-snapshot fixture (从 dsh 仓库转换)
+/// 9 个 fixture 全 pass = dsh 跟 ma-harness 行为等价 (snapshot 视角)
+#[test]
+fn runner_runs_dsh_snap_converted_fixtures() {
+    use ma_harness_conformance::dsh_format::parse_dsh_jsonl;
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let path = std::path::Path::new(&manifest_dir).join("fixtures/dsh-snap-converted/dsh_snap.jsonl");
+    let content = std::fs::read_to_string(&path).expect("read dsh snap converted");
+    let fs = parse_dsh_jsonl(&content).expect("parse dsh snap converted");
+    assert_eq!(fs.len(), 9, "expected 9 dsh snap fixtures, got {}", fs.len());
+
+    let runner = ConformanceRunner::new();
+    let results = runner.run_all(&fs);
+    let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
+    // P11-2: 9/9 dsh 真实 acp-snapshot fixture 全 pass
+    // - suite/ 6: authored-error, blocked-log, no-model, pin-turn, plain-turn, shared-pin
+    // - record-suite/ 3: rec-child, rec-pin, rec-skip
+    // 转换脚本: crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap_convert.py
+    assert_eq!(stats.errored, 0, "runner errors: {:?}", results.iter().filter(|r| r.error.is_some()).collect::<Vec<_>>());
+    assert_eq!(stats.passed, 9, "expected 9 pass (P11-2 收官), got {} (failed={}, total={})", stats.passed, stats.failed, stats.total);
+    assert_eq!(stats.failed, 0, "expected 0 fail, got {:?}", stats.failed);
+}

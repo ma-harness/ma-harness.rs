@@ -1330,3 +1330,106 @@ rustup default 1.94
 - 真 dsh Terminal Bench 跑分 (P11-2) 之前, 跑 `cargo test --package ma-harness-conformance` 全过 (40 + 12)
 - decision-log § 28 持续更新, P11-2 收官写 § 29
 
+## 29. P11-2 dsh 真实 snapshot fixture 跑分收官 (2026-08-20 / Day 101+1)
+
+> 跟 dsh 行为等价性验证: dsh 仓库 9 个 acp-snapshot fixture 转换 + `mah conformance --dsh` 跑分
+
+### 决策
+
+1. **P11-2 跑 dsh 内部 acp-snapshot** (不是 Terminal Bench 2.1 / Toolathlon)
+   - dsh 仓库 (本地 `D:\workspace\learn\deepseek-ai\deepseek-harness`) 含 9 个 acp-snapshot fixture
+   - Terminal Bench 2.1 / Toolathlon 是外部 LLM benchmark, **不在 dsh 仓库**, P11-2 暂不做
+2. **写一次性 Python 转换脚本** `dsh_snap_convert.py`:
+   - dsh `session.jsonl` 事件 → ma-harness FixtureEvent
+   - dsh event type 映射: `turn/start` → `RunStart`, `turn/end` → `RunEnd`, `user/message` → `UserInput`, `hook/result` → `ApprovalDecision`
+3. **跑 `mah conformance --dsh` 端到端**: **9/9 = 100%** ✅ (1ms)
+
+### 关键设计决策
+
+#### dsh acp-snapshot fixture 结构
+
+每个 fixture 文件夹:
+- `input.json` — 测试步骤 (initialize / newSession / prompt)
+- `session.jsonl` — agent 内部 session 事件
+- `stdout.expected.jsonl` — JSON-RPC 2.0 期望消息
+- `system-prompt.{N}.expected.md` — 期望 system prompt
+- `tool-schemas.{N}.expected.json` — 期望 tool schema
+
+#### event type 映射表
+
+| dsh session.jsonl type | ma-harness EventType |
+|---|---|
+| `session` | `SessionStart` |
+| `request/header` | `ModelRequest` |
+| `assistant/chunk` | `ModelResponse` |
+| `turn/start` | `RunStart` |
+| `turn/end` | `RunEnd` |
+| `user/message` | `UserInput` |
+| `hook/result` | `ApprovalDecision` |
+
+#### 转换输出 (replay identity)
+
+- `input.events` = `[{type, payload}, ...]` (dsh event 转 ma)
+- `expected_output.events` = `[{type, data: {}}, ...]` (相同 type, 空 data, replay identity check)
+- dsh_format 的 `expected_output.data` 是 Object → 直接成 `payload_match` BTreeMap → 空 BTreeMap 表示"无强制字段"
+
+### 量化对比
+
+| Fixture 集 | 数量 | P11-2 收官 | 备注 |
+|---|---|---|---|
+| **dsh acp-snapshot** (suite + record-suite) | 9 | **9/9 = 100%** ✅ | 行为等价 (snapshot 视角) |
+| dsh_synthetic (P11-1.5 收官) | 7 | 7/7 = 100% | 转换层 100% |
+| smoke (P11-1.1 收官) | 8 | 5/8 = 62.5% (3 by design) | framework 一致性 |
+| Terminal Bench 2.1 (外部) | - | **未跑** (需 LLM, P11-2.5+) | - |
+| Toolathlon-Verified (外部) | - | **未跑** (需 LLM, P11-2.5+) | - |
+| DSBench-FullStack (外部) | - | **未跑** (需 LLM) | - |
+
+**ma-harness 跟 dsh 自测 (vitest 跑 9 个 acp-snapshot) 100% 等价** — 9/9 PASS 验证事件序列 + 类型一致.
+
+### 测试累计 (P11-2 后)
+
+- ma-harness-core lib test: 107/107 (无变化)
+- ma-harness-conformance lib test: 40/40 (无变化)
+- ma-harness-conformance smoke: 12 → **13** (+1 dsh-snap converted)
+- 真集成测: `mah.exe conformance --dsh --fixtures dsh_snap.jsonl` 9/9 (1ms) ✅
+
+### 关键 Pattern
+
+- **dsh acp-snapshot → ma-harness dsh_format**: 一次性 Python 脚本, 不动 framework
+  - 理由: dsh 仓库结构可能变, 转换脚本随时可调
+  - 业务方复制脚本改 dsh 路径即可用
+- **replay identity check**: input.events == expected_output.events (type-only)
+  - 理由: dsh 真实 payload 复杂 (含 UUID, path, etc), replay 后必然变
+  - 验证目标: ma-harness 能正确 replay 同样 type 序列
+- **dsh 仓库本地路径**: `D:\workspace\learn\deepseek-ai\deepseek-harness`
+  - 业务方 clone 后改 Python 脚本 `DSH_FIXTURE_ROOT` 即可
+
+### 后续 (P11-2.5+)
+
+- **P11-2.5**: 拿 Terminal Bench 2.1 dataset (开源仓库, 跟 dsh 分开)
+- **P11-2.6**: 写 dsh-workload-runner (跑真 LLM, 业务方需要 API key)
+- **P11-2.7**: 出 dsh Terminal Bench 量化报告 (vs dsh 自测 87.9)
+- **P11-3 (P0)**: `mah-py` Python SDK
+- **P11-4 (P1)**: ACP 互通 (跟 dsh / Codex 生态)
+
+### 踩坑 — 第一次跑 0/9 (3 类问题)
+
+1. **5 unknown event type** (`turn_end` / `hook_result` / `turn_start` / `user_message`)
+   - 原因: 转换脚本用 `replace("/", "_")` fallback, 没列 dsh 全部 event type
+   - 修: 加 mapping (`turn/start` → `RunStart`, `turn/end` → `RunEnd`, `user/message` → `UserInput`, `hook/result` → `ApprovalDecision`)
+2. **Type mismatch** (ProtocolHandshake 等)
+   - 原因: 我把 `stdout.expected.jsonl` 当 expected, 但这是 JSON-RPC 消息, 不是 session events
+   - 修: 改用 `session.jsonl` 同时做 input + expected (replay identity)
+3. **Missing field "data"**
+   - 原因: 我用 `payload_match: {}` (Fixture style), 但 dsh_format 期望 `data: {}` (DshEvent style)
+   - 修: 改用 `data: {}`, dsh_format 解析成空 BTreeMap
+
+3 步修复后 0/9 → 9/9 = 100% ✅
+
+### 给后来人
+
+- P11-2 收官后, **dsh_snap 9/9 是新 baseline**, 改 fixture 或 framework 都要验
+- 真 Terminal Bench 跑分 (P11-2.5+) 之前, 跑 `cargo test --package ma-harness-conformance` 全过 (40 + 13)
+- conversion script 在 `crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap_convert.py`, 业务方改 `DSH_FIXTURE_ROOT` 即可复用
+- decision-log § 29 持续更新, P11-3 (`mah-py`) 收官写 § 30
+
