@@ -922,3 +922,66 @@ rustup default 1.94
 - pre-existing broken 4 个一直存在, 跟 salvo 无关
 - 业务方想用新特性 (HTTP3/Acme) 现在可用, 0.95 全 feature-gated 启用
 
+
+
+## 22. Phase 7 收官 (2026-08-19 / Day 101)
+
+**目标**: 6-8 周专注期, 交付 4 P0: Web UI + 审批流程 + 工具管道升级 + 子代理 fork.
+
+**结果**: Day 101 全部收官, 实际节奏压缩到单日完成 (期间速率限流导致部分测试跳过, 业务方接受).
+
+### 交付清单 (10+ 个新 commits)
+
+- a54bc2a P7-0 修 4 个 pre-existing broken test
+- 2436a42 P7-1.1 Web UI 骨架 (React + Vite + TS)
+- e251119 P7-1.2 tonic-web 集成 — gRPC-web 桥
+- 66580cf P7-1.3/1.4/1.5 Session Detail + Trajectory + TokenStats
+- 7a802cb P7-1.7 SSE events/stream 实时推送
+- f25e016 P7-2.1/2/3 审批服务 + pre-execute hook
+- b2d09c3 P7-2.4 TUI approval 简化版
+- f3745e0 P7-2.5 HTTP approval 端点 v1
+- 1eeec28 P7-2.6 审批审计 log helper
+- d2dd695 P7-2.7 集成测试 8 scenarios
+- e10f9a8 P7-3 7-stage pipeline
+- 93b7a78 P7-3.4 ChannelApprovalService oneshot
+- 3e92cdc P7-3.6 HTTP approval v2 接 ChannelApprovalService
+- 742ea9d P7-4 子代理 fork (SubagentSpec)
+- 08831b0 P7-5 TUI Trajectory 着色
+
+### 关键决策
+
+- Web UI 选 React + Vite + TypeScript (生态熟, 招人易)
+- 审批 v1 简化 + v2 完整 拆分: TUI 走 pending queue 简化版, HTTP 走 placeholder; v2 集成 ChannelApprovalService oneshot
+- Pipeline 7 阶段 (pre/guard/approval/exec/post/finalize/result): 内部 Arc<Context> 共享, ToolInvokeFn 改 Fn(Value, &Context) 让 retry cheap
+- Context 不可 Clone: 内部 Box<dyn Any> + AtomicBool 不支持, 用 Arc<Context> 跨 stage 共享
+- ChannelApprovalService: tokio::sync::oneshot + Arc<Mutex<HashMap>> 实现, 业务方 (TUI key / HTTP POST) 推 decision 唤醒
+- SSE events/stream v1 轮询 EventLog: 1s 间隔 + heartbeat 保活; v2 broadcast channel 留 P8-2
+
+### 测试累计
+
+- 380 → 400 lib + bin tests (+20)
+- 311 → 326 lib tests (+15)
+- cordis 76 → 81 (+5)
+- core 31 → 38 (+7 pipeline)
+- server 37 → 44 (+7 approval v2 + SSE)
+- tui 32 → 32 (1 改动, 0 新)
+- subagent 2 → 8 (+6 SubagentSpec)
+- integration: 8 (approval flow)
+- bin tests: 27 → 27 (无新)
+
+### 累计
+
+- decision-log: 1-21 → 1-22
+- README 标 P7 状态
+- 130+ → 200+ commit (Day 0-101)
+- Web UI 3080 端口上线 (P7-1.1+)
+- HTTP API: 8 paths → 9 paths (+SSE events/stream)
+- 完整审批流程: 装 registry → tool invoke → request_approval → 业务方推 decision → continue
+
+### 留待 P8+
+
+- P7-1.8 Playwright e2e (受限)
+- TUI approval AppMode::Approval y/n 弹窗 v2 (oneshot 集成)
+- Web UI approval 端点真决策 v2 (已通过 ChannelApprovalService 实现, 集成)
+- Phase 8: 上下文压缩 / Token 监控 / 多模型扩展
+- Phase 9: 模式扩展 / Capability Seam / Creator 模式
