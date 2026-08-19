@@ -26,6 +26,7 @@ ma-harness-server = { path = "../ma-harness-server" }  # 2026-08-18 (Day 52): �
 ma-harness-conformance = { path = "../ma-harness-conformance" }
 ma-harness-code = { path = "../ma-harness-code" }  # 2026-08-19 (Day 68): Phase 2.6 Code Mode
 ma-harness-model = { path = "../ma-harness-model" }  # 2026-08-19 (Day 73): Phase 3.3 LLM↔Code Mode 端到端
+ma-harness-sandbox = { path = "../ma-harness-sandbox" }  # 2026-08-19 (Day 78): Phase 3.7 landlock 集成
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
 # 外部
 clap = { workspace = true }

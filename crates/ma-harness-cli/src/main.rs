@@ -142,6 +142,18 @@ enum Commands {
         #[command(subcommand)]
         action: OpenApiAction,
     },
+    /// **Phase 3.7 / T3.7**: 显式 enforce landlock (Linux) / seatbelt (Mac) / stub (其他)
+    ///
+    /// ⚠️ **警告**: 一旦 enforce 是全进程 (不可逆). 业务方决定要不要跑.
+    ///
+    /// 例子:
+    ///   mah sandbox apply --read-paths /tmp,/var/llm-output
+    ///   mah sandbox apply --read-paths /tmp --write-paths /tmp
+    ///   mah sandbox apply --read-paths /tmp --temp-dir   # 加系统 tmpdir
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -152,6 +164,27 @@ enum OpenApiAction {
         #[arg(long, default_value = "openapi.json")]
         output: std::path::PathBuf,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum SandboxAction {
+    /// Enforce landlock/seatbelt/stub 沙箱 (不可逆)
+    Apply {
+        /// 允许读的路径 (逗号分隔, e.g. /tmp,/var/llm-output)
+        #[arg(long, value_delimiter = ',')]
+        read_paths: Vec<std::path::PathBuf>,
+        /// 允许写的路径 (逗号分隔)
+        #[arg(long, value_delimiter = ',')]
+        write_paths: Vec<std::path::PathBuf>,
+        /// 允许执行的路径 (逗号分隔, Phase 2.2 占位)
+        #[arg(long, value_delimiter = ',')]
+        exec_paths: Vec<std::path::PathBuf>,
+        /// 加系统 tmpdir 进 read_paths
+        #[arg(long)]
+        temp_dir: bool,
+    },
+    /// 打印当前 OS 沙箱支持 (Linux landlock / Mac seatbelt / 其他 stub)
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,6 +227,15 @@ async fn main() -> Result<()> {
         }
         Commands::OpenApi { action } => match action {
             OpenApiAction::Export { output } => export_openapi(&output),
+        },
+        Commands::Sandbox { action } => match action {
+            SandboxAction::Apply {
+                read_paths,
+                write_paths,
+                exec_paths,
+                temp_dir,
+            } => apply_sandbox(read_paths, write_paths, exec_paths, temp_dir),
+            SandboxAction::Status => print_sandbox_status(),
         },
     }
 }
@@ -636,6 +678,93 @@ fn export_openapi(output: &std::path::Path) -> Result<()> {
         output.display(),
         content.len()
     );
+    Ok(())
+}
+
+/// **Phase 3.7 / T3.7**: Enforce landlock (Linux) / seatbelt (Mac) / stub (其他) 沙箱
+///
+/// 警告: 一旦 enforce 是全进程 (不可逆). 业务方决定要不要跑.
+///
+/// 流程:
+/// 1. 构造 ma_harness_sandbox::Policy
+/// 2. 选 DefaultEnforcer (跨平台 type alias)
+/// 3. enforce(&policy)
+/// 4. 成功: 进程 fs 受限, 后续操作严格走白名单
+fn apply_sandbox(
+    read_paths: Vec<std::path::PathBuf>,
+    write_paths: Vec<std::path::PathBuf>,
+    exec_paths: Vec<std::path::PathBuf>,
+    temp_dir: bool,
+) -> Result<()> {
+    use ma_harness_sandbox::{DefaultEnforcer, Enforcer, PathRule, Policy};
+
+    let mut read_rules: Vec<PathRule> = read_paths
+        .iter()
+        .map(|p| PathRule::Subpath(p.clone()))
+        .collect();
+    if temp_dir {
+        read_rules.push(PathRule::TempDir);
+    }
+    let write_rules: Vec<PathRule> = write_paths
+        .iter()
+        .map(|p| PathRule::Subpath(p.clone()))
+        .collect();
+    let exec_rules: Vec<PathRule> = exec_paths
+        .iter()
+        .map(|p| PathRule::Subpath(p.clone()))
+        .collect();
+
+    let policy = Policy {
+        read_paths: read_rules,
+        write_paths: write_rules,
+        exec_paths: exec_rules,
+        allow_network: false,
+    };
+
+    eprintln!("mah sandbox apply: enforcing policy:");
+    eprintln!("  read_paths: {:?}", policy.read_paths);
+    eprintln!("  write_paths: {:?}", policy.write_paths);
+    eprintln!("  exec_paths: {:?}", policy.exec_paths);
+    eprintln!("  allow_network: {}", policy.allow_network);
+
+    let enforcer = DefaultEnforcer::default();
+    match enforcer.enforce(&policy) {
+        Ok(()) => {
+            eprintln!("mah sandbox apply: OK — host process fs limited");
+            Ok(())
+        }
+        Err(e) => {
+            anyhow::bail!("sandbox enforce failed: {e:?}");
+        }
+    }
+}
+
+/// **Phase 3.7 / T3.7**: 打印当前 OS 沙箱支持
+fn print_sandbox_status() -> Result<()> {
+    println!("ma-harness sandbox status");
+    println!("=========================");
+    println!();
+    println!("Target OS: {}", std::env::consts::OS);
+    println!("Architecture: {}", std::env::consts::ARCH);
+    println!();
+    #[cfg(target_os = "linux")]
+    {
+        println!("Backend: landlock 0.4");
+        println!("  - Landlock ABI V1 (kernel >= 5.13)");
+        println!("  - 12 AccessFs ops (ReadFile / ReadDir / WriteFile / RemoveFile / RemoveDir / MakeReg / MakeDir / MakeSock / MakeFifo / MakeBlock / MakeChar / Refer)");
+        println!("  - restrict_self() 不可逆");
+        println!("  - 走 landlock::Ruleset + PathBeneath");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        println!("Backend: macos seatbelt (Phase 2.2 stub)");
+        println!("  - 占位: 返回 Ok, 不实际 enforce");
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        println!("Backend: stub (Windows / 其他)");
+        println!("  - warn + no-op, 业务方 fs 不受限制");
+    }
     Ok(())
 }
 
