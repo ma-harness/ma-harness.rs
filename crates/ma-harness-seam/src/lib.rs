@@ -66,6 +66,67 @@ pub use ma_harness_plugin_macro::{
 pub use ma_harness_cordis::{is_snake_case, CtxKey};
 
 // ============================================================================
+// 公开 stable API re-exports (P9-1 / Day 101)
+// ============================================================================
+//
+// 业务方 (CLI / TUI / Web UI / 第三方插件) 只需要 use `ma_harness_seam::*`,
+// 不直接 use `ma_harness_cordis` / `ma_harness_core` 内部实现.
+//
+// 加新 stable API 时, 优先加在这里, 加 `#[non_exhaustive]` 预扩展.
+
+/// ma-harness 框架版本 (P9-1)
+///
+/// 业务方读这个判版本兼容. 跟 `env!("CARGO_PKG_VERSION")` 走.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// ma-harness 框架 API 版本 (semver) (P9-1)
+pub const API_VERSION: &str = "0.1.0";
+
+// ---- 核心事件 / 日志 (ma_harness_core) ----
+pub use ma_harness_core::{
+    AgentLoop,
+    AgentRunRequest,
+    AgentRunResponse,
+    CompressionPolicy,
+    EventLog,
+    EventType,
+    FinishReason,
+    ModelAdapter,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    OperatingMode,
+    OperatingModeConfig,
+    SessionEvent,
+    Severity,
+    StubModelAdapter,
+    ToolEntry,
+    ToolRegistry,
+    ToolSchema,
+};
+
+// ---- 工具管道 (ma_harness_core) ----
+pub use ma_harness_core::tool_pipeline::{
+    invoke_with_pipeline, InvokeContext, PipelineConfig, PipelineStage, PostHookFn, PreHookFn,
+    RetryPolicy, ToolConfig,
+};
+
+// ---- 上下文压缩 helper ----
+pub use ma_harness_core::{
+    compress as compress_messages, estimate_messages_tokens, estimate_tokens,
+    load_history_from_log, should_compress,
+};
+
+// ---- 审批服务 (ma_harness_cordis, P7-2) ----
+pub use ma_harness_cordis::{
+    ApprovalDecision, ApprovalPolicy, ApprovalRegistry, ApprovalRequest, ApprovalService,
+    ChannelApprovalService, RiskLevel,
+};
+
+// ---- ctx API (ma_harness_cordis) ----
+pub use ma_harness_cordis::Context;
+
+// ============================================================================
 // ctx_key! — 编译期 snake_case 校验
 // ============================================================================
 //
@@ -495,6 +556,38 @@ impl PluginLoader {
 mod tests {
     use super::*;
     use ma_harness_cordis::Context;
+
+    // P9-1 tests: stable API re-exports 都能 use 拿到
+    #[test]
+    fn version_constants() {
+        assert!(!VERSION.is_empty());
+        assert_eq!(API_VERSION, "0.1.0");
+    }
+
+    #[test]
+    fn re_exports_core_types_available() {
+        // 业务方 use ma_harness_seam::* 能拿到这些类型
+        // 用 turbofish 确认编译过 + 类型正确
+        let _: Option<OperatingMode> = Some(OperatingMode::Default);
+        let _: Option<EventType> = Some(EventType::SessionStart);
+        let _: Option<RiskLevel> = Some(RiskLevel::Low);
+        let _: Option<ApprovalDecision> = Some(ApprovalDecision::Approved);
+    }
+
+    #[test]
+    fn re_exports_tool_pipeline() {
+        // 验证 pipeline 类型 + 函数 re-export
+        let _: Option<ToolConfig> = Some(ToolConfig::default());
+        let _: Option<RetryPolicy> = Some(RetryPolicy::default());
+    }
+
+    #[test]
+    fn re_exports_compression_helpers() {
+        // 验证压缩 helper 函数 re-export
+        let tokens = estimate_tokens("hello world");
+        assert!(tokens > 0);
+    }
+
 
     struct MyService {
         greeting: String,
