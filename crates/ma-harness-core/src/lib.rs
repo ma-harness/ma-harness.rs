@@ -36,6 +36,7 @@
 pub mod agent;
 pub mod agent_compress;
 pub mod approval_audit;
+pub mod creator;
 pub mod event;
 pub mod log;
 pub mod operating_mode;
@@ -47,6 +48,7 @@ pub use agent_compress::{
     compress, estimate_messages_tokens, estimate_tokens, load_history_from_log, should_compress,
     CompressionPolicy,
 };
+pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, PluginRecord, PluginSpec};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
 pub use operating_mode::{OperatingMode, OperatingModeConfig, OPERATING_MODE};
