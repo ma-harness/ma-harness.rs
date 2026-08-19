@@ -154,6 +154,11 @@ enum Commands {
         #[command(subcommand)]
         action: SandboxAction,
     },
+    /// **Phase 3.9 / T3.9**: 启动 TUI dashboard (ratatui)
+    ///
+    /// 3 个 panel: Sessions | Events | Plugins
+    /// 每 500ms 刷新, 'q' / Esc / Ctrl-C 退出
+    Tui,
 }
 
 #[derive(Subcommand, Debug)]
@@ -237,6 +242,7 @@ async fn main() -> Result<()> {
             } => apply_sandbox(read_paths, write_paths, exec_paths, temp_dir),
             SandboxAction::Status => print_sandbox_status(),
         },
+        Commands::Tui => run_tui(),
     }
 }
 
@@ -737,6 +743,20 @@ fn apply_sandbox(
             anyhow::bail!("sandbox enforce failed: {e:?}");
         }
     }
+}
+
+/// **Phase 3.9 / T3.9**: 启动 TUI dashboard (ratatui)
+///
+/// 走 ma_harness_tui::TuiApp::run(), 用户在 terminal 看 3 panel:
+/// - Sessions (左)
+/// - Plugins (右)
+/// - Status bar (底): ticks / uptime / events
+///
+/// 'q' / Esc / Ctrl-C 退出. 走 ratatui::init() + ratatui::restore() 保证 terminal 状态恢复.
+fn run_tui() -> Result<()> {
+    let mut app = ma_harness_tui::TuiApp::new()
+        .map_err(|e| anyhow::anyhow!("init TuiApp: {e}"))?;
+    app.run().map_err(|e| anyhow::anyhow!("tui run: {e}"))
 }
 
 /// **Phase 3.7 / T3.7**: 打印当前 OS 沙箱支持

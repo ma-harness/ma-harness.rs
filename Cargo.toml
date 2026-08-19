@@ -13,6 +13,7 @@ members = [
     "crates/ma-harness-sandbox",  # 2026-08-18 (Day 55): Phase 2.2 landlock sandbox
     "crates/ma-harness-model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
     "crates/ma-harness-code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
+    "crates/ma-harness-tui",  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard (ratatui)
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
