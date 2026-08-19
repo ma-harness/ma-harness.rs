@@ -1,3 +1,25 @@
+//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-model`
+//! **Crate ident** (`use` 路径): `ma_harness_model`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-model = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_model::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-model
+//!
 //! ma_harness_model — LLM model adapters (Phase 2.3)
 //!
 //! **目标**: 在 `StubModelAdapter` 之外提供真 LLM API 调用.

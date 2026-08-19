@@ -1,3 +1,25 @@
+//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-conformance`
+//! **Crate ident** (`use` 路径): `ma_harness_conformance`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-conformance = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_conformance::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-conformance
+//!
 //! `ma_harness_conformance` — Conformance test framework for ma-harness.
 //!
 //! ## 目的

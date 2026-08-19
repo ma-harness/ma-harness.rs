@@ -1,3 +1,25 @@
+//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-seam`
+//! **Crate ident** (`use` 路径): `ma_harness_seam`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-seam = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_seam::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-seam
+//!
 //! ma_harness_seam — 插件抽象层 (公开占位, #[non_exhaustive])
 //!
 //! **公开 crate** (2026-08-18 锁定). 插件作者**应该** use 这个, 不直接 use `ma_harness_cordis` (内部).

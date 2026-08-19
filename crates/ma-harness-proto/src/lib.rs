@@ -1,4 +1,26 @@
-﻿//! ma_harness_proto — Protobuf 生成代码 + 类型转换
+﻿//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-proto`
+//! **Crate ident** (`use` 路径): `ma_harness_proto`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-proto = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_proto::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-proto
+//!
+//! ma_harness_proto — Protobuf 生成代码 + 类型转换
 //!
 //! **公开 crate** (2026-08-18 锁定). 字段稳定 (Prost 自动生成).
 //! 详细 .proto 定义见 `proto/ma_harness/v1/`.

@@ -1,3 +1,25 @@
+//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-sandbox`
+//! **Crate ident** (`use` 路径): `ma_harness_sandbox`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-sandbox = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_sandbox::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-sandbox
+//!
 //! ma_harness_sandbox — OS-level sandbox (Phase 2.2)
 //!
 //! **目标**: 在 software-level 沙箱 (typed key 白名单) 之上加 OS syscall 级强制.

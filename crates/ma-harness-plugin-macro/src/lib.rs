@@ -1,4 +1,26 @@
-﻿//! ma_harness_plugin_macro — 插件 proc-macro crate
+﻿//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-plugin-macro`
+//! **Crate ident** (`use` 路径): `ma_harness_plugin_macro`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-plugin-macro = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_plugin_macro::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-plugin-macro
+//!
+//! ma_harness_plugin_macro — 插件 proc-macro crate
 //!
 //! **公开 crate** (2026-08-18 锁定). proc-macro, API 锁.
 //!

@@ -1,3 +1,25 @@
+//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-code`
+//! **Crate ident** (`use` 路径): `ma_harness_code`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-code = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_code::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-code
+//!
 //! ma_harness_code — Code Mode (Phase 2 / T3.1)
 //!
 //! LLM-generated code 跑在 wasmtime 沙箱里, 跟 host 通过预定义 host functions 通信.

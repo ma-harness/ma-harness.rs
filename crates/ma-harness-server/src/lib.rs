@@ -1,4 +1,26 @@
-﻿//! ma_harness_server — 服务层 (salvo + tonic 拼装, 内部 crate)
+﻿//! # 命名约定
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-server`
+//! **Crate ident** (`use` 路径): `ma_harness_server`
+//!
+//! Rust 自动从 kebab-case package name 推 snake_case crate ident.
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-server = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_server::*;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-server
+//!
+//! ma_harness_server — 服务层 (salvo + tonic 拼装, 内部 crate)
 //!
 //! **内部 crate** (2026-08-18 锁定). salvo + tonic 拼装, 频繁变.
 //! Week 7-9 起, 把 `ma_harness_seam` 的 5 个 registry 暴露成 gRPC service + HTTP endpoint.
