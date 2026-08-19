@@ -117,6 +117,15 @@ cargo build -p ma-harness-cli --bin mah
 - Markdown: `conformance-report.md` (人类读)
 - JSON: `conformance-report.json` (机读)
 
+### 5.1 P11-1.5 收官真跑验证 (2026-08-20 / Day 101+1)
+
+| Fixture | 命令 | 结果 | 报告路径 |
+|---|---|---|---|
+| smoke.jsonl | `mah conformance --fixtures smoke.jsonl --output D:\tmp\p11-smoke-mah` | **5/8 = 62.5%** (3 by design) | `D:\tmp\p11-smoke-mah\conformance-report.md` |
+| dsh_synthetic.jsonl | `mah conformance --fixtures dsh_synthetic.jsonl --dsh --output D:\tmp\p11-dsh-syn-mah` | **7/7 = 100%** ✅ (1ms) | `D:\tmp\p11-dsh-syn-mah\conformance-report.md` |
+
+**结论**: `mah` binary 真跑确认 100% dsh_synthetic 通过率, 跟 cargo test 一致. 转换层 + framework 端到端 OK.
+
 ---
 
 ## 6. 给后来人
@@ -135,3 +144,4 @@ cargo build -p ma-harness-cli --bin mah
 |---|---|
 | 2026-08-20 | P11-1 baseline 首版 (Day 101+1, Phase 7-10 收官后) |
 | 2026-08-20 | P11-1.5 转换层改进 (Day 101+1) — dsh_synthetic 28.6% → 100% (7/7) |
+| 2026-08-20 | P11-1.5 mah.exe 真跑验证 (Day 101+1) — `mah conformance` 端到端 dsh_synthetic 7/7 (100%, 1ms) |
