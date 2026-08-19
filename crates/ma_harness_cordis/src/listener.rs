@@ -27,8 +27,134 @@ use crate::Context;
 /// 改名 `ListenerEvent` 避免冲突. Phase 2 收编 `event::Event` 进 listener 子树.
 pub trait ListenerEvent: 'static + Send + Sync {}
 
-// Phase 2.7 简化: 不需要自创 AnyListenerEvent trait. 用 std::any::Any 内置 type_id
-// 就行. dispatch 时 downcast_ref::<E>. 之前 AnyListenerEvent 是冗余 wrapper.
+// ============================================================================
+// AsyncListener (Phase 2.8 / Day 62)
+// ============================================================================
+//
+// 异步版 listener, handle 返 Pin<Box<dyn Future + Send>>. 跟同步 Listener 并存,
+// Context 同时维护两套 registry. sync emit 触发 sync listeners, async emit_async
+// 触发 async listeners. 业务方选合适 path (网络请求 / DB / LLM API 等).
+//
+// 设计:
+// - AsyncListener<E: ListenerEvent>: async fn handle_async -> Pin<Box<dyn Future + Send>>
+// - blanket impl: 任何 `Fn(&Context, &E) -> Fut` 都是 AsyncListener
+// - 公开 crate 抽象见 ma_harness_seam::AsyncListener (Phase 2.8 后续)
+// - listener 不能 spawn 'static future (lifetime bound), 用 Pin<Box<>> + 'static
+
+use std::future::Future;
+use std::pin::Pin;
+
+/// 异步 listener trait
+pub trait AsyncListener<E: ListenerEvent>: Send + Sync + 'static {
+    /// 异步处理事件, 返回 future
+    fn handle_async<'a>(
+        &'a self,
+        ctx: &'a Context,
+        event: &'a E,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+// blanket impl: `Fn(&Context, &E) -> Fut` 自动 impl AsyncListener
+impl<F, E, Fut> AsyncListener<E> for F
+where
+    F: for<'a> Fn(&'a Context, &'a E) -> Fut + Send + Sync + 'static,
+    E: ListenerEvent,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    fn handle_async<'a>(
+        &'a self,
+        ctx: &'a Context,
+        event: &'a E,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self(ctx, event))
+    }
+}
+
+// ============================================================================
+// AsyncListenerRegistry (Phase 2.8)
+// ============================================================================
+
+/// type-erased 异步 listener, 内部 downcast + 调用 handle_async
+pub(crate) trait AnyAsyncListener: Send + Sync {
+    fn dispatch_async<'a>(
+        &'a self,
+        ctx: &'a Context,
+        event: &'a (dyn std::any::Any + Send + Sync),
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+impl<E: ListenerEvent> AnyAsyncListener for std::sync::Arc<dyn AsyncListener<E>> {
+    fn dispatch_async<'a>(
+        &'a self,
+        ctx: &'a Context,
+        event: &'a (dyn std::any::Any + Send + Sync),
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        if let Some(e) = event.downcast_ref::<E>() {
+            AsyncListener::handle_async(self.as_ref(), ctx, e)
+        } else {
+            // downcast 失败: 返已完成 future (no-op)
+            Box::pin(async {})
+        }
+    }
+}
+
+struct AnyAsyncListenerFromArc<E: ListenerEvent> {
+    inner: std::sync::Arc<dyn AsyncListener<E>>,
+}
+
+impl<E: ListenerEvent> AnyAsyncListener for AnyAsyncListenerFromArc<E> {
+    fn dispatch_async<'a>(
+        &'a self,
+        ctx: &'a Context,
+        event: &'a (dyn std::any::Any + Send + Sync),
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        if let Some(e) = event.downcast_ref::<E>() {
+            AsyncListener::handle_async(self.inner.as_ref(), ctx, e)
+        } else {
+            Box::pin(async {})
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AsyncListenerRegistry {
+    inner: RwLock<std::collections::HashMap<TypeId, Vec<std::sync::Arc<dyn AnyAsyncListener>>>>,
+}
+
+impl AsyncListenerRegistry {
+    #[allow(dead_code)]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn on<E: ListenerEvent>(&self, listener: std::sync::Arc<dyn AsyncListener<E>>) {
+        let type_id = TypeId::of::<E>();
+        let any: std::sync::Arc<dyn AnyAsyncListener> =
+            std::sync::Arc::new(AnyAsyncListenerFromArc { inner: listener });
+        let mut inner = self.inner.write();
+        inner.entry(type_id).or_default().push(any);
+    }
+
+    pub(crate) fn listeners_for_type_id(
+        &self,
+        type_id: TypeId,
+    ) -> Vec<std::sync::Arc<dyn AnyAsyncListener>> {
+        self.inner
+            .read()
+            .get(&type_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn count_for_type_id(&self, type_id: TypeId) -> usize {
+        self.inner
+            .read()
+            .get(&type_id)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    }
+}
 
 /// Listener trait. 闭包 `Fn(&Context, &E)` 自动 impl.
 ///

@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use crate::disposable::{Disposable, DisposableEntry, Scope};
 use crate::key::CtxKey;
-use crate::listener::{Listener, ListenerEvent, ListenerRegistry};
+use crate::listener::{AsyncListener, AsyncListenerRegistry, Listener, ListenerEvent, ListenerRegistry};
 use crate::plugin::{Plugin, PluginRegistry};
 use crate::service::Service;
 use crate::CordisError;
@@ -59,6 +59,8 @@ pub struct Context {
     plugins: PluginRegistry,
     /// listener registry (Week 1 Day 5 加)
     listeners: ListenerRegistry,
+    /// async listener registry (Phase 2.8 / Day 62 加)
+    async_listeners: AsyncListenerRegistry,
     /// disposable list (Week 1 Day 5 加, 跟 scope 共享)
     disposables: Arc<parking_lot::Mutex<Vec<DisposableEntry>>>,
     /// ctx 是否已 dispose
@@ -258,6 +260,14 @@ impl Context {
         self.listeners.on(listener);
     }
 
+    /// 订阅异步事件 E
+    ///
+    /// 跟 `on` 并存, 业务方选 sync / async. 闭包 `async |ctx, ev| { ... }` 自动 impl AsyncListener.
+    /// 需要 `Send + 'static` 因为 future 要 spawn 到 tokio runtime.
+    pub fn on_async<E: ListenerEvent, L: AsyncListener<E>>(&self, listener: Arc<L>) {
+        self.async_listeners.on(listener);
+    }
+
     /// 触发事件
     ///
     /// **Phase 2.7 (Day 61)**: 改走 deferred queue + flush loop.
@@ -342,6 +352,73 @@ impl Context {
     /// 列出订阅 E 的 listener 数量 (调试)
     pub fn listener_count<E: ListenerEvent>(&self) -> usize {
         self.listeners.count::<E>()
+    }
+
+    // ========================================================================
+    // Async emit (Phase 2.8 / Day 62)
+    // ========================================================================
+    //
+    // 走单独 thread-local async queue + flush loop (跟 sync 并存).
+    // 业务方用 emit_async 触发 async listeners, emit 触发 sync.
+    //
+    // 设计: emit_async 不阻塞, 启动 flush loop in background (在当前 thread 同步跑,
+    // 但 future 是 async). Phase 2.8 简化 — 实际跑 async listener future 到完成.
+
+    /// 触发异步事件
+    ///
+    /// 同步 push 到 async queue, 启动 flush loop, await 全部 future 跑完.
+    /// listener 可继续 emit_async (push queue, 当前 flush 看到继续).
+    pub async fn emit_async<E: ListenerEvent>(&self, event: E) {
+        let type_id = std::any::TypeId::of::<E>();
+        let event_box: Box<dyn std::any::Any + Send + Sync> = Box::new(event);
+        ASYNC_DEFERRED_QUEUE.with(|q| q.borrow_mut().push(event_box));
+
+        // 第一次 emit_async: 启动 flush loop
+        let already_flushing = ASYNC_FLUSHING.with(|b| b.get());
+        if already_flushing {
+            return;
+        }
+        let _guard = AsyncFlushGuard::new();
+        self.flush_async_queue(type_id).await;
+    }
+
+    /// flush async deferred queue, await 所有 future
+    async fn flush_async_queue(&self, first_type_id: std::any::TypeId) {
+        const MAX_BUFFER: usize = 10_000;
+        let mut processed = 0;
+        let mut current_type_id = first_type_id;
+        loop {
+            let listeners = self.async_listeners.listeners_for_type_id(current_type_id);
+            let event_box = ASYNC_DEFERRED_QUEUE.with(|q| q.borrow_mut().pop());
+            let event_box = match event_box {
+                Some(e) => e,
+                None => break,
+            };
+            // 收集所有 listener future, 顺序 await (Phase 2.8 简化; Phase 2.9 加并发)
+            for l in &listeners {
+                l.dispatch_async(self, &*event_box).await;
+            }
+            processed += 1;
+            if processed >= MAX_BUFFER {
+                panic!(
+                    "async deferred emit queue overflow: {} events processed in single flush, \
+                     possible infinite loop in async listeners",
+                    processed
+                );
+            }
+            current_type_id = ASYNC_DEFERRED_QUEUE.with(|q| {
+                q.borrow()
+                    .last()
+                    .map(|e| (**e).type_id())
+                    .unwrap_or(current_type_id)
+            });
+        }
+    }
+
+    /// 列出订阅 E 的 async listener 数量 (调试)
+    #[allow(dead_code)]
+    pub fn async_listener_count<E: ListenerEvent>(&self) -> usize {
+        self.async_listeners.count_for_type_id(std::any::TypeId::of::<E>())
     }
 
     // ========================================================================
@@ -458,6 +535,19 @@ thread_local! {
     static FLUSHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// ============================================================================
+// Async deferred queue (Phase 2.8 / Day 62)
+// ============================================================================
+//
+// 跟 sync DEFERRED_QUEUE 并存, 不互相干扰. emit_async 走这一套.
+
+thread_local! {
+    static ASYNC_DEFERRED_QUEUE: std::cell::RefCell<Vec<Box<dyn std::any::Any + Send + Sync>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
+    static ASYNC_FLUSHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// RAII guard: drop 时把 FLUSHING set 回 false (即使 panic unwinding 也跑)
 struct FlushGuard;
 
@@ -471,6 +561,22 @@ impl FlushGuard {
 impl Drop for FlushGuard {
     fn drop(&mut self) {
         FLUSHING.with(|b| b.set(false));
+    }
+}
+
+/// RAII guard: drop 时把 ASYNC_FLUSHING set 回 false (即使 panic unwinding 也跑)
+struct AsyncFlushGuard;
+
+impl AsyncFlushGuard {
+    fn new() -> Self {
+        ASYNC_FLUSHING.with(|b| b.set(true));
+        AsyncFlushGuard
+    }
+}
+
+impl Drop for AsyncFlushGuard {
+    fn drop(&mut self) {
+        ASYNC_FLUSHING.with(|b| b.set(false));
     }
 }
 
@@ -910,6 +1016,84 @@ mod tests {
 
     // 2026-08-18 (Day 61): Phase 2.7 删 reentrant_emit_panics — deferred queue 让
     // listener 内 emit 不再 panic, 改成 queue + flush. 老的 panic 行为不再适用.
+
+    // ========================================================================
+    // 2026-08-18 (Day 62): Phase 2.8 异步 listener 测试
+    // ========================================================================
+
+    #[tokio::test]
+    async fn emit_async_calls_async_listener() {
+        // 验 Phase 2.8 async emit + async listener 走通
+        let ctx = Context::new();
+        let called = Arc::new(AtomicUsize::new(0));
+        let c2 = Arc::clone(&called);
+
+        // async 闭包自动 impl AsyncListener via blanket.
+        // 用 move closure 拿 owned String, 避免 lifetime 问题 (future 拿 &TestEvent
+        // 是借用, future outlive 借用源).
+        ctx.on_async::<TestEvent, _>(Arc::new(move |_ctx: &Context, ev: &TestEvent| {
+            let c3 = Arc::clone(&c2);
+            let msg = ev.msg.clone();
+            async move {
+                c3.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                assert_eq!(msg, "async-hello");
+            }
+        }));
+
+        ctx.emit_async(TestEvent {
+            msg: "async-hello".to_string(),
+        })
+        .await;
+
+        assert_eq!(called.load(Ordering::SeqCst), 1, "async listener 应被 await 跑完");
+    }
+
+    #[tokio::test]
+    async fn emit_async_no_listener_is_noop() {
+        // 没人订阅: 不 panic
+        let ctx = Context::new();
+        ctx.emit_async(TestEvent {
+            msg: "x".to_string(),
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn sync_and_async_listeners_are_independent() {
+        // sync emit 触发 sync listener (不触发 async),
+        // async emit 触发 async listener (不触发 sync)
+        let ctx = Context::new();
+        let sync_called = Arc::new(AtomicUsize::new(0));
+        let async_called = Arc::new(AtomicUsize::new(0));
+        let s2 = Arc::clone(&sync_called);
+        let a2 = Arc::clone(&async_called);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |_: &Context, _: &TestEvent| {
+            s2.fetch_add(1, Ordering::SeqCst);
+        }));
+        ctx.on_async::<TestEvent, _>(Arc::new(move |_: &Context, _: &TestEvent| {
+            let a3 = Arc::clone(&a2);
+            async move {
+                a3.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        // sync emit: 只跑 sync listener
+        ctx.emit(TestEvent {
+            msg: "sync".to_string(),
+        });
+        assert_eq!(sync_called.load(Ordering::SeqCst), 1);
+        assert_eq!(async_called.load(Ordering::SeqCst), 0, "sync emit 不触发 async");
+
+        // async emit: 只跑 async listener
+        ctx.emit_async(TestEvent {
+            msg: "async".to_string(),
+        })
+        .await;
+        assert_eq!(sync_called.load(Ordering::SeqCst), 1, "async emit 不触发 sync");
+        assert_eq!(async_called.load(Ordering::SeqCst), 1);
+    }
 
     // === Disposable / Scope ===
 

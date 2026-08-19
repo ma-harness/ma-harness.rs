@@ -13,7 +13,7 @@ description = "ma-harness 元框架 (Cordis-rs, 内部 crate, API 频繁变)"
 workspace = true
 
 [dependencies]
-# Phase 1 Week 1 依赖 (按 tech-stack 冻结)
+# Phase 1 Week 1 依赖 (跟 tech-stack 冻结)
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -24,10 +24,8 @@ tokio-util = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-# 测试用, 暂不引外部 crate
-
-# bench 用
-criterion = { workspace = true }
+# 测试用
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 uuid = { workspace = true }
 
 [[bench]]
