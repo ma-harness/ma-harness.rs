@@ -1,6 +1,10 @@
 //! Tool — model-callable 工具注册表
 //!
 //! Week 1 Day 9 实现. 设计见 `docs/macro-design.md` §4.
+//!
+//! P7-3 (Day 101): 工具执行管道升级, 7 阶段 (pre/guard/approval/exec/post/finalize/result),
+//! 详见 `tool_pipeline.rs`. `ToolEntry` 加 `config: ToolConfig` 字段支持 timeout / retry
+//! / 显式 risk_level 声明.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,7 +12,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde_json::Value;
 
-use ma_harness_cordis::{Context, RiskLevel};
+use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, Context, RiskLevel};
+
+pub use crate::tool_pipeline::ToolConfig;
 
 /// Tool schema (喂给 LLM 的)
 #[derive(Debug, Clone)]
@@ -25,19 +31,33 @@ pub struct ToolSchema {
 ///
 /// 实际签名: `async fn(args: Value, ctx: &Context) -> Result<Value>`
 /// 装箱为 `Box<dyn Fn(...) -> Pin<Box<dyn Future<...>...>> + Send + Sync>`.
+/// P7-3 改 `Context` → `&Context` (cheap clone for retry).
 pub type ToolInvokeFn = Arc<
     dyn Fn(
             Value,
-            Context, // by value 简化, Phase 2 改 Arc<Context>
+            &Context, // P7-3: by reference 简化 retry
         ) -> futures::future::BoxFuture<'static, anyhow::Result<Value>>
         + Send
         + Sync,
 >;
 
 /// Tool entry
+#[derive(Clone)]
 pub struct ToolEntry {
     pub schema: ToolSchema,
     pub invoke: ToolInvokeFn,
+    /// P7-3.2: per-tool config (timeout / retry / risk_level)
+    pub config: ToolConfig,
+}
+
+impl std::fmt::Debug for ToolEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolEntry")
+            .field("schema", &self.schema)
+            .field("config", &self.config)
+            .field("invoke", &"<fn>")
+            .finish()
+    }
 }
 
 /// ToolRegistry — 工具注册表
@@ -54,8 +74,9 @@ impl std::fmt::Debug for ToolRegistry {
     }
 }
 
-/// P7-2.3 启发式: 工具名匹配 risk level
+/// P7-2.3 启发式: 工具名匹配 risk level (P7-3 后 fallback 走 `tool_pipeline::infer_risk_level`)
 /// TODO(P7-3): 工具注册时声明 `risk_level`, 走 `ToolEntry.risk_level` 字段
+#[deprecated(note = "P7-3 后用 `tool_pipeline::infer_risk_level` 兜底, 业务方应显式 `ToolConfig.risk_level`")]
 fn infer_risk_level(tool_name: &str) -> RiskLevel {
     if tool_name.contains("delete") || tool_name.contains("rm") || tool_name.contains("chmod") {
         RiskLevel::High
@@ -78,55 +99,61 @@ impl ToolRegistry {
         Self::default()
     }
 
-    /// 注册一个 tool
+    /// 注册一个 tool (默认 config: 无 timeout / 无 retry / 启发式 risk level)
     pub fn register(&self, schema: ToolSchema, invoke: ToolInvokeFn) {
-        let mut inner = self.inner.write();
-        inner.insert(schema.name.clone(), ToolEntry { schema, invoke });
+        self.register_with_config(schema, invoke, ToolConfig::default());
     }
 
-    /// 调用一个 tool
+    /// 注册一个 tool, 显式声明 config (P7-3.2)
+    pub fn register_with_config(
+        &self,
+        schema: ToolSchema,
+        invoke: ToolInvokeFn,
+        config: ToolConfig,
+    ) {
+        let mut inner = self.inner.write();
+        inner.insert(
+            schema.name.clone(),
+            ToolEntry {
+                schema,
+                invoke,
+                config,
+            },
+        );
+    }
+
+    /// 拿 tool entry 引用 (供 `invoke_with_pipeline` 用)
+    pub fn get(&self, name: &str) -> Option<ToolEntry> {
+        self.inner.read().get(name).cloned()
+    }
+
+    /// 调用一个 tool (走默认 pipeline, 无 pre/post hook, 用 invoke_with_pipeline 复用)
+    ///
+    /// 行为跟 P7-3 前一致 (backward-compat). 业务方想用完整 7-stage pipeline 调
+    /// [`crate::tool_pipeline::invoke_with_pipeline`] 自己传 `PipelineConfig`.
     pub async fn invoke(
         &self,
         name: &str,
         args: Value,
         ctx: Context,
     ) -> anyhow::Result<Value> {
-        let invoke = {
+        let entry = {
             let inner = self.inner.read();
             inner
                 .get(name)
-                .map(|e| e.invoke.clone())
+                .cloned()
                 .ok_or_else(|| anyhow::anyhow!("tool not found: {}", name))?
         };
 
-        // P7-2.3: pre-execute approval hook (走 ctx.approval().check)
-        // 业务方装了 approval registry 才走审批; 没装 → auto-approve (backward-compat)
-        if let Some(approval) = ctx.approval() {
-            use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, RiskLevel};
-            // 简化: 风险等级跟 tool name 启发式匹配 (P7-3 工具会自带 risk level)
-            // TODO(P7-3): 工具注册时声明 risk_level, 走 ToolEntry.risk_level
-            let risk_level = infer_risk_level(name);
-            let req = ApprovalRequest {
-                tool_name: name.to_string(),
-                arguments: args.clone(),
-                risk_level,
-                context: format!("invoke tool: {name}"),
-                tool_call_id: uuid::Uuid::new_v4().to_string(),
-            };
-            match approval.check(&ctx, &req).await {
-                Ok(ApprovalDecision::Approved | ApprovalDecision::AutoApprove) => {
-                    // 继续 invoke
-                }
-                Ok(ApprovalDecision::Denied { reason }) => {
-                    return Err(anyhow::anyhow!("approval denied: {reason}"));
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("approval service error: {e}"));
-                }
-            }
-        }
-
-        invoke(args, ctx).await
+        // P7-3: 走 invoke_with_pipeline (默认无 hook, 但 timeout/retry/explicit risk_level
+        // 走 ToolConfig)
+        crate::tool_pipeline::invoke_with_pipeline(
+            entry,
+            args,
+            ctx,
+            &crate::tool_pipeline::PipelineConfig::default(),
+        )
+        .await
     }
 
 
@@ -153,7 +180,7 @@ mod tests {
 
     fn stub_invoke(
         _args: Value,
-        _ctx: Context,
+        _ctx: &Context,
     ) -> BoxFuture<'static, anyhow::Result<Value>> {
         Box::pin(async move { Ok(Value::String("ok".to_string())) })
     }
