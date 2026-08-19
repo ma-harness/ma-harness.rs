@@ -65,8 +65,13 @@ use thiserror::Error;
 // ============================================================================
 
 pub mod multimodal;
+pub mod vision_tool;
 pub use multimodal::{
     build_anthropic_vision_content, build_openai_vision_content, ImageAttachment,
+};
+pub use vision_tool::{
+    describe_image, describe_with_anthropic, describe_with_openai, VisionBackend, VisionDescribeArgs,
+    VisionError, VisionResult, VISION_TOOL_DESCRIPTION, VISION_TOOL_NAME,
 };
 
 // ============================================================================
