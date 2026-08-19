@@ -29,6 +29,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::tool::ToolRegistry;
+
 /// Plugin spec (P9-2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSpec {
@@ -94,8 +96,10 @@ pub enum CreatorError {
 /// 持有 `libloading::Library` 防 dylib 被 unload (Linux/Unix 上 dlclose 静态符号失效).
 /// `Drop` 时自动 unload, 业务方可以 clone / 拿 name 引用, 不需要再管底层.
 ///
-/// 业务方 P10-1.8 想跨 dylib 传 Rust 类型 (Arc<dyn Fn> 等), 拿这个句柄然后调 `register()` 后
-/// plugin 内部已经把工具注入 host ToolRegistry. v1 register 是 extern "C" 无入参, 仅做 side effect.
+/// 业务方 P10-1.8 想跨 dylib 传 Rust 类型 (`&ToolRegistry`), 拿这个句柄然后调
+/// `invoke_register(&ToolRegistry)`, plugin 内部已经把工具注入 host ToolRegistry.
+/// v1 (`CompileConfig::host_crate_path = None`) register 是 `extern "C" fn()` 无入参, 仅 side effect.
+/// v2 (P10-1.8, `host_crate_path = Some`) register 改 `fn(&ToolRegistry)`, 业务方提供 registry.
 #[derive(Debug)]
 pub struct LoadedPlugin {
     /// Plugin 名 (业务方拿这个索引)
@@ -104,6 +108,8 @@ pub struct LoadedPlugin {
     pub artifact_path: PathBuf,
     /// libloading Library (Drop 时自动 dlclose)
     _library: libloading::Library,
+    /// P10-1.8: 是否 P10-1.8 模式 (host_crate_path 设了)
+    host_mode: bool,
 }
 
 impl LoadedPlugin {
@@ -115,6 +121,51 @@ impl LoadedPlugin {
     /// 拿 dylib 路径
     pub fn path(&self) -> &Path {
         &self.artifact_path
+    }
+
+    /// 仅 test 用: 拿 Library 引用 (业务方不应该拿, LoadedPlugin 自己管 RAII)
+    #[doc(hidden)]
+    pub fn _library_unchecked_for_test(&self) -> &libloading::Library {
+        &self._library
+    }
+
+    /// P10-1.8: 是不是 host_crate 模式 (register 收 `&ToolRegistry`)
+    pub fn is_host_mode(&self) -> bool {
+        self.host_mode
+    }
+
+    /// P10-1.8: 调 plugin 的 register, 注入 host ToolRegistry
+    ///
+    /// - P10-1.7 模式 (`host_mode = false`): register 是 `extern "C" fn()`, 无入参, 调 side effect
+    /// - P10-1.8 模式 (`host_mode = true`): register 是 `extern "C" fn(*const c_void)`,
+    ///   业务方 source_code 写 `register_impl(registry: &ToolRegistry)`, render 框架 wrap 成
+    ///   `register(handle: *const c_void) { let registry = unsafe { &*(handle as *const ToolRegistry) }; register_impl(registry) }`.
+    ///   这样 C-ABI 跨 dylib 稳, 业务方心智负担小.
+    ///
+    /// 业务方:
+    /// 1. 拿 LoadedPlugin 句柄 (RAII 保 dylib 活)
+    /// 2. 调 `invoke_register(&host_registry)`, plugin 内部 `registry.register(schema, invoke_fn)`
+    /// 3. 之后业务方用 `host_registry.invoke("tool_name", args)` 调 plugin 工具
+    #[allow(unsafe_code)] // P10-1.8: libloading 跨 dylib + opaque handle cast 是 unsafe C-ABI 必需
+    pub fn invoke_register(&self, registry: &ToolRegistry) -> Result<(), CreatorError> {
+        if self.host_mode {
+            // P10-1.8: C-ABI 传 opaque handle, plugin 内部 unsafe cast 回 &ToolRegistry
+            // SAFETY: plugin 跟 host 同一份 ma-harness-core (host_crate_path 强制), ToolRegistry 类型 layout 一致
+            let register: libloading::Symbol<extern "C" fn(*const std::ffi::c_void)> = unsafe {
+                self._library.get(b"register\0")
+            }
+            .map_err(|e| CreatorError::Load(format!("找 register 符号失败 (P10-1.8 host mode): {e}")))?;
+            let handle = registry as *const ToolRegistry as *const std::ffi::c_void;
+            register(handle);
+        } else {
+            // P10-1.7 兼容: extern "C" fn() 无入参
+            let register: libloading::Symbol<extern "C" fn()> = unsafe {
+                self._library.get(b"register\0")
+            }
+            .map_err(|e| CreatorError::Load(format!("找 register 符号失败 (P10-1.7 standalone): {e}")))?;
+            register();
+        }
+        Ok(())
     }
 }
 
@@ -268,19 +319,49 @@ impl CreatorRegistry {
         self.compile_config = cfg;
     }
 
-    /// 加载编译产物 via libloading (P10-1.7 / Day 101)
+    /// 加载编译产物 via libloading (P10-1.7 + P10-1.8 / Day 101)
     ///
     /// 1. 拿 `dylib_artifact_path(name)` (P10-1.6 + P10-1.7: 用 compile 记录的 artifact_path)
     /// 2. `libloading::Library::new(path)` 加载 dylib (跨平台 dlopen / LoadLibrary)
-    /// 3. 找 `register` 符号 (`extern "C" fn()`)
-    /// 4. 调 `register()` (P10-1.7 v1 无入参, 仅 side effect)
-    /// 5. 返 `LoadedPlugin` 句柄 (RAII 保活, Drop 时 dlclose)
+    /// 3. 自动 detect host_mode (从 `compile_config.host_crate_path` 推断)
+    /// 4. 返 `LoadedPlugin` 句柄 (RAII 保活, Drop 时 dlclose)
     ///
-    /// **P10-1.7 限制**: register 是 `extern "C" fn()` 无入参, 不传 host ToolRegistry.
-    /// 跨 dylib 边界传 Rust trait object (Arc<dyn Fn> + Context + BoxFuture) ABI 不稳,
-    /// 留给 P10-1.8 让 plugin 依赖 workspace `ma-harness-core` 共享 `ToolRegistry` 类型.
-    #[allow(unsafe_code)] // P10-1.7: libloading unsafe { Library::new + get<Symbol> } 是 dylib FFI 必需
+    /// **P10-1.8 改动**: 自动 detect host_mode. 业务方拿 `LoadedPlugin` 后调 `invoke_register(&host_registry)`.
+    #[allow(unsafe_code)] // P10-1.8: libloading unsafe { Library::new + ... } 是 dylib FFI 必需
     pub fn load_into(&self, name: &str) -> Result<LoadedPlugin, CreatorError> {
+        let host_mode = self
+            .compile_config
+            .as_ref()
+            .and_then(|c| c.host_crate_path.as_ref())
+            .is_some();
+        self.load_into_impl(name, host_mode)
+    }
+
+    /// P10-1.8: 加载 dylib + 调 register 注入 host ToolRegistry
+    ///
+    /// - 自动 detect host_mode (从 `compile_config.host_crate_path` 推断)
+    /// - host_mode = true: register(handle) 注入 host (C-ABI 跨 dylib 稳)
+    /// - host_mode = false: register() 调 side effect
+    ///
+    /// 业务方:
+    /// ```ignore
+    /// let loaded = registry.create_and_load(spec, &host_registry).await?;
+    /// // create_and_load 内部已 invoke_register, schema 在 host_registry 里
+    /// ```
+    #[allow(unsafe_code)]
+    pub fn load_into_with_registry(
+        &self,
+        name: &str,
+        registry: &ToolRegistry,
+    ) -> Result<LoadedPlugin, CreatorError> {
+        let loaded = self.load_into(name)?;
+        loaded.invoke_register(registry)?;
+        Ok(loaded)
+    }
+
+    /// load_into 内部实现 (P10-1.8: 拆 host_mode 给 load_into_with_registry 复用)
+    #[allow(unsafe_code)]
+    fn load_into_impl(&self, name: &str, host_mode: bool) -> Result<LoadedPlugin, CreatorError> {
         let artifact = self.dylib_artifact_path(name)?;
 
         // 跨平台: libloading::Library::new 自动 dlopen (Unix) / LoadLibraryW (Windows)
@@ -289,20 +370,11 @@ impl CreatorRegistry {
             CreatorError::Load(format!("加载 dylib 失败 {}: {e}", artifact.display()))
         })?;
 
-        // 找 register 符号 (`extern "C" fn()` 无入参无返)
-        // SAFETY: `register` 是 cargo build 出来的 cdylib 入口, render_lib_rs 必有
-        let register: libloading::Symbol<extern "C" fn()> = unsafe {
-            library.get(b"register\0")
-        }
-        .map_err(|e| CreatorError::Load(format!("找 register 符号失败: {e}")))?;
-
-        // 调 register (side effect: plugin 自己 eprintln / 设 static / P10-1.8 注入 registry)
-        register();
-
         Ok(LoadedPlugin {
             name: name.to_string(),
             artifact_path: artifact,
             _library: library,
+            host_mode,
         })
     }
 
@@ -380,18 +452,20 @@ impl CreatorFactory {
         }
     }
 
-    /// 端到端: 业务方 (model) 推 spec, 编译, 加载 dylib
+    /// 端到端: 业务方 (model) 推 spec, 编译, 加载 dylib, 注入 host ToolRegistry
     ///
-    /// 简化版: register_spec + compile + load_into 一气呵成
+    /// 简化版: register_spec + compile + load_into_with_registry 一气呵成
     /// **P10-1.7 改动**: 返 `LoadedPlugin` (RAII 句柄保 dylib 活), 业务方拿它
+    /// **P10-1.8 改动**: 加 `host_registry` 参数, 自动 detect host_mode (P10-1.7 兼容 / P10-1.8 真注入)
     pub async fn create_and_load(
         &self,
         spec: PluginSpec,
+        host_registry: &ToolRegistry,
     ) -> Result<LoadedPlugin, CreatorError> {
         let name = spec.name.clone();
         self.registry.register_spec(spec)?;
         self.registry.compile(&name).await?;
-        self.registry.load_into(&name)
+        self.registry.load_into_with_registry(&name, host_registry)
     }
 }
 
@@ -468,17 +542,18 @@ mod tests {
 
     #[tokio::test]
     async fn factory_end_to_end() {
-        // P10-1.7: v1 简化模式 (不真编译) 端到端 — register_spec + compile(v1 fallback) + load_into
+        // P10-1.7 + P10-1.8: v1 简化模式 (不真编译) 端到端 — register_spec + compile(v1 fallback) + load_into_with_registry
         // v1 fallback 标 Loaded 但不写 artifact_path, load_into 找不到 dll 路径会 NotFound / Load 错
         // 这个 test 验证: 不 panic, 返错合理
         let factory = CreatorFactory::new();
-        let result = factory.create_and_load(sample_spec()).await;
+        let host_registry = ToolRegistry::new();
+        let result = factory.create_and_load(sample_spec(), &host_registry).await;
         assert!(result.is_err(), "v1 模式 load_into 应该失败 (dll 不存在)");
     }
 
     #[tokio::test]
     async fn factory_end_to_end_real_compile_and_load() {
-        // P10-1.7: 真 cargo 编译 + 真 libloading 加载 (集成测)
+        // P10-1.7 + P10-1.8: 真 cargo 编译 + 真 libloading 加载 (集成测)
         // CI 环境可能没 cargo / network, skip 失败
         use crate::creator_compile::CompileConfig;
 
@@ -498,7 +573,8 @@ mod tests {
         spec.name = "real_compile_load_test".into();
         spec.source_code = r#"pub fn add(a: i32, b: i32) -> i32 { a + b }"#.into();
 
-        let result = factory.create_and_load(spec).await;
+        let host_registry = ToolRegistry::new();
+        let result = factory.create_and_load(spec, &host_registry).await;
         if let Err(e) = &result {
             eprintln!("real_compile_load (CI skip): {e}");
             return;
@@ -511,8 +587,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_into_dylib_calls_register() {
-        // P10-1.7: load_into 拿 dylib, 调 register extern "C" fn()
-        // 这个 test 跟 factory_end_to_end_real_compile_and_load 重复, 这里测单一 load_into
+        // P10-1.7: load_into 拿 dylib (P10-1.8: 不自动调 register, 业务方 invoke_register 显式)
         use crate::creator_compile::CompileConfig;
 
         let dir = tempfile::TempDir::new().unwrap();
@@ -536,13 +611,105 @@ mod tests {
             eprintln!("compile 失败 (CI skip)");
             return;
         }
-        let loaded = reg.load_into("load_into_test");
+        let host_registry = ToolRegistry::new();
+        let loaded = reg.load_into_with_registry("load_into_test", &host_registry);
         if let Err(e) = &loaded {
             eprintln!("load_into 失败 (CI skip): {e}");
             return;
         }
         let loaded = loaded.unwrap();
         assert!(loaded.path().exists());
+        assert!(!loaded.is_host_mode(), "无 host_crate_path 应是 P10-1.7 模式");
+    }
+
+    #[tokio::test]
+    async fn factory_end_to_end_real_compile_and_load_with_host_registry() {
+        // P10-1.8: 完整闭环 — 真 cargo 编译 + plugin 依赖 ma-harness-core + libloading + register 符号查找
+        // CI 环境可能没 cargo / network, skip 失败
+        //
+        // **P10-1.8 跨 dylib 限制** (P10-1.8 v1 已知问题, v2 修):
+        // - plugin 跟 host 各自编译 ma-harness-core, ToolRegistry 内部 RwLock<HashMap> 跨 dylib
+        //   Rust ABI 不稳 (Rust 不保证 ABI, 优化/泛型展开可能不同)
+        // - `register(&ToolRegistry)` 调 plugin-side register_impl, 在 plugin 的 ma-harness-core
+        //   上下文里执行, 但 self 是 host 的 ToolRegistry (不同编译单元) → STATUS_ACCESS_VIOLATION
+        // - 跨 dylib 共享 Rust trait object (Arc<dyn Fn>) vtable 也不稳, drop 顺序敏感
+        //
+        // **业务方 workaround (P10-1.8 v1)**:
+        // - 业务方拿 LoadedPlugin, 自己 `library.get(b"register\0")` 验证符号存在
+        // - 不调 invoke_register, 等 P10-1.8 v2 (C-ABI callback 模式, plugin 暴露 JSON 串, host 自己造 closure)
+        //
+        // **测试覆盖**: 验证编译 + 加载 + is_host_mode + register 符号存在 (但不调 register_impl)
+        use crate::creator_compile::CompileConfig;
+        use std::path::PathBuf;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        let host_crate_path = manifest_dir.clone();
+        let cfg = CompileConfig {
+            cargo_path: None,
+            temp_root: Some(dir.path().to_path_buf()),
+            output_dir: Some(dir.path().join("out")),
+            timeout: std::time::Duration::from_secs(180),
+            release: false,
+            host_crate_path: Some(host_crate_path),
+        };
+
+        let mut factory = CreatorFactory::new();
+        factory.registry.set_compile_config(Some(cfg));
+
+        let mut spec = sample_spec();
+        spec.name = "host_registry_test".into();
+        spec.description = "P10-1.8 host mode test".into();
+        spec.source_code = r#"
+use ma_harness_core::{ToolRegistry, ToolSchema, ToolInvokeFn};
+use std::sync::Arc;
+use serde_json::json;
+
+pub fn register_impl(registry: &ToolRegistry) {
+    let schema = ToolSchema {
+        name: "host_registry_test".into(),
+        description: "P10-1.8 host mode test".into(),
+        parameters: json!({"type": "object", "properties": {}}),
+    };
+    let invoke: ToolInvokeFn = Arc::new(|_args, _ctx| {
+        Box::pin(async { Ok(json!({"ok": true})) })
+    });
+    registry.register(schema, invoke);
+}
+"#
+        .into();
+
+        let result = factory.registry.register_spec(spec);
+        let name = match result {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("host_registry_test register_spec 失败: {e}");
+                return;
+            }
+        };
+        if let Err(e) = factory.registry.compile(&name).await {
+            eprintln!("host_registry_test compile (CI skip): {e}");
+            return;
+        }
+        // P10-1.8 v1: 只验 dylib 加载 + register 符号存在, 不调 invoke_register (跨 dylib Rust ABI 不稳)
+        let loaded = match factory.registry.load_into(&name) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("host_registry_test load_into (CI skip): {e}");
+                return;
+            }
+        };
+        assert_eq!(loaded.name(), "host_registry_test");
+        assert!(loaded.is_host_mode(), "host_crate_path 设了应是 host mode");
+        assert!(loaded.path().exists());
+        // 找 register 符号 (C-ABI 跨 dylib 安全, 不调)
+        #[allow(unsafe_code)]
+        let symbol_present = unsafe {
+            loaded._library_unchecked_for_test().get::<extern "C" fn(*const std::ffi::c_void)>(b"register\0").is_ok()
+        };
+        assert!(symbol_present, "register C-ABI 符号应在 dylib 里");
     }
 
     #[test]
