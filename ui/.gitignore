@@ -1,0 +1,25 @@
+node_modules
+dist
+dist-ssr
+.vite
+.DS_Store
+*.log
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# build output
+*.tsbuildinfo
