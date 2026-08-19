@@ -25,6 +25,8 @@
 #[allow(unused_imports)]
 use ma_harness_plugin_hello as _hello;
 
+pub mod approval;
+
 use anyhow::Result;
 use parking_lot::Mutex;
 use ratatui::{
