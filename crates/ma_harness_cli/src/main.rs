@@ -108,6 +108,24 @@ enum Commands {
     },
     /// 版本
     Version,
+    /// 跑 Code Mode (Phase 2 / T3.1) — 编译并执行 wasm module
+    ///
+    /// 例子:
+    ///   mah code run ./hello.wat
+    ///   mah code run ./module.wasm
+    Code {
+        #[command(subcommand)]
+        action: CodeAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CodeAction {
+    /// 跑一个 .wat 或 .wasm 文件
+    Run {
+        /// 文件路径 (.wat text / .wasm binary)
+        file: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -133,6 +151,9 @@ async fn main() -> Result<()> {
             println!("mah {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Commands::Code { action } => match action {
+            CodeAction::Run { file } => run_code(&file),
+        },
     }
 }
 
@@ -322,6 +343,40 @@ fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose
     println!("JSON:     {}", json_path.display());
     println!("Format:   {:?}", ReportFormat::Markdown);
 
+    Ok(())
+}
+
+/// 跑 Code Mode: 编译并执行 .wat / .wasm 文件
+fn run_code(file: &std::path::Path) -> Result<()> {
+    use ma_harness_code::CodeRunner;
+    let runner = CodeRunner::new()
+        .map_err(|e| anyhow::anyhow!("init CodeRunner: {e}"))?;
+    eprintln!("mah code run: loading {}", file.display());
+    let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let output = match ext {
+        "wat" => {
+            let text = std::fs::read_to_string(file)
+                .with_context(|| format!("read WAT: {}", file.display()))?;
+            runner
+                .run_wat(&text)
+                .map_err(|e| anyhow::anyhow!("run WAT: {e}"))?
+        }
+        "wasm" => {
+            let bytes = std::fs::read(file)
+                .with_context(|| format!("read WASM: {}", file.display()))?;
+            runner
+                .run_wasm(&bytes)
+                .map_err(|e| anyhow::anyhow!("run WASM: {e}"))?
+        }
+        other => {
+            anyhow::bail!("unsupported extension '.{}', expected .wat or .wasm", other);
+        }
+    };
+    println!("--- stdout ---");
+    for line in &output.stdout_lines {
+        println!("{}", line);
+    }
+    println!("--- return value: {} ---", output.return_value);
     Ok(())
 }
 

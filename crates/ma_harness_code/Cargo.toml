@@ -1,0 +1,20 @@
+[package]
+name = "ma_harness_code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness Code Mode (LLM-generated code in wasm sandbox)"
+
+[lints]
+workspace = true
+
+[dependencies]
+wasmtime = { workspace = true }
+wat = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }

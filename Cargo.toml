@@ -12,6 +12,7 @@ members = [
     "crates/ma_harness_conformance",
     "crates/ma_harness_sandbox",  # 2026-08-18 (Day 55): Phase 2.2 landlock sandbox
     "crates/ma_harness_model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
+    "crates/ma_harness_code",  # 2026-08-19 (Day 68): Phase 2.6 Code Mode (wasmtime)
     "plugins/ma_harness_plugin_hello",
     "plugins/ma_harness_plugin_bash",
     "plugins/ma_harness_plugin_fs",
@@ -119,6 +120,10 @@ tempfile = "3"
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
+
+# Code Mode (Phase 2 / T3.1 — LLM-generated code 跑在 wasm sandbox)
+wasmtime = { version = "27" }
+wat = "1"
 
 [profile.release]
 lto = "thin"
