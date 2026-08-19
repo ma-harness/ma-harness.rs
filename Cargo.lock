@@ -2476,6 +2476,7 @@ dependencies = [
  "ma-harness-seam",
  "parking_lot",
  "ratatui",
+ "tempfile",
  "tokio",
  "tracing",
 ]

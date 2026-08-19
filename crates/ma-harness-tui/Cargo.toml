@@ -26,3 +26,7 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# P4-1: EventLog test
+tempfile = { workspace = true }

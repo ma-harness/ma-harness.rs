@@ -299,6 +299,70 @@ impl EventLog {
             |row| row.get(0),
         )
     }
+
+    /// 列出所有 session_id (按事件数倒序, 最近活跃的先)
+    ///
+    /// **Phase 4 / P4-1**: TUI 拿 session 列表用 (替代走 PluginLoader 假数据)
+    pub fn list_sessions(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.inner.lock();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, COUNT(*) as cnt FROM events
+             GROUP BY session_id
+             ORDER BY cnt DESC
+             LIMIT 100",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// **Phase 4 / P4-1**: 全局拉最近 N 条事件 (跨所有 session)
+    ///
+    /// 不需要 session_id 过滤, 按 seq DESC 拿最新 N 条再 reverse 给 TUI 显示
+    pub fn recent_events(&self, limit: u32) -> rusqlite::Result<Vec<StoredEvent>> {
+        let conn = self.inner.lock();
+        let mut stmt = conn.prepare(
+            "SELECT seq, id, session_id, event_type, ts, severity, run_id, plugin_name, payload_json, error_message, model_visible
+             FROM events
+             ORDER BY seq DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                let seq: i64 = row.get(0)?;
+                let id: String = row.get(1)?;
+                let session_id: String = row.get(2)?;
+                let event_type_int: i32 = row.get(3)?;
+                let ts_str: String = row.get(4)?;
+                let severity_int: i32 = row.get(5)?;
+                let run_id: Option<String> = row.get(6)?;
+                let plugin_name: Option<String> = row.get(7)?;
+                let payload_json: Option<String> = row.get(8)?;
+                let error_message: Option<String> = row.get(9)?;
+                let model_visible_int: i32 = row.get(10)?;
+                let ts = parse_rfc3339(&ts_str)
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+                let event = SessionEvent {
+                    id,
+                    session_id,
+                    event_type: EventType::from_i32(event_type_int),
+                    ts,
+                    severity: severity_from_int(severity_int),
+                    run_id,
+                    plugin_name,
+                    payload_json,
+                    error_message,
+                    model_visible: model_visible_int != 0,
+                };
+                Ok(StoredEvent { seq, event })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // reverse 给升序 (TUI 滚动)
+        let mut v = rows;
+        v.reverse();
+        Ok(v)
+    }
 }
 
 fn parse_rfc3339(s: &str) -> rusqlite::Result<DateTime<Utc>> {

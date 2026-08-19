@@ -35,7 +35,10 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use std::sync::Arc;
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+use ma_harness_core::EventLog;
 
 /// TUI app state
 pub struct TuiApp {
@@ -45,6 +48,8 @@ pub struct TuiApp {
     events: Arc<Mutex<Vec<EventRow>>>,
     /// plugin list (from inventory)
     plugins: Arc<Mutex<Vec<String>>>,
+    /// EventLog 可选 (None = stub fallback)
+    event_log: Option<Arc<EventLog>>,
     /// 启动时间
     started_at: Instant,
     /// tick 计数
@@ -62,76 +67,139 @@ struct SessionRow {
 /// 一行 event
 #[derive(Debug, Clone)]
 struct EventRow {
-    seq: u64,
+    seq: i64,
+    session_id: String,
     event_type: String,
     severity: String,
     timestamp: String,
 }
 
+
 impl TuiApp {
-    /// 构造一个新 TUI app
+    /// 构造一个新 TUI app (无 EventLog, 全 stub fallback)
     pub fn new() -> Result<Self> {
+        Self::new_with_log(None)
+    }
+
+    /// 构造 + 接 EventLog (P4-1 / TUI 接真数据)
+    ///
+    /// log_path = Some(path) → 打开 sqlite, 接真 events
+    /// log_path = None → 走 stub fallback (Phase 3.9 行为)
+    pub fn new_with_log(log_path: Option<&Path>) -> Result<Self> {
+        // 尝试打开 EventLog
+        let event_log = match log_path {
+            Some(p) => match EventLog::open(p) {
+                Ok(log) => {
+                    eprintln!("TUI: opened event log {}", p.display());
+                    Some(Arc::new(log))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "TUI: WARN failed to open event log {}: {e}; using stub",
+                        p.display()
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
         let app = Self {
             sessions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
             plugins: Arc::new(Mutex::new(Vec::new())),
+            event_log,
             started_at: Instant::now(),
             ticks: 0,
         };
-        // 初始数据 (走 inventory + dummy sessions/events)
         app.refresh()?;
         Ok(app)
     }
 
-    /// 刷新数据 (从 inventory + 模拟)
+    /// 刷新数据 (从 inventory + EventLog / stub)
     fn refresh(&self) -> Result<()> {
-        // 1. plugin list (从 inventory)
+        // 1. plugin list (从 inventory, 永远真)
         let plugins: Vec<String> = ma_harness_seam::PluginLoader::list()
             .into_iter()
             .map(|s| s.to_string())
             .collect();
         *self.plugins.lock() = plugins;
 
-        // 2. sessions: Phase 3.9 PoC 暂不接 EventLog (复杂),
-        //    用 inventory plugin 数 + runtime 状态当 dummy 行
+        // 2-3. sessions + events: 优先 EventLog, fallback stub
+        if let Some(log) = &self.event_log {
+            self.refresh_from_log(log)?;
+        } else {
+            self.refresh_stub();
+        }
+        Ok(())
+    }
+
+    fn refresh_from_log(&self, log: &EventLog) -> Result<()> {
+        let session_ids = log.list_sessions().unwrap_or_default();
         let mut sessions = self.sessions.lock();
         sessions.clear();
-        sessions.push(SessionRow {
-            id: "default".to_string(),
-            state: "running".to_string(),
-            age: format!("{:.0}s", self.started_at.elapsed().as_secs_f32()),
-        });
-        for (i, p) in self.plugins.lock().iter().enumerate() {
+        for sid in session_ids.iter().take(20) {
+            let count = log.count(sid).unwrap_or_else(|_| 0);
             sessions.push(SessionRow {
-                id: format!("plugin-{}", i),
-                state: "loaded".to_string(),
-                age: format!("plugin:{}", p),
+                id: sid.clone(),
+                state: if count > 0 { "active" } else { "idle" }.to_string(),
+                age: format!("{} events", count),
+            });
+        }
+        if sessions.is_empty() {
+            sessions.push(SessionRow {
+                id: "(no events yet)".to_string(),
+                state: "—".to_string(),
+                age: "—".to_string(),
             });
         }
         drop(sessions);
 
-        // 3. events: dummy 滚动
+        let stored = log.recent_events(20).unwrap_or_default();
+        let mut events = self.events.lock();
+        events.clear();
+        for s in stored {
+            events.push(EventRow {
+                seq: s.seq,
+                event_type: format!("{:?}", s.event.event_type),
+                severity: format!("{:?}", s.event.severity),
+                timestamp: s.event.ts.format("%H:%M:%S").to_string(),
+                session_id: s.event.session_id.chars().take(8).collect(),
+            });
+        }
+        Ok(())
+    }
+
+    fn refresh_stub(&self) {
+        let mut sessions = self.sessions.lock();
+        sessions.clear();
+        sessions.push(SessionRow {
+            id: "default".to_string(),
+            state: "stub".to_string(),
+            age: format!("{:.0}s", self.started_at.elapsed().as_secs_f32()),
+        });
+        drop(sessions);
+
         let mut events = self.events.lock();
         events.clear();
         let tick = self.ticks;
         for i in 0..20 {
             events.push(EventRow {
-                seq: tick * 20 + i,
+                seq: (tick * 20 + i) as i64,
+                session_id: "stub".to_string(),
                 event_type: match i % 4 {
-                    0 => "session.start".to_string(),
-                    1 => "tool.call".to_string(),
-                    2 => "model.response".to_string(),
-                    _ => "session.tick".to_string(),
+                    0 => "SessionStart".to_string(),
+                    1 => "ToolCall".to_string(),
+                    2 => "ModelResponse".to_string(),
+                    _ => "SessionTick".to_string(),
                 },
                 severity: match i % 3 {
-                    0 => "info".to_string(),
-                    1 => "info".to_string(),
-                    _ => "debug".to_string(),
+                    0 => "Info".to_string(),
+                    1 => "Info".to_string(),
+                    _ => "Debug".to_string(),
                 },
                 timestamp: format!("+{}ms", i * 500),
             });
         }
-        Ok(())
     }
 
     /// 跑 TUI main loop
@@ -320,5 +388,67 @@ mod tests {
         let app = TuiApp::new().unwrap();
         let events = app.events.lock();
         assert_eq!(events.len(), 20, "events 应有 20 条滚动");
+    }
+
+    // === P4-1: 接真 EventLog ===
+
+    /// 业务方传 --log <sqlite db>, 走真 EventLog (不 stub)
+    #[test]
+    fn tui_with_real_event_log_reads_sessions() {
+        use ma_harness_core::{EventLog, EventType, SessionEvent};
+        use ma_harness_core::event::Severity;
+
+        // 1. 准备一个 sqlite, append 2 个 session + 3 events
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("events.db");
+        let log = EventLog::open(&db_path).unwrap();
+
+        for session_id in ["s1", "s2"] {
+            // SessionStart / ToolCall 是 model_visible, 必须有 payload_json
+            let mut ev_start = SessionEvent::new(session_id, EventType::SessionStart);
+            ev_start.payload_json = Some(format!(r#"{{"session":"{}"}}"#, session_id));
+            let _ = log.append(ev_start);
+            let mut ev_tool = SessionEvent::new(session_id, EventType::ToolCall);
+            ev_tool.payload_json = Some(r#"{"tool":"echo"}"#.to_string());
+            let _ = log.append(ev_tool);
+        }
+
+        // 2. TUI 接真 EventLog
+        let app = TuiApp::new_with_log(Some(&db_path)).unwrap();
+        let sessions = app.sessions.lock();
+        // 2 个 session 出现 (顺序按 count DESC, 都 = 2 events, 都进)
+        let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        assert!(ids.contains(&"s1".to_string()), "s1 应在 sessions: {:?}", ids);
+        assert!(ids.contains(&"s2".to_string()), "s2 应在 sessions: {:?}", ids);
+        // state 应该是 "active" (count > 0)
+        for s in sessions.iter() {
+            if s.id == "s1" || s.id == "s2" {
+                assert_eq!(s.state, "active", "session {} 应 active", s.id);
+            }
+        }
+        drop(sessions);
+
+        // 3. events 应有 4 条 (2 session_start + 2 tool_call)
+        let events = app.events.lock();
+        assert!(events.len() >= 2, "events 应有 >= 2 条, got {}", events.len());
+        // 验证 event_type 是 EventType Debug 输出
+        let first = &events[0];
+        assert!(
+            first.event_type.contains("SessionStart") || first.event_type.contains("ToolCall"),
+            "event_type 应是 SessionStart/ToolCall: {}",
+            first.event_type
+        );
+    }
+
+    /// 业务方传不可写 path (目录) → EventLog::open 失败 → fallback stub (不 panic)
+    #[test]
+    fn tui_with_unwritable_log_path_falls_back_to_stub() {
+        // 用一个目录当 path (sqlite 不能 open 目录, 必 fail)
+        let tmpdir = tempfile::tempdir().unwrap();
+        // TUI 应 fallback stub, 不 panic
+        let app = TuiApp::new_with_log(Some(tmpdir.path())).unwrap();
+        // events 应 fallback 到 stub (20 条)
+        let events = app.events.lock();
+        assert_eq!(events.len(), 20, "fallback 后 events 应有 20 条");
     }
 }

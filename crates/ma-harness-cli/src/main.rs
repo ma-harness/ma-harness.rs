@@ -158,7 +158,12 @@ enum Commands {
     ///
     /// 3 个 panel: Sessions | Events | Plugins
     /// 每 500ms 刷新, 'q' / Esc / Ctrl-C 退出
-    Tui,
+    Tui {
+        /// **P4-1**: EventLog sqlite path (走真 events)
+        /// 缺省: stub fallback (Phase 3.9 行为)
+        #[arg(long)]
+        log: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -242,7 +247,7 @@ async fn main() -> Result<()> {
             } => apply_sandbox(read_paths, write_paths, exec_paths, temp_dir),
             SandboxAction::Status => print_sandbox_status(),
         },
-        Commands::Tui => run_tui(),
+        Commands::Tui { log } => run_tui(log.as_deref()),
     }
 }
 
@@ -753,8 +758,10 @@ fn apply_sandbox(
 /// - Status bar (底): ticks / uptime / events
 ///
 /// 'q' / Esc / Ctrl-C 退出. 走 ratatui::init() + ratatui::restore() 保证 terminal 状态恢复.
-fn run_tui() -> Result<()> {
-    let mut app = ma_harness_tui::TuiApp::new()
+///
+/// **P4-1** 增强: log 参数走真 EventLog (sqlite 读), 缺省走 stub.
+fn run_tui(log: Option<&std::path::Path>) -> Result<()> {
+    let mut app = ma_harness_tui::TuiApp::new_with_log(log)
         .map_err(|e| anyhow::anyhow!("init TuiApp: {e}"))?;
     app.run().map_err(|e| anyhow::anyhow!("tui run: {e}"))
 }
