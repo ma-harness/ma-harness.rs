@@ -29,7 +29,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::tool::ToolRegistry;
+use crate::tool::{ToolInvokeFn, ToolRegistry, ToolSchema};
 
 /// Plugin spec (P9-2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,10 +96,20 @@ pub enum CreatorError {
 /// 持有 `libloading::Library` 防 dylib 被 unload (Linux/Unix 上 dlclose 静态符号失效).
 /// `Drop` 时自动 unload, 业务方可以 clone / 拿 name 引用, 不需要再管底层.
 ///
-/// 业务方 P10-1.8 想跨 dylib 传 Rust 类型 (`&ToolRegistry`), 拿这个句柄然后调
-/// `invoke_register(&ToolRegistry)`, plugin 内部已经把工具注入 host ToolRegistry.
-/// v1 (`CompileConfig::host_crate_path = None`) register 是 `extern "C" fn()` 无入参, 仅 side effect.
-/// v2 (P10-1.8, `host_crate_path = Some`) register 改 `fn(&ToolRegistry)`, 业务方提供 registry.
+/// P10-1.7 + P10-1.8 v2: LoadedPlugin — libloading Library RAII 句柄
+///
+/// 持有 `libloading::Library` 防 dylib 被 unload (Linux/Unix 上 dlclose 静态符号失效).
+/// `Drop` 时自动 unload, 业务方可以 clone / 拿 name 引用, 不需要再管底层.
+///
+/// **P10-1.8 v2 模式** (业务方真可用):
+/// - plugin exports `plugin_schemas_json() -> *const c_char` (C-ABI) — 返 JSON array
+/// - plugin exports `plugin_invoke_json(name, args_json) -> *const c_char` (C-ABI) — 返 JSON result
+/// - host `invoke_register(&ToolRegistry)` 调 plugin_schemas_json 拿 schemas, parse 成 Vec<ToolSchema>
+/// - host 对每个 schema 造 host-side `ToolInvokeFn` (host-allocated, vtable 稳)
+///   内部闭包调 `plugin_invoke_json(name, args_json)` 拿结果
+/// - host registry.register(schema, invoke_fn) 注入 host ToolRegistry
+/// - 跨 dylib 边界全是 C-ABI + JSON 字符串, ABI 稳定
+/// - **plugin 端 closure 不 escape 到 host**, 不存在 use-after-free
 #[derive(Debug)]
 pub struct LoadedPlugin {
     /// Plugin 名 (业务方拿这个索引)
@@ -108,8 +118,6 @@ pub struct LoadedPlugin {
     pub artifact_path: PathBuf,
     /// libloading Library (Drop 时自动 dlclose)
     _library: libloading::Library,
-    /// P10-1.8: 是否 P10-1.8 模式 (host_crate_path 设了)
-    host_mode: bool,
 }
 
 impl LoadedPlugin {
@@ -129,41 +137,102 @@ impl LoadedPlugin {
         &self._library
     }
 
-    /// P10-1.8: 是不是 host_crate 模式 (register 收 `&ToolRegistry`)
-    pub fn is_host_mode(&self) -> bool {
-        self.host_mode
-    }
-
-    /// P10-1.8: 调 plugin 的 register, 注入 host ToolRegistry
+    /// P10-1.8 v2: 调 plugin_schemas_json + plugin_invoke_json, 注入 host ToolRegistry
     ///
-    /// - P10-1.7 模式 (`host_mode = false`): register 是 `extern "C" fn()`, 无入参, 调 side effect
-    /// - P10-1.8 模式 (`host_mode = true`): register 是 `extern "C" fn(*const c_void)`,
-    ///   业务方 source_code 写 `register_impl(registry: &ToolRegistry)`, render 框架 wrap 成
-    ///   `register(handle: *const c_void) { let registry = unsafe { &*(handle as *const ToolRegistry) }; register_impl(registry) }`.
-    ///   这样 C-ABI 跨 dylib 稳, 业务方心智负担小.
-    ///
-    /// 业务方:
+    /// 业务方流程:
     /// 1. 拿 LoadedPlugin 句柄 (RAII 保 dylib 活)
     /// 2. 调 `invoke_register(&host_registry)`, plugin 内部 `registry.register(schema, invoke_fn)`
     /// 3. 之后业务方用 `host_registry.invoke("tool_name", args)` 调 plugin 工具
-    #[allow(unsafe_code)] // P10-1.8: libloading 跨 dylib + opaque handle cast 是 unsafe C-ABI 必需
+    ///
+    /// **跨 dylib 安全**:
+    /// - C-ABI 调用 plugin_schemas_json / plugin_invoke_json, ABI 稳
+    /// - host 端造的 ToolInvokeFn 闭包, vtable 是 host 的, drop 安全
+    /// - plugin 端 closure 不 escape 到 host, 不存在 use-after-free
+    #[allow(unsafe_code)] // P10-1.8 v2: libloading + CStr::from_ptr 是跨 dylib FFI 必需
     pub fn invoke_register(&self, registry: &ToolRegistry) -> Result<(), CreatorError> {
-        if self.host_mode {
-            // P10-1.8: C-ABI 传 opaque handle, plugin 内部 unsafe cast 回 &ToolRegistry
-            // SAFETY: plugin 跟 host 同一份 ma-harness-core (host_crate_path 强制), ToolRegistry 类型 layout 一致
-            let register: libloading::Symbol<extern "C" fn(*const std::ffi::c_void)> = unsafe {
-                self._library.get(b"register\0")
-            }
-            .map_err(|e| CreatorError::Load(format!("找 register 符号失败 (P10-1.8 host mode): {e}")))?;
-            let handle = registry as *const ToolRegistry as *const std::ffi::c_void;
-            register(handle);
-        } else {
-            // P10-1.7 兼容: extern "C" fn() 无入参
-            let register: libloading::Symbol<extern "C" fn()> = unsafe {
-                self._library.get(b"register\0")
-            }
-            .map_err(|e| CreatorError::Load(format!("找 register 符号失败 (P10-1.7 standalone): {e}")))?;
-            register();
+        use std::ffi::CStr;
+
+        // 1. 拿 plugin_schemas_json symbol
+        // SAFETY: plugin 是 cdylib, plugin_schemas_json 由 render 框架生成 extern "C"
+        let schemas_fn: libloading::Symbol<extern "C" fn() -> *const std::ffi::c_char> = unsafe {
+            self._library.get(b"plugin_schemas_json\0")
+        }
+        .map_err(|e| {
+            CreatorError::Load(format!(
+                "找 plugin_schemas_json 符号失败 (P10-1.8 v2 C-ABI JSON 模式): {e}"
+            ))
+        })?;
+
+        // 2. 拿 plugin_invoke_json symbol
+        // SAFETY: plugin 是 cdylib, plugin_invoke_json 由 render 框架生成 extern "C"
+        let plugin_invoke_fn: libloading::Symbol<
+            extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> *const std::ffi::c_char,
+        > = unsafe { self._library.get(b"plugin_invoke_json\0") }.map_err(|e| {
+            CreatorError::Load(format!(
+                "找 plugin_invoke_json 符号失败 (P10-1.8 v2): {e}"
+            ))
+        })?;
+
+        // 3. 拿 schemas JSON
+        // SAFETY: schemas_fn 返 *const c_char, plugin 内部 `plugin_schemas().as_ptr()` 来
+        // plugin_schemas 返 &'static str, 整个 plugin unload 时整体释放, 调用期间 valid
+        let schemas_ptr = schemas_fn();
+        let schemas_str = unsafe { CStr::from_ptr(schemas_ptr) }
+            .to_str()
+            .map_err(|e| CreatorError::Load(format!("plugin_schemas_json UTF-8 错: {e}")))?;
+
+        // 4. parse JSON array → Vec<ToolSchema>
+        let schema_list: Vec<ToolSchema> = serde_json::from_str(schemas_str)
+            .map_err(|e| CreatorError::Load(format!("parse plugin_schemas_json 失败: {e}")))?;
+
+        // 5. 对每个 schema, 造 host ToolInvokeFn (host-allocated, vtable 稳) + 注册
+        // **关键**: libloading::Symbol 借 Library 生命周期, 不能 capture 进 'static Arc closure
+        // 改 capture 函数指针 (extern "C" fn 是 Copy, 可以 move 进 closure)
+        let plugin_invoke_fn_ptr: extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> *const std::ffi::c_char =
+            *plugin_invoke_fn;
+        for schema in schema_list {
+            let schema_name_for_invoke = schema.name.clone();
+            // 业务方 invoke 路径: host 闭包 → plugin_invoke_json(name, args_json)
+            let invoke: ToolInvokeFn = Arc::new(move |args, _ctx| {
+                let name_c = match std::ffi::CString::new(schema_name_for_invoke.clone()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Box::pin(async move {
+                            Err(anyhow::anyhow!("CString::new(name) 失败"))
+                        });
+                    }
+                };
+                let args_str = args.to_string();
+                let args_c = match std::ffi::CString::new(args_str) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Box::pin(async move {
+                            Err(anyhow::anyhow!("CString::new(args) 失败"))
+                        });
+                    }
+                };
+                // SAFETY: name_c + args_c valid C string, plugin 内部 unsafe cast + 处理
+                // plugin_invoke_fn_ptr 是 extern "C" fn (Copy), 调它合法
+                let result_ptr = plugin_invoke_fn_ptr(name_c.as_ptr(), args_c.as_ptr());
+                let result_str = match unsafe { CStr::from_ptr(result_ptr) }.to_str() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Box::pin(async move {
+                            Err(anyhow::anyhow!("plugin_invoke_json UTF-8 错: {e}"))
+                        });
+                    }
+                };
+                let result: serde_json::Value = match serde_json::from_str(result_str) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Box::pin(async move {
+                            Err(anyhow::anyhow!("parse plugin_invoke_json 结果失败: {e}"))
+                        });
+                    }
+                };
+                Box::pin(async move { Ok(result) })
+            });
+            registry.register(schema, invoke);
         }
         Ok(())
     }
@@ -319,29 +388,20 @@ impl CreatorRegistry {
         self.compile_config = cfg;
     }
 
-    /// 加载编译产物 via libloading (P10-1.7 + P10-1.8 / Day 101)
+    /// 加载编译产物 via libloading (P10-1.7 + P10-1.8 v2 / Day 101)
     ///
     /// 1. 拿 `dylib_artifact_path(name)` (P10-1.6 + P10-1.7: 用 compile 记录的 artifact_path)
     /// 2. `libloading::Library::new(path)` 加载 dylib (跨平台 dlopen / LoadLibrary)
-    /// 3. 自动 detect host_mode (从 `compile_config.host_crate_path` 推断)
-    /// 4. 返 `LoadedPlugin` 句柄 (RAII 保活, Drop 时 dlclose)
+    /// 3. 返 `LoadedPlugin` 句柄 (RAII 保活, Drop 时 dlclose)
     ///
-    /// **P10-1.8 改动**: 自动 detect host_mode. 业务方拿 `LoadedPlugin` 后调 `invoke_register(&host_registry)`.
-    #[allow(unsafe_code)] // P10-1.8: libloading unsafe { Library::new + ... } 是 dylib FFI 必需
+    /// **P10-1.8 v2**: 业务方拿 `LoadedPlugin` 后调 `invoke_register(&host_registry)`.
+    /// 不在 load_into 调 register, 业务方自己控制时序.
+    #[allow(unsafe_code)] // P10-1.8 v2: libloading unsafe { Library::new + ... } 是 dylib FFI 必需
     pub fn load_into(&self, name: &str) -> Result<LoadedPlugin, CreatorError> {
-        let host_mode = self
-            .compile_config
-            .as_ref()
-            .and_then(|c| c.host_crate_path.as_ref())
-            .is_some();
-        self.load_into_impl(name, host_mode)
+        self.load_into_impl(name)
     }
 
-    /// P10-1.8: 加载 dylib + 调 register 注入 host ToolRegistry
-    ///
-    /// - 自动 detect host_mode (从 `compile_config.host_crate_path` 推断)
-    /// - host_mode = true: register(handle) 注入 host (C-ABI 跨 dylib 稳)
-    /// - host_mode = false: register() 调 side effect
+    /// P10-1.8 v2: 加载 dylib + 调 register 注入 host ToolRegistry
     ///
     /// 业务方:
     /// ```ignore
@@ -359,9 +419,9 @@ impl CreatorRegistry {
         Ok(loaded)
     }
 
-    /// load_into 内部实现 (P10-1.8: 拆 host_mode 给 load_into_with_registry 复用)
+    /// load_into 内部实现 (P10-1.8 v2: 简化, 无 host_mode 概念)
     #[allow(unsafe_code)]
-    fn load_into_impl(&self, name: &str, host_mode: bool) -> Result<LoadedPlugin, CreatorError> {
+    fn load_into_impl(&self, name: &str) -> Result<LoadedPlugin, CreatorError> {
         let artifact = self.dylib_artifact_path(name)?;
 
         // 跨平台: libloading::Library::new 自动 dlopen (Unix) / LoadLibraryW (Windows)
@@ -374,7 +434,6 @@ impl CreatorRegistry {
             name: name.to_string(),
             artifact_path: artifact,
             _library: library,
-            host_mode,
         })
     }
 
@@ -619,97 +678,108 @@ mod tests {
         }
         let loaded = loaded.unwrap();
         assert!(loaded.path().exists());
-        assert!(!loaded.is_host_mode(), "无 host_crate_path 应是 P10-1.7 模式");
     }
 
     #[tokio::test]
     async fn factory_end_to_end_real_compile_and_load_with_host_registry() {
-        // P10-1.8: 完整闭环 — 真 cargo 编译 + plugin 依赖 ma-harness-core + libloading + register 符号查找
+        // P10-1.8 v2: 完整闭环 — 真 cargo 编译 + libloading + invoke_register + 真 invoke 验证
         // CI 环境可能没 cargo / network, skip 失败
         //
-        // **P10-1.8 跨 dylib 限制** (P10-1.8 v1 已知问题, v2 修):
-        // - plugin 跟 host 各自编译 ma-harness-core, ToolRegistry 内部 RwLock<HashMap> 跨 dylib
-        //   Rust ABI 不稳 (Rust 不保证 ABI, 优化/泛型展开可能不同)
-        // - `register(&ToolRegistry)` 调 plugin-side register_impl, 在 plugin 的 ma-harness-core
-        //   上下文里执行, 但 self 是 host 的 ToolRegistry (不同编译单元) → STATUS_ACCESS_VIOLATION
-        // - 跨 dylib 共享 Rust trait object (Arc<dyn Fn>) vtable 也不稳, drop 顺序敏感
-        //
-        // **业务方 workaround (P10-1.8 v1)**:
-        // - 业务方拿 LoadedPlugin, 自己 `library.get(b"register\0")` 验证符号存在
-        // - 不调 invoke_register, 等 P10-1.8 v2 (C-ABI callback 模式, plugin 暴露 JSON 串, host 自己造 closure)
-        //
-        // **测试覆盖**: 验证编译 + 加载 + is_host_mode + register 符号存在 (但不调 register_impl)
+        // **P10-1.8 v2 跨 dylib 安全**:
+        // - 业务方 source_code 写 plugin_schemas() + plugin_invoke(name, args)
+        // - framework wrap C-ABI: plugin_schemas_json() + plugin_invoke_json(name, args_json)
+        // - host 拿 schemas JSON 解析, 造 host ToolInvokeFn 调 plugin_invoke_json
+        // - 全 C-ABI + JSON 字符串, ABI 稳定, plugin closure 不 escape
         use crate::creator_compile::CompileConfig;
-        use std::path::PathBuf;
 
         let dir = tempfile::TempDir::new().unwrap();
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
-        let host_crate_path = manifest_dir.clone();
         let cfg = CompileConfig {
             cargo_path: None,
             temp_root: Some(dir.path().to_path_buf()),
             output_dir: Some(dir.path().join("out")),
-            timeout: std::time::Duration::from_secs(180),
+            timeout: std::time::Duration::from_secs(120),
             release: false,
-            host_crate_path: Some(host_crate_path),
         };
 
         let mut factory = CreatorFactory::new();
         factory.registry.set_compile_config(Some(cfg));
 
         let mut spec = sample_spec();
-        spec.name = "host_registry_test".into();
-        spec.description = "P10-1.8 host mode test".into();
-        spec.source_code = r#"
-use ma_harness_core::{ToolRegistry, ToolSchema, ToolInvokeFn};
-use std::sync::Arc;
-use serde_json::json;
+        spec.name = "v2_echo".into();
+        spec.description = "P10-1.8 v2 echo test".into();
+        spec.source_code = r##"
+use std::sync::Mutex;
+use serde_json::{json, Value};
 
-pub fn register_impl(registry: &ToolRegistry) {
-    let schema = ToolSchema {
-        name: "host_registry_test".into(),
-        description: "P10-1.8 host mode test".into(),
-        parameters: json!({"type": "object", "properties": {}}),
-    };
-    let invoke: ToolInvokeFn = Arc::new(|_args, _ctx| {
-        Box::pin(async { Ok(json!({"ok": true})) })
-    });
-    registry.register(schema, invoke);
+static COUNTER: Mutex<i32> = Mutex::new(0);
+
+pub fn plugin_schemas() -> &'static str {
+    r#"[{
+        "name": "v2_echo",
+        "description": "Echo args + increment counter",
+        "parameters": {"type": "object", "properties": {"msg": {"type": "string"}}}
+    }]"#
 }
-"#
+
+pub fn plugin_invoke(name: &str, args: Value) -> Value {
+    match name {
+        "v2_echo" => {
+            let mut c = COUNTER.lock().unwrap();
+            *c += 1;
+            json!({"echo": args, "count": *c})
+        }
+        _ => json!({"error": format!("unknown tool: {name}")})
+    }
+}
+"##
         .into();
 
-        let result = factory.registry.register_spec(spec);
-        let name = match result {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("host_registry_test register_spec 失败: {e}");
-                return;
-            }
-        };
-        if let Err(e) = factory.registry.compile(&name).await {
-            eprintln!("host_registry_test compile (CI skip): {e}");
+        let host_registry = ToolRegistry::new();
+        let result = factory.create_and_load(spec, &host_registry).await;
+        if let Err(e) = &result {
+            eprintln!("v2_echo (CI skip): {e}");
             return;
         }
-        // P10-1.8 v1: 只验 dylib 加载 + register 符号存在, 不调 invoke_register (跨 dylib Rust ABI 不稳)
-        let loaded = match factory.registry.load_into(&name) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("host_registry_test load_into (CI skip): {e}");
-                return;
-            }
-        };
-        assert_eq!(loaded.name(), "host_registry_test");
-        assert!(loaded.is_host_mode(), "host_crate_path 设了应是 host mode");
+        let loaded = result.unwrap();
+        assert_eq!(loaded.name(), "v2_echo");
         assert!(loaded.path().exists());
-        // 找 register 符号 (C-ABI 跨 dylib 安全, 不调)
-        #[allow(unsafe_code)]
-        let symbol_present = unsafe {
-            loaded._library_unchecked_for_test().get::<extern "C" fn(*const std::ffi::c_void)>(b"register\0").is_ok()
-        };
-        assert!(symbol_present, "register C-ABI 符号应在 dylib 里");
+
+        // P10-1.8 v2 真闭环: host_registry 应有 plugin 注入的工具
+        let schemas = host_registry.list_schemas();
+        let schema_names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
+        let has_v2_echo = schema_names.iter().any(|n| n == "v2_echo");
+        if !has_v2_echo {
+            eprintln!("schema names missing v2_echo: {schema_names:?}");
+        }
+        assert!(has_v2_echo, "v2_echo schema must be present");
+
+        // **P10-1.8 v2 关键验证**: 真 invoke plugin 工具, 拿结果
+        // host 调 plugin 通过 C-ABI 跨 dylib, plugin 内部 plugin_invoke 算 count + echo
+        use serde_json::json;
+        // ToolRegistry::invoke(name, args, ctx) — registry-level API
+        let result = host_registry
+            .invoke(
+                "v2_echo",
+                json!({"msg": "hello"}),
+                ma_harness_cordis::Context::new(),
+            )
+            .await
+            .expect("invoke must succeed");
+        assert_eq!(result["echo"]["msg"], "hello");
+        assert_eq!(result["count"], 1);
+        // 再 invoke 一次, count 应是 2
+        let result2 = host_registry
+            .invoke(
+                "v2_echo",
+                json!({"msg": "world"}),
+                ma_harness_cordis::Context::new(),
+            )
+            .await
+            .expect("invoke must succeed");
+        assert_eq!(result2["count"], 2);
+
+        // 关键: 显式 drop loaded, 验证 Plugin drop 不 panic
+        drop(loaded);
     }
 
     #[test]

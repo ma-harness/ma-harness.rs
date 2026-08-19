@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use crate::creator::{CreatorError, PluginSpec};
 
-/// 编译配置 (P10-1.5 + P10-1.8)
+/// 编译配置 (P10-1.5 + P10-1.8 v2)
 #[derive(Debug, Clone)]
 pub struct CompileConfig {
     /// cargo binary 路径 (None = 走 PATH 找)
@@ -54,14 +54,6 @@ pub struct CompileConfig {
     pub temp_root: Option<PathBuf>,
     /// 输出目录 (None = `<temp_root>/ma-harness-plugins`)
     pub output_dir: Option<PathBuf>,
-    /// P10-1.8: host `ma-harness-core` crate 路径 (相对 plugin 输出 dir, e.g. `"../../../crates/ma-harness-core"`)
-    ///
-    /// 设为 `Some(path)` 时, 生成的 Cargo.toml 加 `ma-harness-core = { path = "<path>" }` 依赖,
-    /// 业务方 source_code 可直接 `use ma_harness_core::{ToolRegistry, ToolSchema, ToolInvokeFn}`.
-    ///
-    /// 设为 `None` 时, plugin 不依赖 host, register 用 `extern "C" fn()` 无入参 (P10-1.7 模式),
-    /// 适合纯 side-effect / metadata 注入场景.
-    pub host_crate_path: Option<PathBuf>,
 }
 
 impl Default for CompileConfig {
@@ -72,7 +64,6 @@ impl Default for CompileConfig {
             release: true,
             temp_root: None,
             output_dir: None,
-            host_crate_path: None,
         }
     }
 }
@@ -219,14 +210,14 @@ pub fn compile_plugin(
     std::fs::create_dir_all(&src_dir)
         .map_err(|e| CreatorError::Compile(format!("创建目录失败: {e}")))?;
 
-    // 2. 写 Cargo.toml (P10-1.8: 传 host_crate_path, 让 plugin 依赖 ma-harness-core)
-    let cargo_toml = render_cargo_toml(spec, cfg.host_crate_path.as_deref());
+    // 2. 写 Cargo.toml (P10-1.8 v2: 不再需要 host_crate_path, plugin 独立 crate)
+    let cargo_toml = render_cargo_toml(spec);
     let cargo_path = plugin_dir.join("Cargo.toml");
     std::fs::write(&cargo_path, cargo_toml)
         .map_err(|e| CreatorError::Compile(format!("写 Cargo.toml 失败: {e}")))?;
 
-    // 3. 写 src/lib.rs (P10-1.8: source_code 当全文, business 方自己写 register impl)
-    let lib_rs = render_lib_rs(spec, cfg.host_crate_path.is_some());
+    // 3. 写 src/lib.rs (P10-1.8 v2: 业务方 source_code 全文 + framework wrap C-ABI JSON 入口)
+    let lib_rs = render_lib_rs(spec);
     let lib_path = src_dir.join("lib.rs");
     std::fs::write(&lib_path, lib_rs)
         .map_err(|e| CreatorError::Compile(format!("写 src/lib.rs 失败: {e}")))?;
@@ -326,40 +317,22 @@ pub fn compile_plugin(
     })
 }
 
-/// 渲染 Cargo.toml (P10-1.5 + P10-1.6 + P10-1.8)
+/// 渲染 Cargo.toml (P10-1.5 + P10-1.6 + P10-1.8 v2)
 ///
-/// **P10-1.6 改进**: edition 2021 → 2024 (跟 workspace 对齐, 避免 plugin 用新语法编译失败)
-/// **P10-1.8 改进**:
-/// - `host_crate_path` 设了的话, 加 `ma-harness-core = { path = "..." }` 依赖
-/// - host mode 自动加 `serde_json` (业务方 source_code 几乎必用 `json!()` 拼 ToolSchema.parameters)
-/// - plugin 可 `use ma_harness_core::{ToolRegistry, ToolSchema, ToolInvokeFn}`
-fn render_cargo_toml(spec: &PluginSpec, host_crate_path: Option<&std::path::Path>) -> String {
+/// **P10-1.6 改进**: edition 2021 → 2024 (跟 workspace 对齐)
+/// **P10-1.8 v2 改进**: 不再需要 host_crate_path (C-ABI JSON 模式), 业务方用 serde_json 即可
+fn render_cargo_toml(spec: &PluginSpec) -> String {
     let user_deps = if spec.dependencies.is_empty() {
         String::new()
     } else {
         spec.dependencies.join("\n") + "\n"
     };
-    let host_dep = host_crate_path
-        .map(|p| {
-            format!(
-                "ma-harness-core = {{ path = \"{}\" }}\n",
-                p.display().to_string().replace('\\', "/")
-            )
-        })
-        .unwrap_or_default();
-    // P10-1.8: host mode 业务方 source_code 几乎必用 `serde_json::json!()` 拼 parameters
-    let implicit_deps = if host_crate_path.is_some() {
-        "serde_json = \"1\"\n"
+    // P10-1.8 v2: 业务方 source_code 几乎必用 serde_json::json!() 拼 schema + 解析 args
+    let implicit_dep = "serde_json = \"1\"\n";
+    let deps_block = if user_deps.is_empty() {
+        format!("\n[dependencies]\n{implicit_dep}")
     } else {
-        ""
-    };
-    let deps_block = if user_deps.is_empty() && host_dep.is_empty() && implicit_deps.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n[dependencies]\n{}{}{}",
-            host_dep, implicit_deps, user_deps
-        )
+        format!("\n[dependencies]\n{implicit_dep}{user_deps}")
     };
     format!(
         r#"[package]
@@ -377,83 +350,69 @@ crate-type = ["cdylib"]
     )
 }
 
-/// 渲染 src/lib.rs (P10-1.5 + P10-1.7)
+/// 渲染 src/lib.rs (P10-1.5 + P10-1.7 + P10-1.8 v2)
 ///
-/// **P10-1.7 改动**: `register` 改 `extern "C" fn()` 无入参无返.
-/// 原因: 跨 dylib 边界 (dlopen / LoadLibrary) 调 Rust trait object ABI 不稳,
-/// `extern "C" fn()` 是 C-ABI 兼容, libloading::Symbol<extern "C" fn()> 直接拿.
-/// 业务方 (P10-1.8) 想传 host ToolRegistry 进 plugin, 让 plugin 依赖 workspace `ma-harness-core` 共享类型.
-/// 渲染 src/lib.rs (P10-1.5 + P10-1.7 + P10-1.8)
+/// **P10-1.8 v2 改造** (业务方真可用):
+/// - 业务方 source_code 写两个函数:
+///   - `pub fn plugin_schemas() -> &'static str` — 返 JSON array 字符串
+///   - `pub fn plugin_invoke(name: &str, args: serde_json::Value) -> serde_json::Value` — 调对应工具
+/// - render 框架 wrap 成 C-ABI 入口:
+///   - `plugin_schemas_json() -> *const c_char` — host 拿 JSON 解析成 Vec<ToolSchema>
+///   - `plugin_invoke_json(name, args_json) -> *const c_char` — host 调 invoke 拿结果
+/// - 跨 dylib 边界全是 C-ABI + JSON 字符串, ABI 稳定
+/// - **不再需要 host_crate_path / ma-harness-core dep**, plugin 是独立 crate
+/// - host 拿 schema 后**自己造 host ToolInvokeFn 调 plugin_invoke**, vtable 是 host 的, drop 安全
 ///
-/// **P10-1.8 改造**:
-/// - `host_crate_path = Some(...)` 时, 业务方 source_code 是全文, register 签名是
-///   `pub fn register(registry: &ToolRegistry)` (Rust ABI), 跨 dylib 调 libloading 直接拿.
-///   强制 host + plugin 同 Rust toolchain + 同 ma-harness-core version.
-/// - `host_crate_path = None` 时, 走 P10-1.7 模式: 业务方 source_code 当片段插入,
-///   render 框架 wrap `#[unsafe(no_mangle)] pub extern "C" fn register()` (无入参, 仅 side effect).
-///
-/// **P10-1.7 改动** (兼容): `register` 改 `extern "C" fn()` 无入参无返.
-/// 原因: 跨 dylib 边界 (dlopen / LoadLibrary) 调 Rust trait object ABI 不稳,
-/// `extern "C" fn()` 是 C-ABI 兼容, libloading::Symbol<extern "C" fn()> 直接拿.
-fn render_lib_rs(spec: &PluginSpec, host_crate_path_set: bool) -> String {
-    if host_crate_path_set {
-        // P10-1.8: 业务方 source_code 写 `register_impl(registry: &ToolRegistry)`,
-        // render 框架 wrap 成 `extern "C" fn(*const c_void)` 跨 dylib ABI 稳
-        // 业务方写 `register_impl(registry: &ToolRegistry) { ... }` 即可
-        format!(
-            r#"// Auto-generated from PluginSpec "{}" (P10-1.8: host_crate_path mode)
+/// **P10-1.7 兼容**: 业务方 source_code 可写 `register()` 片段, 框架 wrap `extern "C" fn register()` (无入参, 仅 side effect).
+fn render_lib_rs(spec: &PluginSpec) -> String {
+    // P10-1.8 v2: 业务方 source_code 是全文, 写 plugin_schemas + plugin_invoke 两个函数
+    // render 框架 wrap C-ABI 入口
+    // **P10-1.8 v2 用 r##"..."## 双 hash 嵌套** (业务方 source_code 可能含 r#"..."# inner raw string)
+    format!(
+        r##"// Auto-generated from PluginSpec "{}" (P10-1.8 v2: C-ABI JSON mode)
 // Plugin: {} v{}
 // Entry function: {}
 //
-// 业务方 source_code 期望包含:
-//   use ma_harness_core::{{ToolRegistry, ToolSchema, ToolInvokeFn}};
-//   use std::sync::Arc;
-//   use serde_json::json;
-//
-//   pub fn register_impl(registry: &ToolRegistry) {{
-//       let schema = ToolSchema {{ name: "...".into(), description: "...".into(), parameters: json!({{}}) }};
-//       let invoke: ToolInvokeFn = Arc::new(|args, ctx| Box::pin(async move {{ ... }}));
-//       registry.register(schema, invoke);
+// 业务方 source_code 期望包含两个函数:
+//   pub fn plugin_schemas() -> &'static str {{
+//       r#"[{{"name":"my_tool","description":"...","parameters":{{...}}}}]"#
+//   }}
+//   pub fn plugin_invoke(name: &str, args: serde_json::Value) -> serde_json::Value {{
+//       match name {{
+//           "my_tool" => json!({{"result": "ok"}}),
+//           _ => json!({{"error": format!("unknown tool: {{name}}")}}),
+//       }}
 //   }}
 //
-// 下面 register 是 C-ABI wrapper, 业务方不用动
+// 下面 wrapper 是 C-ABI 入口, host 用 libloading 调
 
 {}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn register(handle: *const std::ffi::c_void) {{
-    // SAFETY: 业务方 host_crate_path 配同 ma-harness-core, ToolRegistry layout 一致
-    let registry = unsafe {{ &*(handle as *const ToolRegistry) }};
-    register_impl(registry);
+pub extern "C" fn plugin_schemas_json() -> *const std::ffi::c_char {{
+    plugin_schemas().as_ptr() as *const std::ffi::c_char
 }}
-"#,
-            spec.name, spec.name, spec.version, spec.entry_fn, spec.source_code
-        )
-    } else {
-        // P10-1.7 兼容: 业务方 source_code 当片段, render 框架 wrap extern "C" fn()
-        format!(
-            r#"// Auto-generated from PluginSpec "{}" (P10-1.7: standalone mode)
-// Entry function: {}
 
-{}
-
-// 业务方写 register() 拿 ToolRegistry 注入
-// P10-1.7: extern "C" fn() — libloading::Symbol<extern "C" fn()> 跨 dylib 边界 ABI 稳
-// P10-1.8: 让 plugin 依赖 ma-harness-core, register 改 (registry: &ToolRegistry),
-//          plugin 内部可以 registry.register(schema, invoke_fn) 注入工具
-// Rust 2024 edition: #[no_mangle] 走 unsafe(...) 包裹 (edition 严格了)
 #[unsafe(no_mangle)]
-pub extern "C" fn register() {{
-    eprintln!("[{}] register() called", "{}");
+pub extern "C" fn plugin_invoke_json(
+    name: *const std::ffi::c_char,
+    args_json: *const std::ffi::c_char,
+) -> *const std::ffi::c_char {{
+    // SAFETY: host 传 valid C string, plugin 内部 unsafe cast
+    let name_str = unsafe {{ std::ffi::CStr::from_ptr(name) }}
+        .to_str()
+        .unwrap_or("");
+    let args_str = unsafe {{ std::ffi::CStr::from_ptr(args_json) }}
+        .to_str()
+        .unwrap_or("{{}}");
+    let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::Value::Null);
+    let result = plugin_invoke(name_str, args);
+    // 返回 owned String, Box::leak 让 host 拿稳定指针 (plugin unload 时整体释放, 不算泄漏)
+    Box::leak(result.to_string().into_boxed_str()).as_ptr() as *const std::ffi::c_char
 }}
-"#,
-            spec.name,
-            spec.entry_fn,
-            spec.source_code,
-            spec.name,
-            spec.name,
-        )
-    }
+"##,
+        spec.name, spec.name, spec.version, spec.entry_fn, spec.source_code
+    )
 }
 
 /// subprocess + timeout (P10-1.5)
@@ -630,12 +589,14 @@ mod tests {
             entry_fn: "register".into(),
             dependencies: vec![],
         };
-        let toml = render_cargo_toml(&spec, None);
+        let toml = render_cargo_toml(&spec);
         assert!(toml.contains("crate-type = [\"cdylib\"]"));
         assert!(toml.contains("name = \"test_plugin\""));
         assert!(toml.contains("version = \"0.1.0\""));
         // P10-1.6: edition 改 2024
         assert!(toml.contains(r#"edition = "2024""#), "edition 应是 2024: got {toml}");
+        // P10-1.8 v2: 自动加 serde_json
+        assert!(toml.contains("serde_json"), "应自动加 serde_json: got {toml}");
     }
 
     #[test]
@@ -648,79 +609,45 @@ mod tests {
             entry_fn: "register".into(),
             dependencies: vec!["serde = \"1\"".into(), "regex = \"1\"".into()],
         };
-        let toml = render_cargo_toml(&spec, None);
+        let toml = render_cargo_toml(&spec);
         assert!(toml.contains("serde = \"1\""));
         assert!(toml.contains("regex = \"1\""));
     }
 
     #[test]
-    fn render_cargo_toml_includes_host_crate() {
-        // P10-1.8: host_crate_path = Some(...) 时, 加 ma-harness-core path dep
-        let spec = PluginSpec {
-            name: "host_dep_plugin".into(),
-            version: "0.1.0".into(),
-            description: "".into(),
-            source_code: "".into(),
-            entry_fn: "register".into(),
-            dependencies: vec![],
-        };
-        let toml = render_cargo_toml(&spec, Some(std::path::Path::new("../../../crates/ma-harness-core")));
-        assert!(toml.contains("ma-harness-core"), "应加 host crate 依赖: got\n{toml}");
-        assert!(toml.contains("../../../crates/ma-harness-core"), "应包含 path: got\n{toml}");
-    }
-
-    #[test]
-    fn render_lib_rs_includes_register() {
+    fn render_lib_rs_includes_c_abi_json_wrappers() {
+        // P10-1.8 v2: 业务方 source_code 是全文, 框架 wrap C-ABI JSON 入口
         let spec = PluginSpec {
             name: "myplugin".into(),
             version: "0.1.0".into(),
             description: "".into(),
-            source_code: "fn foo() {}".into(),
-            entry_fn: "register".into(),
-            dependencies: vec![],
-        };
-        let lib = render_lib_rs(&spec, false);
-        // P10-1.7: extern "C" fn() 跨 dylib 边界 (host_crate_path = None 模式)
-        assert!(lib.contains(r#"pub extern "C" fn register()"#), "register 应该是 extern \"C\": got\n{lib}");
-        // Rust 2024 edition: #[unsafe(no_mangle)] 包裹 (unsafe attribute 严格)
-        assert!(lib.contains("#[unsafe(no_mangle)]"), "应该有 #[unsafe(no_mangle)] 让 libloading 找符号: got\n{lib}");
-        assert!(lib.contains("fn foo()"));
-        assert!(lib.contains("myplugin"));
-    }
-
-    #[test]
-    fn render_lib_rs_host_crate_mode_uses_source_code_as_full_file() {
-        // P10-1.8: host_crate_path = Some(...) 模式, source_code 是全文 (业务方自己写 register)
-        let spec = PluginSpec {
-            name: "host_mode_plugin".into(),
-            version: "0.1.0".into(),
-            description: "test".into(),
-            source_code: r#"
-use ma_harness_core::{ToolRegistry, ToolSchema, ToolInvokeFn};
-use std::sync::Arc;
-use serde_json::json;
-
-#[unsafe(no_mangle)]
-pub fn register(registry: &ToolRegistry) {
-    let schema = ToolSchema {
-        name: "host_mode_plugin".into(),
-        description: "test".into(),
-        parameters: json!({}),
-    };
-    let invoke: ToolInvokeFn = Arc::new(|_args, _ctx| Box::pin(async { Ok(json!({})) }));
-    registry.register(schema, invoke);
+            source_code: r##"
+pub fn plugin_schemas() -> &'static str {
+    r#"[{"name":"myplugin","description":"test","parameters":{}}]"#
 }
-"#
+
+pub fn plugin_invoke(name: &str, args: serde_json::Value) -> serde_json::Value {
+    match name {
+        "myplugin" => serde_json::json!({"echo": args}),
+        _ => serde_json::json!({"error": format!("unknown: {name}")}),
+    }
+}
+"##
             .into(),
             entry_fn: "register".into(),
             dependencies: vec![],
         };
-        let lib = render_lib_rs(&spec, true);
-        // P10-1.8: 不 wrap extern "C", 业务方自己写
-        assert!(!lib.contains(r#"pub extern "C" fn register()"#), "host_crate 模式不应 wrap extern \"C\": got\n{lib}");
-        assert!(lib.contains("ToolRegistry"), "应包含业务方 source_code 全文 (含 ToolRegistry): got\n{lib}");
-        assert!(lib.contains("registry.register"), "应包含业务方 register impl: got\n{lib}");
-        assert!(lib.contains("host_mode_plugin"), "应包含 plugin 名: got\n{lib}");
+        let lib = render_lib_rs(&spec);
+        // P10-1.8 v2: 框架 wrap C-ABI 入口
+        assert!(lib.contains("plugin_schemas_json"), "应有 plugin_schemas_json wrapper: got\n{lib}");
+        assert!(lib.contains("plugin_invoke_json"), "应有 plugin_invoke_json wrapper: got\n{lib}");
+        assert!(lib.contains(r#"extern "C" fn plugin_schemas_json()"#), "plugin_schemas_json 应该是 extern C: got\n{lib}");
+        assert!(lib.contains(r#"extern "C" fn plugin_invoke_json("#), "plugin_invoke_json 应该是 extern C: got\n{lib}");
+        // 业务方 source_code 全文应包含
+        assert!(lib.contains("plugin_schemas()"), "应包含业务方 plugin_schemas: got\n{lib}");
+        assert!(lib.contains("plugin_invoke("), "应包含业务方 plugin_invoke: got\n{lib}");
+        // 没 #[unsafe(no_mangle)] 直接 attribute (P10-1.7 兼容)
+        assert!(!lib.contains(r#"pub extern "C" fn register()"#), "P10-1.8 v2 不再有 register extern C (改 plugin_schemas_json + plugin_invoke_json): got\n{lib}");
     }
 
     #[test]

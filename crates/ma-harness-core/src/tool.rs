@@ -17,7 +17,8 @@ use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, Context, RiskLevel};
 pub use crate::tool_pipeline::ToolConfig;
 
 /// Tool schema (喂给 LLM 的)
-#[derive(Debug, Clone)]
+// P10-1.8 v2: 加 Deserialize (host 端 parse JSON schemas)
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct ToolSchema {
     /// 工具名
     pub name: String,
