@@ -1,14 +1,20 @@
 {
   "name": "ma-harness-node-client",
   "version": "0.1.0",
-  "description": "ma-harness Node.js gRPC client example (Phase 3.10 / T3.10)",
+  "description": "ma-harness Node.js + TypeScript gRPC client example (Phase 3.10 / T3.10 + P4-7 TS support)",
   "private": true,
   "scripts": {
-    "build": "node compile_proto.js",
-    "example": "node example_client.js"
+    "build": "tsc",
+    "build:js": "node compile_proto.js",
+    "example": "node example_client.js",
+    "example:ts": "tsc && node dist/example_client.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.10.0",
     "@grpc/proto-loader": "^0.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.10.0"
   }
 }

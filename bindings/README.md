@@ -1,7 +1,7 @@
-# ma-harness 多语言 binding (Phase 3.10 / T3.10 + P4-6)
+# ma-harness 多语言 binding (Phase 3.10 / T3.10 + P4-6/7)
 
 ma-harness 提供 gRPC API (`crates/ma-harness-proto` 已定义 `.proto`),
-任何支持 gRPC 的语言都能调。本目录给业务方提供 Python + Node.js + Go 起点。
+任何支持 gRPC 的语言都能调。本目录给业务方提供 Python + Node.js (JS+TS) + Go 起点。
 
 ## 跟 Rust 端的契约
 
@@ -37,6 +37,23 @@ node example_client.js                    # 跑 demo
 
 Node 端用 `@grpc/proto-loader` **运行时解析 .proto**,不用预编译。
 代码里 `protoLoader.loadSync` + `grpc.loadPackageDefinition` 拿 stub.
+
+### Node.js + TypeScript 端 (P4-7 / Day 88)
+
+```bash
+cd bindings/node
+npm install                              # + typescript + @types/node
+npm run example:ts                       # tsc + node dist/example_client.js
+```
+
+跟 JS 版同样的 4 RPC 演示, 强类型:
+- `tsc` 编译期 catch 字段名拼错 / 类型错
+- 跟现代 Node.js backend 风格一致 (NestJS / Express + TS 业务方)
+- 仍走 `@grpc/proto-loader` 运行时解析 (最小依赖, 业务方想完全类型
+  可换 `ts-proto` 预编译)
+
+`tsconfig.json` 跟 `example_client.ts` 走严格模式 (strict: true).
+业务方可以 `import` 类型 / `extends` 现有 helper 函数, 直接接入.
 
 ## Go 端 (P4-6 / Day 87)
 
@@ -88,6 +105,7 @@ Go 端用 `protoc-gen-go` + `protoc-gen-go-grpc` 走标准 protoc 工具链。
 ## 后续 (Phase 4)
 
 - ~~加 Go binding example (高频语言)~~ — P4-6 完成 (Day 87)
+- ~~加 TS-proto / d.ts for Node binding~~ — P4-7 完成 (Day 88, 走 tsc + proto-loader 兼容)
 - 加 OpenAPI → grpc-web 桥 (业务方浏览器直接调)
 - 加 streaming RPC 演示 (Python `Iter`, Node `EventEmitter`, Go channel)
 - pyo3 评估: 业务方拿 Python extension 不用走 gRPC 网络 (in-process)
