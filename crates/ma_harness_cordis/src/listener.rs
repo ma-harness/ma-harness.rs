@@ -27,6 +27,9 @@ use crate::Context;
 /// 改名 `ListenerEvent` 避免冲突. Phase 2 收编 `event::Event` 进 listener 子树.
 pub trait ListenerEvent: 'static + Send + Sync {}
 
+// Phase 2.7 简化: 不需要自创 AnyListenerEvent trait. 用 std::any::Any 内置 type_id
+// 就行. dispatch 时 downcast_ref::<E>. 之前 AnyListenerEvent 是冗余 wrapper.
+
 /// Listener trait. 闭包 `Fn(&Context, &E)` 自动 impl.
 ///
 /// 公开 crate 抽象见 `ma_harness_seam::Listener`.
@@ -59,7 +62,10 @@ pub(crate) struct ListenerRegistry {
 
 /// type-erased listener, 内部 downcast 到具体 E 调 handle
 pub(crate) trait AnyListener: Send + Sync {
+    #[allow(dead_code)] // Phase 2.7: 走 dispatch_any 路径, dispatch 留给 Phase 1 emit
     fn dispatch(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync));
+    /// 2026-08-18 (Day 61): dispatch from `&dyn Any` (Box<MyEvent> deref 出来的).
+    fn dispatch_any(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync));
 }
 
 impl<E: ListenerEvent> AnyListener for Arc<dyn Listener<E>> {
@@ -68,6 +74,11 @@ impl<E: ListenerEvent> AnyListener for Arc<dyn Listener<E>> {
             Listener::handle(self.as_ref(), ctx, e);
         }
         // downcast 失败: 不应发生 (emit 时保证), 静默忽略
+    }
+    fn dispatch_any(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync)) {
+        if let Some(e) = event.downcast_ref::<E>() {
+            Listener::handle(self.as_ref(), ctx, e);
+        }
     }
 }
 
@@ -79,6 +90,11 @@ struct AnyListenerFromArc<E: ListenerEvent> {
 
 impl<E: ListenerEvent> AnyListener for AnyListenerFromArc<E> {
     fn dispatch(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync)) {
+        if let Some(e) = event.downcast_ref::<E>() {
+            Listener::handle(self.inner.as_ref(), ctx, e);
+        }
+    }
+    fn dispatch_any(&self, ctx: &Context, event: &(dyn std::any::Any + Send + Sync)) {
         if let Some(e) = event.downcast_ref::<E>() {
             Listener::handle(self.inner.as_ref(), ctx, e);
         }
@@ -104,6 +120,7 @@ impl ListenerRegistry {
     }
 
     /// 触发事件: 同步 dispatch 给所有订阅者
+    #[allow(dead_code)] // Phase 2.7: Context 走 deferred queue + dispatch_boxed, 此 emit 暂未用
     pub(crate) fn emit<E: ListenerEvent>(&self, ctx: &Context, event: &E) {
         // 1. clone 出 listener vec, 释放锁
         let type_id = TypeId::of::<E>();
@@ -118,7 +135,29 @@ impl ListenerRegistry {
         }
     }
 
+    /// 拿订阅某 TypeId 的所有 listener (Phase 2.7 deferred queue 用)
+    pub(crate) fn listeners_for_type_id(
+        &self,
+        type_id: TypeId,
+    ) -> Vec<Arc<dyn AnyListener>> {
+        self.inner
+            .read()
+            .get(&type_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 列出订阅某 TypeId 的 listener 数量 (Phase 2.7 debug 用)
+    pub(crate) fn count_for_type_id(&self, type_id: TypeId) -> usize {
+        self.inner
+            .read()
+            .get(&type_id)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    }
+
     /// 列出订阅某类型事件的所有 listener 数量 (调试用)
+    #[allow(dead_code)]
     pub(crate) fn count<E: ListenerEvent>(&self) -> usize {
         let type_id = TypeId::of::<E>();
         self.inner

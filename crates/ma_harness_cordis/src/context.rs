@@ -260,29 +260,83 @@ impl Context {
 
     /// 触发事件
     ///
-    /// 同步 dispatch 给所有订阅 E 的 listener.
-    /// 失败由 listener 内部处理 (不返回 Result, Phase 2 加).
+    /// **Phase 2.7 (Day 61)**: 改走 deferred queue + flush loop.
+    /// listener 内 emit 不会 panic — event 入队, 当前 listener 结束后
+    /// 立即处理下一条. flush loop 直到 queue 空.
     ///
-    /// # Reentrancy (Phase 1 不允许)
+    /// # 设计
     ///
-    /// listener 不能 emit 另一个 event. 这避免循环触发 + 栈溢出.
-    /// Phase 1 实现: emit 时检查 thread-local "in emit" 标记, 已 true 则 panic.
+    /// thread-local `DEFERRED_QUEUE: RefCell<Vec<Box<dyn AnyListenerEvent>>>`
+    /// 存 buffered events. emit 时:
+    /// 1. push event 到 queue
+    /// 2. 如果是第一次 (FLUSHING 没在跑), 启动 flush loop
+    /// 3. flush loop: pop event, dispatch 给所有 listener, listener 期间可继续 emit
+    ///    (也 push 到 queue), 直到 queue 空
     ///
     /// # Panic 安全
     ///
-    /// IN_EMIT thread-local 标志用 RAII guard 包装, 即使 listener panic
-    /// 也会在 unwinding 时恢复, 下次 emit 不会卡死.
+    /// FLUSHING guard 保证只跑一个 flush loop, listener panic 时 Drop set 回 false.
+    ///
+    /// # 限制 (Phase 2.7 PoC)
+    ///
+    /// - 异构 event type 通过 `Box<dyn Any + Send + Sync>` 装, dispatch 时 downcast
+    /// - 嵌套无限循环检测: 简单策略 (Phase 2.8) — buffer 上限 N 条, 超 panic
     pub fn emit<E: ListenerEvent>(&self, event: E) {
-        if IN_EMIT.with(|b| b.get()) {
-            panic!(
-                "reentrant emit detected for event type {}. \
-                 Phase 1 不支持 listener 内 emit. Phase 2 加 deferred queue.",
-                std::any::type_name::<E>()
-            );
+        // 用 E 的 type_id 直接查 (走 std::any::TypeId::of::<E>(), 跟 emit 时的 E 一致)
+        let type_id = std::any::TypeId::of::<E>();
+        let event_box: Box<dyn std::any::Any + Send + Sync> = Box::new(event);
+        DEFERRED_QUEUE.with(|q| q.borrow_mut().push(event_box));
+
+        // 第一次 emit: 启动 flush loop
+        let already_flushing = FLUSHING.with(|b| b.get());
+        if already_flushing {
+            // 嵌套 emit, 让 flush loop 处理这条
+            return;
         }
-        // RAII guard: 即使 listener panic, guard drop 时会 set 回 false
-        let _guard = EmitGuard::new();
-        self.listeners.emit(self, &event);
+        // RAII guard: 防止嵌套 flush 循环
+        let _guard = FlushGuard::new();
+        self.flush_deferred_queue(type_id);
+    }
+
+    /// flush deferred queue, 直到空
+    ///
+    /// pop 一条 event, dispatch 给所有 listener, 期间 listener 可继续 emit
+    /// (push 到 queue, 当前 flush loop 看到, 继续处理).
+    ///
+    /// `first_type_id` 是 emit 调进来的 E 的 TypeId, 用于启动 (避免 Box::new 后再 Any::type_id)
+    fn flush_deferred_queue(&self, first_type_id: std::any::TypeId) {
+        const MAX_BUFFER: usize = 10_000; // Phase 2.7 PoC 简单上限
+        let mut processed = 0;
+        let mut current_type_id = first_type_id;
+        loop {
+            // 1. 拿 listeners for current type
+            let listeners = self.listeners.listeners_for_type_id(current_type_id);
+            // 2. pop 一个 event (LIFO)
+            let event_box = DEFERRED_QUEUE.with(|q| q.borrow_mut().pop());
+            let event_box = match event_box {
+                Some(e) => e,
+                None => break,
+            };
+            // 3. dispatch 给 listeners (listener 期间可继续 emit, 走 emit())
+            for listener in &listeners {
+                listener.dispatch_any(self, &*event_box);
+            }
+            processed += 1;
+            if processed >= MAX_BUFFER {
+                panic!(
+                    "deferred emit queue overflow: {} events processed in single flush, \
+                     possible infinite loop in listeners",
+                    processed
+                );
+            }
+            // 4. 取 queue 顶的 type_id 继续 (新 emit 走 Any::type_id 取对应 type)
+            current_type_id = DEFERRED_QUEUE.with(|q| {
+                q.borrow()
+                    .last()
+                    .map(|e| (**e).type_id())
+                    .unwrap_or(current_type_id)
+            });
+        }
     }
 
     /// 列出订阅 E 的 listener 数量 (调试)
@@ -360,15 +414,17 @@ impl Context {
 }
 
 // Reentrancy guard (Phase 1 简化: thread-local bool + RAII guard 防止 panic 泄漏)
+// 2026-08-18 (Day 61): Phase 2.7 改走 deferred queue, IN_EMIT / EmitGuard 不再需要.
+// 保留 IN_EMIT thread_local 跟 EmitGuard struct 以防外部依赖 (实际 dead code, allow).
+#[allow(dead_code)]
 thread_local! {
     static IN_EMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// RAII guard: drop 时把 IN_EMIT set 回 false (即使 panic unwinding 也跑)
-///
-/// 2026-08-18 (Day 53) 修复: new() 也 set IN_EMIT=true, 不然 emit 检查永远 false
+#[allow(dead_code)]
 struct EmitGuard;
 
+#[allow(dead_code)]
 impl EmitGuard {
     fn new() -> Self {
         IN_EMIT.with(|b| b.set(true));
@@ -376,9 +432,45 @@ impl EmitGuard {
     }
 }
 
+#[allow(dead_code)]
 impl Drop for EmitGuard {
     fn drop(&mut self) {
         IN_EMIT.with(|b| b.set(false));
+    }
+}
+
+// ============================================================================
+// Deferred emit queue (Phase 2.7 / Day 61)
+// ============================================================================
+//
+// 设计: 任何 emit 走 thread-local queue, 启动 flush loop 处理.
+// listener 内 emit 不会 panic, 继续 push 到 queue, flush loop 看到后处理.
+// 避免 stack overflow + 业务方写 listener 不用关心 reentrancy.
+//
+// `AnyListenerEvent` trait 在 listener.rs (跟 ListenerEvent 一起, 同文件便于维护).
+
+thread_local! {
+    /// Deferred queue 存 `Box<dyn Any + Send + Sync>` (异构事件, std::any::Any 内置 type_id)
+    static DEFERRED_QUEUE: std::cell::RefCell<Vec<Box<dyn std::any::Any + Send + Sync>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
+    /// 标记 flush loop 已经在跑 (嵌套 emit 跳过启动新 loop)
+    static FLUSHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard: drop 时把 FLUSHING set 回 false (即使 panic unwinding 也跑)
+struct FlushGuard;
+
+impl FlushGuard {
+    fn new() -> Self {
+        FLUSHING.with(|b| b.set(true));
+        FlushGuard
+    }
+}
+
+impl Drop for FlushGuard {
+    fn drop(&mut self) {
+        FLUSHING.with(|b| b.set(false));
     }
 }
 
@@ -684,6 +776,86 @@ mod tests {
         assert_eq!(b.load(Ordering::SeqCst), 1);
     }
 
+    // ========================================================================
+    // 2026-08-18 (Day 61): Phase 2.7 deferred emit queue
+    // ========================================================================
+
+    #[test]
+    fn emit_from_listener_does_not_panic_and_processes_both() {
+        // listener 内 emit 不会 panic (Phase 1 行为 = panic), 2 个 events 都被处理
+        let ctx = Context::new();
+        let a_called = Arc::new(AtomicUsize::new(0));
+        let a2 = Arc::clone(&a_called);
+        let b_called = Arc::new(AtomicUsize::new(0));
+        let b2 = Arc::clone(&b_called);
+
+        // 第一个 listener: 收到 TestEvent 时 emit OtherTestEvent
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, _: &TestEvent| {
+            a2.fetch_add(1, Ordering::SeqCst);
+            // 嵌套 emit (Phase 1 会 panic, Phase 2.7 走 queue)
+            ctx.emit(OtherTestEvent);
+        }));
+        // 第二个 listener: 订阅 OtherTestEvent
+        ctx.on::<OtherTestEvent, _>(Arc::new(move |_: &Context, _: &OtherTestEvent| {
+            b2.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "trigger".to_string(),
+        });
+        // 2 个 listener 都跑了 (deferred queue flush 处理嵌套 emit)
+        assert_eq!(a_called.load(Ordering::SeqCst), 1, "TestEvent listener");
+        assert_eq!(b_called.load(Ordering::SeqCst), 1, "OtherTestEvent listener (嵌套 emit)");
+    }
+
+    #[test]
+    fn emit_chains_two_events_a_to_b_no_cycle() {
+        // 嵌套 emit 链 2 个 events (a→b, 不回 a), 全部按顺序处理.
+        // Phase 2.7 PoC 限制: 同 event type 嵌套 emit 会无限循环 (用 MAX_BUFFER panic 兜底).
+        // 这个 test 用 2 个不同 type, 验证 deferred queue 链处理 OK.
+        let ctx = Context::new();
+        let order = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+        let o_for_test = Arc::clone(&order);
+        let o_for_other = Arc::clone(&order);
+
+        // TestEvent listener: 记录 "1", emit OtherTestEvent (不回 TestEvent)
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, ev: &TestEvent| {
+            o_for_test.lock().push(format!("1:{}", ev.msg));
+            ctx.emit(OtherTestEvent);
+        }));
+        // OtherTestEvent listener: 记录 "2", 不再 emit (避免 cycle)
+        ctx.on::<OtherTestEvent, _>(Arc::new(move |_: &Context, _: &OtherTestEvent| {
+            o_for_other.lock().push("2".to_string());
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "outer".to_string(),
+        });
+
+        let events = order.lock().clone();
+        assert_eq!(events.len(), 2, "2 个 events 都被处理, 实际: {events:?}");
+        assert_eq!(events[0], "1:outer");
+        assert_eq!(events[1], "2");
+    }
+
+    #[test]
+    fn emit_from_listener_with_no_listener_for_nested_does_not_panic() {
+        // 嵌套 emit 没人订阅, 不 panic
+        let ctx = Context::new();
+        let a_called = Arc::new(AtomicUsize::new(0));
+        let a2 = Arc::clone(&a_called);
+
+        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, _: &TestEvent| {
+            a2.fetch_add(1, Ordering::SeqCst);
+            ctx.emit(OtherTestEvent); // 没订阅者
+        }));
+
+        ctx.emit(TestEvent {
+            msg: "x".to_string(),
+        });
+        assert_eq!(a_called.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn listeners_for_different_events_isolated() {
         let ctx = Context::new();
@@ -736,18 +908,8 @@ mod tests {
         assert_eq!(*captured.lock(), "session_42");
     }
 
-    #[test]
-    #[should_panic(expected = "reentrant emit")]
-    fn reentrant_emit_panics() {
-        let ctx = Context::new();
-        ctx.on::<TestEvent, _>(Arc::new(move |ctx: &Context, _ev: &TestEvent| {
-            // listener 内 emit: reentrancy → panic
-            ctx.emit(OtherTestEvent);
-        }));
-        ctx.emit(TestEvent {
-            msg: "trigger".to_string(),
-        });
-    }
+    // 2026-08-18 (Day 61): Phase 2.7 删 reentrant_emit_panics — deferred queue 让
+    // listener 内 emit 不再 panic, 改成 queue + flush. 老的 panic 行为不再适用.
 
     // === Disposable / Scope ===
 
