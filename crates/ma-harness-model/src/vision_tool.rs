@@ -6,14 +6,13 @@
 //! ## 用法
 //!
 //! ```rust,no_run
-//! use ma_harness_model::{OpenaiAdapter, ImageAttachment};
+//! use ma_harness_model::{ImageAttachment};
 //! use ma_harness_model::vision_tool::{describe_image, VisionBackend};
 //!
 //! # async fn run() -> anyhow::Result<()> {
-//! let img = ImageAttachment::from_path("test.png")?;
-//! let adapter = OpenaiAdapter::new("sk-...").with_model("gpt-4o");
+//! let img = ImageAttachment::from_bytes("image/png", vec![0x89, 0x50, 0x4E, 0x47]);
 //! let description = describe_image(
-//!     &adapter,
+//!     "sk-...",
 //!     VisionBackend::Openai,
 //!     "describe this image in detail",
 //!     &[img],
