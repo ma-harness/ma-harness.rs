@@ -52,9 +52,23 @@ static GLOBAL_APPROVAL: parking_lot::Mutex<
     Option<Arc<ma_harness_cordis::ApprovalRegistry>>,
 > = parking_lot::Mutex::new(None);
 
+/// 2026-08-19 (Day 101 / P7-3.6): 全局 ChannelApprovalService (v2 oneshot 桥接)
+///
+/// 业务方调 set_global_channel_approval() 装; HTTP handlers
+/// (GET /v1/approvals + POST/DELETE /v1/approvals/{id}) 走这个全局
+/// 拿 pending list + submit decision.
+static GLOBAL_CHANNEL_APPROVAL: parking_lot::Mutex<
+    Option<Arc<ma_harness_cordis::ChannelApprovalService>>,
+> = parking_lot::Mutex::new(None);
+
 /// 初始化全局 approval registry (跟 run_router 配对调用)
 pub fn set_global_approval(registry: Arc<ma_harness_cordis::ApprovalRegistry>) {
     *GLOBAL_APPROVAL.lock() = Some(registry);
+}
+
+/// 初始化全局 ChannelApprovalService (P7-3.6)
+pub fn set_global_channel_approval(svc: Arc<ma_harness_cordis::ChannelApprovalService>) {
+    *GLOBAL_CHANNEL_APPROVAL.lock() = Some(svc);
 }
 
 /// 初始化全局 adapter (跟 `run_router` 配对调用)
@@ -219,48 +233,119 @@ fn approvals_router() -> Router {
         )
 }
 
-/// GET /v1/approvals — 列出所有 pending approval
+/// GET /v1/approvals — 列出所有 pending approval (P7-3.6: 接 v2 ChannelApprovalService)
 #[endpoint]
 async fn list_approvals_handler() -> Json<serde_json::Value> {
-    // v1: 返空 list (实际 approval state 走 ctx.approval() registry,
-    // 跨进程跨 ctx 复杂, v2 集成 P7-3 工具管道时再实现)
-    Json(json!({
-        "approvals": [],
-        "count": 0,
-        "_note": "P7-2.5 v1: list 是 stub, 完整版 v2 集成 P7-3 工具管道时实现"
-    }))
+    let svc = GLOBAL_CHANNEL_APPROVAL.lock().clone();
+    match svc {
+        None => Json(json!({
+            "approvals": [],
+            "count": 0,
+            "_note": "P7-3.6: 没装 ChannelApprovalService, v2 集成待业务方调 set_global_channel_approval()"
+        })),
+        Some(svc) => {
+            let ids = svc.pending_ids();
+            Json(json!({
+                "approvals": ids.iter().map(|id| json!({
+                    "id": id,
+                    "status": "pending",
+                })).collect::<Vec<_>>(),
+                "count": ids.len(),
+            }))
+        }
+    }
 }
 
-/// GET /v1/approvals/{id} — 单个 approval detail
+/// GET /v1/approvals/{id} — 单个 approval detail (P7-3.6)
 #[endpoint]
 async fn get_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
-    // v1 stub
-    Json(json!({
-        "id": id.into_inner(),
-        "_note": "P7-2.5 v1: detail 是 stub"
-    }))
+    let id = id.into_inner();
+    let svc = GLOBAL_CHANNEL_APPROVAL.lock().clone();
+    match svc {
+        None => Json(json!({
+            "id": id,
+            "status": "unknown",
+            "_note": "P7-3.6: 没装 ChannelApprovalService"
+        })),
+        Some(svc) => {
+            let pending = svc.pending_ids().contains(&id);
+            Json(json!({
+                "id": id,
+                "status": if pending { "pending" } else { "unknown_or_resolved" },
+            }))
+        }
+    }
 }
 
-/// POST /v1/approvals/{id} — 提交 decision
+/// POST /v1/approvals/{id} body — 提交 decision (P7-3.6)
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SubmitDecisionRequest {
+    /// 决策: "approved" | "denied" | "auto_approve"
+    pub decision: String,
+    /// 拒绝理由 (denied 时填)
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// POST /v1/approvals/{id} — 提交 decision (P7-3.6)
 #[endpoint]
-async fn submit_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
-    // v1 stub
+async fn submit_approval_handler(
+    id: PathParam<String>,
+    body: JsonBody<SubmitDecisionRequest>,
+) -> Json<serde_json::Value> {
+    let id = id.into_inner();
+    let req = body.0;
+    let svc = GLOBAL_CHANNEL_APPROVAL.lock().clone();
+    let Some(svc) = svc else {
+        return Json(json!({
+            "id": id,
+            "status": "error",
+            "_note": "P7-3.6: 没装 ChannelApprovalService"
+        }));
+    };
+    use ma_harness_cordis::ApprovalDecision;
+    let decision = match req.decision.as_str() {
+        "approved" | "approve" => ApprovalDecision::Approved,
+        "denied" | "deny" => ApprovalDecision::Denied {
+            reason: req.reason.clone().unwrap_or_else(|| "user denied".to_string()),
+        },
+        "auto_approve" | "auto" => ApprovalDecision::AutoApprove,
+        other => {
+            return Json(json!({
+                "id": id,
+                "status": "error",
+                "error": format!("unknown decision: {other}"),
+            }));
+        }
+    };
+    let submitted = svc.submit_decision(&id, decision.clone());
     Json(json!({
-        "id": id.into_inner(),
-        "decision": "approved",
-        "_note": "P7-2.5 v1: 业务方自己调 approval service, HTTP 端点是 placeholder"
+        "id": id,
+        "decision": req.decision,
+        "submitted": submitted,
+        "_note": if submitted { "decision pushed" } else { "no pending request with this id" },
     }))
 }
 
-/// DELETE /v1/approvals/{id} — 取消
+/// DELETE /v1/approvals/{id} — 取消 (P7-3.6: 走 ChannelApprovalService.cancel)
 #[endpoint]
 async fn cancel_approval_handler(id: PathParam<String>) -> Json<serde_json::Value> {
-    // v1 stub
-    Json(json!({
-        "id": id.into_inner(),
-        "status": "cancelled",
-        "_note": "P7-2.5 v1: 取消是 stub"
-    }))
+    let id = id.into_inner();
+    let svc = GLOBAL_CHANNEL_APPROVAL.lock().clone();
+    match svc {
+        None => Json(json!({
+            "id": id,
+            "status": "error",
+            "_note": "P7-3.6: 没装 ChannelApprovalService"
+        })),
+        Some(svc) => {
+            let cancelled = svc.cancel(&id);
+            Json(json!({
+                "id": id,
+                "status": if cancelled { "cancelled" } else { "not_found" },
+            }))
+        }
+    }
 }
 
 /// /health 处理器 (Phase 3.5: 改用 #[endpoint] for OpenAPI export)
@@ -989,5 +1074,187 @@ mod tests {
         assert!(event_count >= 1, "SSE body 应有 event: 字段, got: {}", body_str);
         // 也应含 token "alpha"
         assert!(body_str.contains("alpha"), "SSE 应含 token 'alpha'");
+    }
+
+    // ============================================================================
+    // P7-3.6: Approval v2 HTTP 端点 (ChannelApprovalService 集成) 测试
+    // ============================================================================
+    use ma_harness_cordis::{
+        ApprovalDecision, ApprovalRequest, ApprovalService, ChannelApprovalService, Context,
+        RiskLevel,
+    };
+    use std::time::Duration;
+
+    fn install_channel_approval() -> Arc<ChannelApprovalService> {
+        let svc = Arc::new(ChannelApprovalService::new());
+        set_global_channel_approval(svc.clone());
+        svc
+    }
+
+    /// 跑 approval v2 测试用的 router (走 run_router_with_log_and_store, 含 /v1/approvals)
+    fn approval_v2_router() -> Service {
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().unwrap());
+        let store: Arc<dyn crate::session_store::SessionStore> =
+            Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap());
+        Service::new(run_router_with_log_and_store(
+            Arc::new(ma_harness_core::StubModelAdapter),
+            log,
+            store,
+        ))
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_list_empty() {
+        let _lock = SESSION_TEST_LOCK.lock();
+        let _svc = install_channel_approval();
+        let service = approval_v2_router();
+        let mut resp = TestClient::get("http://localhost/v1/approvals")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_get_unknown_id() {
+        let _lock = SESSION_TEST_LOCK.lock();
+        let _svc = install_channel_approval();
+        let service = approval_v2_router();
+        let mut resp = TestClient::get("http://localhost/v1/approvals/ghost-id")
+            .send(&service)
+            .await;
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["status"], "unknown_or_resolved");
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_submit_decision_wakes_future() {
+        // 完整 e2e: 起一个 spawn 调 request_approval, HTTP POST submit decision 唤醒
+        let _lock = SESSION_TEST_LOCK.lock();
+        let svc = install_channel_approval();
+        let ctx = Context::new();
+
+        // 业务方 spawn 调 request_approval
+        let svc2 = svc.clone();
+        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> = tokio::spawn(async move {
+            let req = ApprovalRequest {
+                tool_name: "fs.delete".into(),
+                arguments: serde_json::json!({}),
+                risk_level: RiskLevel::High,
+                context: "delete /tmp/x".into(),
+                tool_call_id: "e2e-req-1".into(),
+            };
+            ApprovalService::request_approval(svc2.as_ref(), &ctx, &req).await
+        });
+
+        // 等 50ms 让 request 进 pending
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(svc.pending_count(), 1);
+
+        // HTTP GET list 应看到 1 个 pending
+        let service = approval_v2_router();
+        let mut resp = TestClient::get("http://localhost/v1/approvals")
+            .send(&service)
+            .await;
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["approvals"][0]["id"], "e2e-req-1");
+
+        // HTTP POST submit decision
+        let body = serde_json::json!({
+            "decision": "approved",
+        });
+        let mut resp2 = TestClient::post("http://localhost/v1/approvals/e2e-req-1")
+            .json(&body)
+            .send(&service)
+            .await;
+        let v2: serde_json::Value = resp2.take_json().await.unwrap();
+        assert_eq!(v2["submitted"], true);
+
+        // 业务方 spawn 应该拿 Approved
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result, ApprovalDecision::Approved);
+        assert_eq!(svc.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_cancel_via_delete() {
+        let _lock = SESSION_TEST_LOCK.lock();
+        let svc = install_channel_approval();
+        let svc2 = svc.clone();
+        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> = tokio::spawn(async move {
+            let req = ApprovalRequest {
+                tool_name: "fs.delete".into(),
+                arguments: serde_json::json!({}),
+                risk_level: RiskLevel::High,
+                context: "delete".into(),
+                tool_call_id: "e2e-cancel-1".into(),
+            };
+            ApprovalService::request_approval(svc2.as_ref(), &Context::new(), &req).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let service = approval_v2_router();
+        let mut resp = TestClient::delete("http://localhost/v1/approvals/e2e-cancel-1")
+            .send(&service)
+            .await;
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["status"], "cancelled");
+
+        let result = task.await.unwrap().unwrap();
+        assert!(matches!(result, ApprovalDecision::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_submit_denied_with_reason() {
+        let _lock = SESSION_TEST_LOCK.lock();
+        let svc = install_channel_approval();
+        let svc2 = svc.clone();
+        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> = tokio::spawn(async move {
+            let req = ApprovalRequest {
+                tool_name: "fs.delete".into(),
+                arguments: serde_json::json!({}),
+                risk_level: RiskLevel::High,
+                context: "delete".into(),
+                tool_call_id: "e2e-deny-1".into(),
+            };
+            ApprovalService::request_approval(svc2.as_ref(), &Context::new(), &req).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let service = approval_v2_router();
+        let body = serde_json::json!({
+            "decision": "denied",
+            "reason": "test reason",
+        });
+        let mut resp = TestClient::post("http://localhost/v1/approvals/e2e-deny-1")
+            .json(&body)
+            .send(&service)
+            .await;
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["submitted"], true);
+
+        let result = task.await.unwrap().unwrap();
+        match result {
+            ApprovalDecision::Denied { reason } => {
+                assert_eq!(reason, "test reason");
+            }
+            _ => panic!("expected Denied"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_v2_approvals_submit_unknown_id_returns_false() {
+        let _lock = SESSION_TEST_LOCK.lock();
+        let _svc = install_channel_approval();
+        let service = approval_v2_router();
+        let body = serde_json::json!({ "decision": "approved" });
+        let mut resp = TestClient::post("http://localhost/v1/approvals/ghost")
+            .json(&body)
+            .send(&service)
+            .await;
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["submitted"], false);
     }
 }
