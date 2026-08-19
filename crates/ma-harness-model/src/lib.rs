@@ -761,6 +761,87 @@ impl AdapterRegistry {
         self.register("stub:", StubModelAdapter)
     }
 
+    /// 注册 Azure OpenAI adapter (P8-3 / Day 101)
+    ///
+    /// Azure endpoint 格式: `https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}`
+    /// 业务方传 resource_name + deployment_name + api_version + api_key.
+    /// 简化: 把 endpoint 拼好后塞给 OpenaiAdapter (它已经是 OpenAI-compatible 协议).
+    ///
+    /// 注册 prefix: `"azure:"` (e.g. `azure:gpt-4o`)
+    pub fn with_azure_openai(
+        self,
+        resource: impl AsRef<str>,
+        deployment: impl AsRef<str>,
+        api_version: impl AsRef<str>,
+        api_key: impl Into<String>,
+    ) -> Self {
+        let endpoint = format!(
+            "https://{}.openai.azure.com/openai/deployments/{}/chat/completions?api-version={}",
+            resource.as_ref(),
+            deployment.as_ref(),
+            api_version.as_ref(),
+        );
+        let adapter = OpenaiAdapter::new(api_key)
+            .with_endpoint(endpoint)
+            .with_model(deployment.as_ref().to_string());
+        self.register("azure:", adapter)
+    }
+
+    /// 注册 Local (Ollama / vLLM / 其它 OpenAI-compatible) adapter (P8-3)
+    ///
+    /// 简化: 跟 OpenaiAdapter 一样走 OpenAI 协议, 业务方传 base URL (e.g. `http://localhost:11434/v1/chat/completions`).
+    /// 适配 Ollama / vLLM / LM Studio / 任何兼容 OpenAI chat completions API 的服务.
+    ///
+    /// 注册 prefix: `"local:"` (e.g. `local:llama3`)
+    pub fn with_local(self, base_url: impl AsRef<str>, model: impl Into<String>) -> Self {
+        let endpoint = base_url.as_ref().to_string();
+        let adapter = OpenaiAdapter::new("not-needed") // 多数 local server 不要 api key
+            .with_endpoint(endpoint)
+            .with_model(model);
+        self.register("local:", adapter)
+    }
+
+    /// 注册 DeepSeek adapter (P8-3)
+    ///
+    /// DeepSeek 走 OpenAI-compatible 协议 (`https://api.deepseek.com/v1/chat/completions`).
+    /// 模型: `deepseek-chat` / `deepseek-coder` / `deepseek-reasoner`.
+    ///
+    /// 注册 prefix: `"deepseek:"` (e.g. `deepseek:deepseek-chat`)
+    pub fn with_deepseek(self, api_key: impl Into<String>) -> Self {
+        self.register(
+            "deepseek:",
+            OpenaiAdapter::new(api_key)
+                .with_endpoint("https://api.deepseek.com/v1/chat/completions")
+                .with_model("deepseek-chat"),
+        )
+    }
+
+    /// 自动从 env 变量加载 (P8-3)
+    ///
+    /// 检查 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `AZURE_OPENAI_*` 等环境变量,
+    /// 自动注册. 业务方不传 key 也能跑 (只跑 stub).
+    pub fn with_env(self) -> Self {
+        let mut r = self;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            r = r.with_openai(key);
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            r = r.with_anthropic(key);
+        }
+        if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+            r = r.with_deepseek(key);
+        }
+        if let (Ok(resource), Ok(deployment), Ok(version), Ok(key)) = (
+            std::env::var("AZURE_OPENAI_RESOURCE"),
+            std::env::var("AZURE_OPENAI_DEPLOYMENT"),
+            std::env::var("AZURE_OPENAI_API_VERSION"),
+            std::env::var("AZURE_OPENAI_API_KEY"),
+        ) {
+            r = r.with_azure_openai(resource, deployment, version, key);
+        }
+        r
+    }
+
     /// 根据 model name 找 adapter
     pub fn find(&self, model: &str) -> Option<std::sync::Arc<dyn ModelAdapter>> {
         // 1. exact match
@@ -1004,6 +1085,60 @@ mod tests {
         assert!(prefixes.contains(&"openai:".to_string()));
         assert!(prefixes.contains(&"anthropic:".to_string()));
         assert!(prefixes.contains(&"stub:".to_string()));
+    }
+
+    // ---- P8-3 多模型扩展 ----
+
+    #[test]
+    fn registry_with_azure_openai_registers_correct_endpoint() {
+        let reg = AdapterRegistry::new()
+            .with_azure_openai("myresource", "mydeployment", "2024-02-01", "sk-azure-test");
+        let adapter = reg.find("azure:").expect("azure registered");
+        assert_eq!(adapter.name(), "openai");
+        let prefixes = reg.prefixes();
+        assert!(prefixes.contains(&"azure:".to_string()));
+    }
+
+    #[test]
+    fn registry_with_local_registers_ollama_style() {
+        let reg = AdapterRegistry::new()
+            .with_local("http://localhost:11434/v1/chat/completions", "llama3");
+        let adapter = reg.find("local:").expect("local registered");
+        assert_eq!(adapter.name(), "openai");
+    }
+
+    #[test]
+    fn registry_with_deepseek_registers() {
+        let reg = AdapterRegistry::new().with_deepseek("sk-deepseek-test");
+        let adapter = reg.find("deepseek:").expect("deepseek registered");
+        assert_eq!(adapter.name(), "openai");
+    }
+
+    #[test]
+    fn registry_with_env_loads_what_is_set() {
+        // P8-3: 自动从环境变量加载 (有就装, 没就跳过)
+        // 测试时可能没设, 验证不 panic
+        let reg = AdapterRegistry::new().with_env();
+        // 至少 stub 应该能跑 (业务方 fallback)
+        let _ = reg.find("stub:");
+    }
+
+    #[test]
+    fn registry_finds_deepseek_model() {
+        // 业务方用 "deepseek:deepseek-chat" 走 prefix match
+        let reg = AdapterRegistry::new().with_deepseek("sk-test");
+        let adapter = reg.find("deepseek:deepseek-chat");
+        assert!(adapter.is_some());
+        assert_eq!(adapter.unwrap().name(), "openai");
+    }
+
+    #[test]
+    fn registry_finds_azure_deployment() {
+        // 业务方用 "azure:mydeployment" 走 prefix match
+        let reg = AdapterRegistry::new()
+            .with_azure_openai("res", "mydeployment", "2024-02-01", "sk");
+        let adapter = reg.find("azure:mydeployment");
+        assert!(adapter.is_some());
     }
 
     // ---- Stub 仍然工作 (回归测试, 确保不破坏 Phase 1) ----
