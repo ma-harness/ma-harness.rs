@@ -41,6 +41,7 @@ pub mod creator;
 pub mod event;
 pub mod log;
 pub mod operating_mode;
+pub mod profile;
 pub mod tool;
 pub mod tool_pipeline;
 
@@ -54,5 +55,6 @@ pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, 
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
 pub use operating_mode::{OperatingMode, OperatingModeConfig, OPERATING_MODE};
+pub use profile::{default_profile_dir, Profile, ProfileStore};
 pub use tool::{ToolEntry, ToolInvokeFn, ToolRegistry, ToolSchema};
 pub use tool_pipeline::{InvokeContext, PipelineConfig, PipelineStage, PostHookFn, PreHookFn, RetryPolicy, ToolConfig};
