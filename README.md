@@ -29,7 +29,7 @@
 # 编译 (网络通后)
 cargo build --workspace
 
-# 跑全部测试 (~302 lib test)
+# 跑全部测试 (~307 lib test)
 cargo test --workspace --lib
 
 # 跑 benchmark (criterion)
@@ -183,7 +183,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 | 累计 commit | 130+ (持续增长) |
 | Workspace member | 19 (13 crates/ + 7 plugins/) |
 | 累计代码 | ~20000 行 |
-| 累计 lib test | 302 (全过) |
+| 累计 lib test | 307 (全过) |
 | 累计 trybuild fixture | 18 |
 | crates.io publish | 5/19 (cordis, code, core, plugin-macro, seam) |
 | HTTP API paths | 7 (3 → 7) |
@@ -243,7 +243,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 ### 🚧 Phase 6 (Day 99-): 真 LLM streaming + perf
 - P6-1: `mah run-stream` CLI (gRPC RunStream 客户端) ✅ (Day 99)
 - P6-2: OpenaiAdapter 真 SSE (reqwest + bytes_stream + parse) ✅ (Day 100)
-- P6-3: AnthropicAdapter SSE (走 event-based protocol, 跟 OpenAI 不一样) — TODO
+- P6-3: AnthropicAdapter 真 SSE (event-based protocol) ✅ (Day 100)
 - P6-4: 性能 benchmark — TODO
 - P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) — TODO
 

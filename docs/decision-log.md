@@ -445,3 +445,91 @@ data: [DONE]\n\n
 - `parse_sse_data_line` 是 pub static fn, 业务方 custom adapter (Azure OpenAI / Together / Groq) 直接复用
 - `&req` lifetime 绑定: stream 内部 hold `&'a ModelRequest`, 业务方调用时 req 必须 outlive stream
 
+
+## 17. Anthropic 真 SSE streaming (2026-08-19 / Day 100 / P6-3)
+
+### 目标
+
+P6-2 落 OpenAI SSE 之后, P6-3 落 Anthropic SSE. 协议不一样 (event-based,
+不是 OpenAI 单 data: 协议), 但 target 一样: 业务方真 Anthropic key 走
+`mah run-stream --model "anthropic:claude-3-5-sonnet" "..."` 拿真 streaming.
+
+### 实现 (commit TBD)
+
+| 部件 | 内容 |
+|---|---|
+| `AnthropicAdapter::with_endpoint` | 加 setter (P6-2 才有 OpenaiAdapter, 这里补齐) |
+| `build_stream_request_body` | 复用 `build_request_body` + 注入 `"stream": true` |
+| `parse_sse_event(event_type, data_line)` (静态) | 只 `content_block_delta` 走 `delta.text` yield, 其他 event 返 None |
+| `AnthropicAdapter::complete_stream` 覆盖 | async_stream + reqwest bytes_stream + 按 `\n\n` 切 event, 解析 `event: <type>\ndata: {...}` 两行 |
+| wiremock 端到端 | 1 test: 6 events (message_start + content_block_start + 2 delta + stop + message_stop) 拿 2 token |
+
+### Anthropic SSE 协议 (跟 OpenAI 不一样)
+
+```
+POST /v1/messages
+x-api-key: sk-ant-...
+anthropic-version: 2023-06-01
+{"model": "claude-3-5-sonnet-20241022", "stream": true, ...}
+
+→ 200 OK
+Content-Type: text/event-stream
+
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","role":"assistant"}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+```
+
+业务方流解析:
+- 每个 event 含 `event: <type>` + `data: <json>` 两行 + 空行
+- 只 `content_block_delta` 走 yield, 拿 `data.delta.text`
+- `message_stop` 终止
+- 其他 event (`message_start` / `content_block_start` / `content_block_stop` / `message_delta`) 静默 skip
+
+### 关键设计决策
+
+- **跟 OpenAI parser 完全分离**: 协议结构不同 (event-based vs data-only), 共享 SSE buffer/byte 解析逻辑, 但 event routing 各自 impl
+- **`message_stop` 走 early return** (在 yield 前检查): 业务方 stream 干净收尾, 不多 yield 空 token
+- **Anthropic error response 仍是 JSON 不走 SSE**: HTTP 4xx/5xx 跟 OpenAI 同样 status check, 走 eprintln 早返
+- **parser 拿 (event_type, data) tuple**: 业务方 stream! 内部分流, 边界清晰, 单元测试简单 (跟 OpenAI 7 test 类似)
+- **不动 proto / 业务方协议**: 业务方拿 `Stream<Item = String>` 跟 P6-2 OpenAI 完全一致, Phase 7 业务方无感升级
+
+### 踩坑 (P6-3 阶段 1 个)
+
+1. **`AnthropicAdapter` 缺 `with_endpoint`**: P6-2 测试时发现 OpenaiAdapter 有 setter, AnthropicAdapter 之前只 with_model, wiremock 测试 endpoint 写死. 修法: 跟 OpenaiAdapter 一致, 加 `with_endpoint` setter
+
+### 测试
+
+- **ma-harness-model**: 28/28 pass (23 老 + 5 新 P6-3)
+  - `anthropic_build_stream_request_body_includes_stream_true` (1 test)
+  - `anthropic_parse_sse_event_*` (3 test): content_block_delta / non-content-block / malformed
+  - `anthropic_complete_stream_end_to_end_with_wiremock` (1 test): 6 events 拿 2 token "Hello world"
+- **workspace**: 307 total (295 lib + 12 bin, +5 新), 排除 4 pre-existing broken
+
+### 给后来人
+
+- 业务方跑真 Anthropic: `ANTHROPIC_API_KEY=sk-ant-... mah start` + `mah run-stream --model "anthropic:claude-3-5-sonnet" "explain rust"`, 看 typewriter 输出
+- OpenAI / Anthropic / Stub 三家 streaming 都走通: 业务方按 model 字符串选, CLI 透明
+- Phase 6 streaming PoC 完成: stub (P5-6) / OpenAI (P6-2) / Anthropic (P6-3) / HTTP SSE (P5-8) / gRPC RunStream (P5-6) / CLI (P6-1) 全链路
+- 业务方想 Azure Anthropic: `AnthropicAdapter::new(key).with_endpoint("https://...azure.com/v1/messages")`
+- 业务方想 custom adapter (Together / Groq / Cohere): 复用 SSE buffer pattern, 自己写 event routing
+- OpenAI/Anthropic parser 都没处理 keepalive (`:` comment line): 业务方 SSE buffer `\n\n` 切到空 event 静默 skip, 行为正确
+- Phase 7+ 业务方反馈 streaming latency / token rate 时, 加 perf test
+

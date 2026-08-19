@@ -433,6 +433,12 @@ impl AnthropicAdapter {
         self
     }
 
+    /// 设置自定义 endpoint (Azure Anthropic / 代理)
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
     /// 构造 Anthropic Messages 请求 body
     pub fn build_request_body(&self, req: &ModelRequest) -> serde_json::Value {
         // Anthropic: system 是 top-level field, 不是 message
@@ -448,6 +454,48 @@ impl AnthropicAdapter {
             "temperature": req.temperature,
             "max_tokens": req.max_tokens,
         })
+    }
+
+    /// **P6-3 (Day 100)**: 构造 Anthropic Messages 流式请求 body
+    ///
+    /// 跟 `build_request_body` 一样 + `"stream": true`. 业务方 streaming 模式.
+    pub fn build_stream_request_body(&self, req: &ModelRequest) -> serde_json::Value {
+        let mut body = self.build_request_body(req);
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        }
+        body
+    }
+
+    /// **P6-3 (Day 100)**: 解析 Anthropic SSE 事件 → `Some(delta text)` / `None`
+    ///
+    /// 业务方 Anthropic streaming 协议 (跟 OpenAI 不一样, 走 event-based):
+    ///   event: content_block_delta
+    ///   data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+    ///
+    /// 业务方用法: 拿到 (event_type, data) tuple 后调, 拿 text delta 走 yield.
+    /// 终止信号: `message_stop` / `message_delta` (业务方走 stop stream).
+    ///
+    /// 返回:
+    ///   - `Some(text)` — 拿到 text_delta, 业务方 yield 给 client
+    ///   - `None` — 非 content_block_delta 事件 / 解析失败 / 缺 text 字段
+    pub fn parse_sse_event(event_type: &str, data_line: &str) -> Option<String> {
+        // 只 content_block_delta 走 text_delta
+        if event_type != "content_block_delta" {
+            return None;
+        }
+        // data 行去 "data: " 前缀
+        let payload = data_line.strip_prefix("data:")?.trim();
+        let value: serde_json::Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        // text 在 delta.text
+        let text = value
+            .get("delta")?
+            .get("text")?
+            .as_str()?;
+        Some(text.to_string())
     }
 
     /// 解析 Anthropic Messages 响应
@@ -558,6 +606,104 @@ impl ModelAdapter for AnthropicAdapter {
         let body: serde_json::Value = resp.json().await?;
         let parsed = self.parse_response(body)?;
         Ok(parsed)
+    }
+
+    /// **P6-3 (Day 100)**: Anthropic 真正 SSE streaming 覆盖
+    ///
+    /// 跟 default impl 不同 (跟 OpenaiAdapter::complete_stream 也不一样, 因为协议不同):
+    /// 1. 发送 `stream: true` 走 SSE endpoint + `x-api-key` header
+    /// 2. SSE event 格式: `event: <type>\ndata: {...}\n\n`
+    /// 3. 只 `content_block_delta` event 走 `delta.text` yield
+    /// 4. `message_stop` 终止信号 → stop stream
+    /// 5. 状态码 401/403/429/其他 4xx/5xx → 返 Err, 不发 token
+    ///
+    /// 业务方拿 stream: `let mut s = adapter.complete_stream(&req); while let Some(t) = s.next().await { print!("{t}"); }`
+    fn complete_stream<'a>(
+        &'a self,
+        req: &'a ModelRequest,
+    ) -> Pin<Box<dyn futures::Stream<Item = String> + Send + 'a>> {
+        let endpoint = self.endpoint.clone();
+        let api_key = self.api_key.clone();
+        let api_version = self.api_version.clone();
+        let body = self.build_stream_request_body(req);
+        let client = self.client.clone();
+
+        Box::pin(async_stream::stream! {
+            // 1. 发 POST + stream:true
+            let resp = match client
+                .post(&endpoint)
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", &api_version)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("[anthropic] stream send err: {e}");
+                    return;
+                }
+            };
+
+            // 2. 状态码检查
+            let status = resp.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("[anthropic] auth err {status}: {body}");
+                return;
+            }
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("[anthropic] rate limit: {body}");
+                return;
+            }
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("[anthropic] api err {status}: {body}");
+                return;
+            }
+
+            // 3. 按 chunk 读 bytes, 攒成 SSE event (Anthropic 格式: event: <type>\ndata: <json>\n\n)
+            let mut buffer = String::new();
+            let mut byte_stream = resp.bytes_stream();
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[anthropic] stream chunk err: {e}");
+                        return;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                // 按 \n\n 切 SSE event
+                while let Some(idx) = buffer.find("\n\n") {
+                    let event: String = buffer.drain(..idx + 2).collect();
+                    // Anthropic SSE event 格式:
+                    //   event: <type>
+                    //   data: <json>
+                    let mut event_type = String::new();
+                    let mut data_line = String::new();
+                    for line in event.lines() {
+                        if let Some(t) = line.strip_prefix("event:") {
+                            event_type = t.trim().to_string();
+                        } else if let Some(d) = line.strip_prefix("data:") {
+                            data_line = d.trim().to_string();
+                        }
+                    }
+                    // 终止信号
+                    if event_type == "message_stop" {
+                        return;
+                    }
+                    // 解析 content_block_delta
+                    if let Some(token) = Self::parse_sse_event(&event_type, &format!("data: {data_line}")) {
+                        yield token;
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -1036,6 +1182,101 @@ data: [DONE]\n\n";
             collected.push(token);
         }
         assert_eq!(collected.len(), 2, "应 yield 2 token, got {collected:?}");
+        assert_eq!(collected.join(""), "Hello world");
+    }
+
+    // === P6-3 (Day 100): Anthropic SSE streaming ===
+
+    /// build_stream_request_body 加 "stream": true
+    #[test]
+    fn anthropic_build_stream_request_body_includes_stream_true() {
+        let adapter = AnthropicAdapter::new("sk-ant-test");
+        let body = adapter.build_stream_request_body(&sample_request());
+        assert_eq!(body["stream"], true, "streaming 必须 stream=true");
+        assert_eq!(body["model"], "claude-3-5-sonnet-20241022");
+        let messages = body.get("messages").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(messages.len(), 3, "no system message (system 是 top-level)");
+    }
+
+    /// parse_sse_event: content_block_delta 拿 text_delta.text
+    #[test]
+    fn anthropic_parse_sse_event_content_block_delta() {
+        let event_type = "content_block_delta";
+        let data = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let text = AnthropicAdapter::parse_sse_event(event_type, data);
+        assert_eq!(text, Some("Hello".to_string()));
+    }
+
+    /// parse_sse_event: 其他 event (message_start / content_block_stop 等) 返 None
+    #[test]
+    fn anthropic_parse_sse_event_non_content_block_delta_returns_none() {
+        // message_start 不发 text
+        let data = r#"data: {"type":"message_start","message":{"id":"msg_01","role":"assistant"}}"#;
+        assert_eq!(AnthropicAdapter::parse_sse_event("message_start", data), None);
+        // content_block_stop 不发 text
+        assert_eq!(AnthropicAdapter::parse_sse_event("content_block_stop", data), None);
+        // message_delta 不发 text
+        assert_eq!(AnthropicAdapter::parse_sse_event("message_delta", data), None);
+    }
+
+    /// parse_sse_event: malformed JSON → None
+    #[test]
+    fn anthropic_parse_sse_event_malformed_returns_none() {
+        let data = "data: {this is not json}";
+        let text = AnthropicAdapter::parse_sse_event("content_block_delta", data);
+        assert_eq!(text, None);
+    }
+
+    /// 端到端 Anthropic SSE: wiremock 返 content_block_delta events, 业务方拿 2 token
+    #[tokio::test]
+    async fn anthropic_complete_stream_end_to_end_with_wiremock() {
+        use futures::StreamExt;
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Anthropic SSE 格式: event: <type>\ndata: {...}\n\n
+        let sse_body = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"role\":\"assistant\"}}\n\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\n\n\
+event: content_block_stop\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\n";
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "sk-ant-test"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse_body),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let adapter = AnthropicAdapter::new("sk-ant-test")
+            .with_endpoint(format!("{}/v1/messages", mock_server.uri()));
+
+        let req = sample_request();
+        let mut stream = adapter.complete_stream(&req);
+        let mut collected = Vec::new();
+        while let Some(token) = stream.next().await {
+            collected.push(token);
+        }
+
+        // 只 content_block_delta 走 yield → 2 token
+        assert_eq!(collected.len(), 2, "应 yield 2 token (只 content_block_delta), got {collected:?}");
+        assert_eq!(collected[0], "Hello");
+        assert_eq!(collected[1], " world");
         assert_eq!(collected.join(""), "Hello world");
     }
 }
