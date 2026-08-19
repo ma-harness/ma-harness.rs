@@ -212,6 +212,9 @@ fn sessions_router_with_events() -> Router {
                 Router::with_path("events")
                     .get(get_session_events_handler)
                     .push(Router::with_path("stream").get(stream_session_events_handler)),
+            )
+            .push(
+                Router::with_path("token-stats").get(get_token_stats_handler),
             ),
         )
 }
@@ -772,6 +775,109 @@ async fn get_session_events_handler(
     }))
 }
 
+// ============================================================================
+// GET /v1/sessions/{id}/token-stats (P8-2 / Day 101)
+// ============================================================================
+//
+// 累加 ModelRequest / ModelResponse events 的 prompt_tokens + completion_tokens.
+// 返 JSON: { prompt_tokens, completion_tokens, total, request_count, response_count, by_model }
+// 跟 Web UI TokenStats widget 对接 (P7-1.5).
+
+/// 单 session token 统计响应
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TokenStatsResponse {
+    pub session_id: String,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total: u32,
+    pub request_count: u32,
+    pub response_count: u32,
+    /// P8-2 简化: 按 model 分组 (key = model name)
+    #[serde(default)]
+    pub by_model: std::collections::BTreeMap<String, ModelTokenStats>,
+}
+
+/// 单 model token 统计
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
+pub struct ModelTokenStats {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+/// GET /v1/sessions/{id}/token-stats
+#[endpoint]
+async fn get_token_stats_handler(
+    id: PathParam<String>,
+) -> Result<Json<TokenStatsResponse>, salvo::Error> {
+    let log = get_global_event_log().ok_or_else(|| {
+        salvo::Error::other("EventLog 未初始化. 业务方应调 run_router_with_log_and_store")
+    })?;
+    let session_id = id.0.clone();
+    let id_for_log = id.0;
+
+    let page = tokio::task::spawn_blocking(move || log.get_model_visible(&id_for_log))
+        .await
+        .map_err(|e| salvo::Error::other(format!("join error: {e}")))?
+        .map_err(|e| salvo::Error::other(format!("get model visible: {e}")))?;
+
+    let mut prompt_total: u32 = 0;
+    let mut completion_total: u32 = 0;
+    let mut request_count: u32 = 0;
+    let mut response_count: u32 = 0;
+    let mut by_model: std::collections::BTreeMap<String, ModelTokenStats> =
+        std::collections::BTreeMap::new();
+
+    for stored in page.events {
+        let event = &stored.event;
+        if event.event_type != ma_harness_core::EventType::ModelRequest
+            && event.event_type != ma_harness_core::EventType::ModelResponse
+        {
+            continue;
+        }
+        let payload: serde_json::Value = event
+            .payload_json
+            .as_ref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let model = payload
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let entry = by_model.entry(model.clone()).or_default();
+        if event.event_type == ma_harness_core::EventType::ModelRequest {
+            request_count += 1;
+            let pt = payload.get("estimated_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            prompt_total += pt;
+            entry.prompt_tokens += pt;
+        } else {
+            response_count += 1;
+            let ct = payload
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let pt = payload
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            completion_total += ct;
+            prompt_total += pt;
+            entry.completion_tokens += ct;
+            entry.prompt_tokens += pt;
+        }
+    }
+
+    Ok(Json(TokenStatsResponse {
+        session_id,
+        prompt_tokens: prompt_total,
+        completion_tokens: completion_total,
+        total: prompt_total + completion_total,
+        request_count,
+        response_count,
+        by_model,
+    }))
+}
+
 /// GET /v1/sessions/{id}/events/stream — SSE 实时事件流 (P7-1.7)
 ///
 /// 简化版: 轮询 EventLog 每 1s, 推新 event 给 client.
@@ -876,6 +982,7 @@ mod tests {
     // 之前 mental commit 写 `router().into_service()` + `salvo::hyper::Body::empty()` 都错.
     // 正确做法: `TestClient::get(url).send(service)` 一行
     use super::*;
+    use ma_harness_core::EventType;
     use salvo::test::{ResponseExt, TestClient};
 
     /// 全局 session-test Mutex, 强制串行 (Phase 5.1 / Day 90)
@@ -1388,5 +1495,76 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(ct.contains("event-stream"), "content-type 应含 event-stream, got: {ct}");
+    }
+
+    // P8-2: /v1/sessions/{id}/token-stats
+    #[tokio::test]
+    async fn http_token_stats_aggregates_from_events() {
+        let _lock = SESSION_TEST_LOCK.lock();
+
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().unwrap());
+        // 写 ModelRequest + ModelResponse 模拟一个 LLM 调用的 token 计数
+        log.append(
+            ma_harness_core::SessionEvent::new("s1", EventType::ModelRequest)
+                .with_payload(&serde_json::json!({
+                    "model": "stub",
+                    "estimated_tokens": 100,
+                }))
+                .unwrap(),
+        );
+        log.append(
+            ma_harness_core::SessionEvent::new("s1", EventType::ModelResponse)
+                .with_payload(&serde_json::json!({
+                    "model": "stub",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                }))
+                .unwrap(),
+        );
+        let store: Arc<dyn crate::session_store::SessionStore> =
+            Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap());
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(ma_harness_core::StubModelAdapter),
+            log,
+            store,
+        ));
+
+        let mut resp = TestClient::get("http://localhost/v1/sessions/s1/token-stats")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["session_id"], "s1");
+        assert_eq!(v["request_count"], 1);
+        assert_eq!(v["response_count"], 1);
+        assert_eq!(v["prompt_tokens"], 200); // 100 (req) + 100 (resp)
+        assert_eq!(v["completion_tokens"], 50);
+        assert_eq!(v["total"], 250);
+        assert!(v["by_model"]["stub"].is_object());
+        assert_eq!(v["by_model"]["stub"]["prompt_tokens"], 200);
+        assert_eq!(v["by_model"]["stub"]["completion_tokens"], 50);
+    }
+
+    #[tokio::test]
+    async fn http_token_stats_empty_session() {
+        let _lock = SESSION_TEST_LOCK.lock();
+
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().unwrap());
+        let store: Arc<dyn crate::session_store::SessionStore> =
+            Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap());
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(ma_harness_core::StubModelAdapter),
+            log,
+            store,
+        ));
+
+        let mut resp = TestClient::get("http://localhost/v1/sessions/empty/token-stats")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let v: serde_json::Value = resp.take_json().await.unwrap();
+        assert_eq!(v["request_count"], 0);
+        assert_eq!(v["response_count"], 0);
+        assert_eq!(v["total"], 0);
     }
 }
