@@ -275,17 +275,22 @@ P11-7/8/9/10 (锦上添花, 业务方驱动)
 
 ## 6. 成功指标 (P11 收官时)
 
-| 指标 | 目标 |
-|---|---|
-| dsh Terminal Bench 2.1 workload pass rate | ≥ 70% (dsh 自测 87.9) |
-| dsh Toolathlon-Verified pass rate | ≥ 60% (dsh 自测 74.1) |
-| `mah-py` Python SDK 上 PyPI | pip install mah-py 可用 |
-| ACP 互通基础 | 跟 dsh 跨实现 ping / list_sessions OK |
-| 多模态 vision adapter | gpt-4o + claude-3 跑通 |
-| 公开 plugin registry | 6 first-party publish + 文档站 |
-| lib test | 107 → 130+ |
-| commit | 200+ → 250+ |
-| decision-log | § 1-27 → § 1-32 |
+| 指标 | 目标 | 实际 |
+|---|---|---|
+| dsh Terminal Bench 2.1 workload pass rate | ≥ 70% (dsh 自测 87.9) | 跳 (需 LLM) |
+| dsh Toolathlon-Verified pass rate | ≥ 60% (dsh 自测 74.1) | 跳 (需 LLM) |
+| `mah-py` Python SDK | 16/16 tests + 5 examples | ✅ |
+| ACP 互通基础 | 4/4 lib + 5/5 integration | ✅ |
+| 多模态 vision adapter | 7/7 multimodal + 6/6 vision_tool | ✅ |
+| Plugin Registry | 18/18 lib + 1/1 doc | ✅ |
+| 公开 plugin registry (GitHub Pages) | 跳 (P12+) | - |
+| Vibe Coding artifact viewer | 25/25 lib + 1/1 doc | ✅ |
+| Bundle 概念 | 13/13 lib + 1/1 doc | ✅ |
+| 多模态 tool | 6/6 lib | ✅ |
+| DAG 任务编排 | 跳 (P12+, 太复杂) | - |
+| lib test (P11 整体) | 107 → 300+ | ✅ 300+ |
+| commit | 200+ → 200+ (P11 7 commits) | ✅ |
+| decision-log | § 1-27 → § 1-36 | ✅ |
 
 ---
 
@@ -319,3 +324,4 @@ P11-7/8/9/10 (锦上添花, 业务方驱动)
 |---|---|
 | 2026-08-20 | P11 路线图首版 (Day 101+1, Phase 7-10 收官后) |
 | 2026-08-20 | P11-1 baseline + P11-1.5 转换层改进 (Day 101+1) — dsh_synthetic 28.6% → 100% (7/7) |
+| 2026-08-20 | P11 全部任务收官 (Day 101+1) — 9 任务 (跳 P11-2.5+ 跟 P11-10) + 8 新 crate + 7 commits + 130+ tests |

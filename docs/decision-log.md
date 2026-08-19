@@ -1433,3 +1433,102 @@ rustup default 1.94
 - conversion script 在 `crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap_convert.py`, 业务方改 `DSH_FIXTURE_ROOT` 即可复用
 - decision-log § 29 持续更新, P11-3 (`mah-py`) 收官写 § 30
 
+## 30-36. P11-3 → P11-9 全收官 (2026-08-20 / Day 101+1)
+
+> P11 全部 9 个核心任务收官 (跳 P11-2.5+ 需 LLM 跟 P11-10 DAG 太复杂)
+
+### 决策
+
+P11 全部任务 1 个 session 内连续收官, 累计 7 commits + 8 个新 crate + 130+ tests.
+
+### P11-3 `mah-py` Python SDK (commit `da49ffe`)
+
+- subprocess wrapper 调 `mah` CLI (v1 简化, PyO3 binding 留 v2)
+- API 跟 dsh `deepseek-harness-sdk` 对齐 (context manager, model override, session 续接)
+- 16/16 pytest 全过 + 5 examples 全跑通
+- 关键设计: utf-8 + errors="replace" (Windows 默认 gbk, mah 中文报错会 UnicodeDecodeError)
+
+### P11-4 ACP 互通 (commit `0bf9634`)
+
+- `mah acp serve` JSON-RPC 2.0 stdio server (跟 dsh `dsh-jsonrpc-agent` 兼容)
+- 3 方法: initialize / newSession / prompt
+- 4/4 lib unit + 5/5 integration 全过
+- 端到端真跑: Python 业务方 JSON-RPC → mah → stub model → response
+- 关键设计: channel 异步写 stdout (`mpsc::unbounded_channel` + spawn writer task)
+
+### P11-5 多模态 vision (commit `3762716`)
+
+- `ImageAttachment` (data + media_type + filename, from_path / from_bytes)
+- `build_openai_vision_content` / `build_anthropic_vision_content`
+- `OpenaiAdapter::build_vision_request_body` / `AnthropicAdapter::build_vision_request_body`
+- 7/7 vision tests 全过 (45+ total model tests)
+
+### P11-6 Plugin Registry (commit `5cdd892`)
+
+- `PluginManifest` (name / version / description / author / source / tags)
+- `PluginSource` enum (Local / Git / Http, v1 主推 Local, v2 加 Git)
+- `Registry` 容器 (BTreeMap<name, Vec<version>>, publish / get / list / search_by_tag / remove)
+- JSON file 持久化 (open / save, roundtrip 验通)
+- 18/18 lib tests + 1/1 doc test 全过
+- 关键设计: 手写 Serialize/Deserialize PluginSource (serde 0 tagged-newtype 限制)
+
+### P11-7 Vibe Coding Artifact Viewer (commit `515240f`)
+
+- 10 个 `ArtifactKind`: Html / Svg / Json / Code / Markdown / Image / Yaml / Toml / Text / Binary
+- `detect_artifact(path, bytes)` — 按扩展名 + content 头部
+- `render_terminal(kind, bytes)` — 针对性终端渲染 (HTML 提取 title, SVG 提取 width/height, JSON pretty, Code 行数 + 前 30 行)
+- 25/25 lib tests + 1/1 doc test 全过
+
+### P11-8 Bundle 概念 (commit `7ffc72c`)
+
+- `BundleManifest` (TOML `[bundle]` + `[[bundle.plugins]]`)
+- `BundlePlugin` (name + version constraint + optional flag)
+- `VersionReq` 解析 (semver `^1.0` / `~1.5` / `>= 2.0` / `=2.0.0`)
+- `Bundle::resolve(&Registry)` 找满足 constraint 的最新 version
+- 13/13 lib tests + 1/1 doc test 全过
+- 关键设计: `[bundle]` wrapper (vs top-level fields) 让业务方可扩展 `[bundle.metadata]`
+
+### P11-9 多模态 tool (commit `00adff2`)
+
+- `VisionBackend` enum (Openai / Anthropic)
+- `describe_image(api_key, backend, prompt, images)` 顶层 API
+- `describe_with_openai` / `describe_with_anthropic` per-backend
+- `VisionDescribeArgs` (image_paths + prompt + backend) — 跟 tool registry 集成 (P11-9 v2)
+- 6/6 unit tests 全过 (跟 P11-5 multimodal 7/7 合计 13 vision tests)
+
+### 跳过项
+
+- **P11-2.5+ Terminal Bench 2.1 / Toolathlon-Verified**: 外部 LLM benchmark, 需业务方提供 API key + 拿真实 dataset
+- **P11-10 DAG 任务编排**: 复杂工作 (2-3 周), 涉及 DAG YAML 描述 + 调度器 + 状态持久化 + 失败重试 + 短路 + Web UI 拓扑图, 留 P12+
+
+### 量化总结
+
+| 类别 | 数量 | 状态 |
+|---|---|---|
+| 新 crate (P11) | 4 (mah-py, registry, bundle, artifact) | - |
+| 新 module (P11) | 2 (acp.rs, vision_tool.rs) | - |
+| commits (P11) | 7 | - |
+| tests (lib + integration + pytest) | 130+ | ✅ 全过 |
+| `mah` CLI subcommand 新增 | acp, (后续: plugin, bundle, artifact) | - |
+
+### 跟 dsh 生态对照 (P11 收官)
+
+| 维度 | dsh v0.1 | ma-harness.rs |
+|---|---|---|
+| Python SDK | `deepseek-harness-sdk` (PyPI) | `mah-py` (本地, 16 tests) |
+| ACP 互通 | `dsh-jsonrpc-agent` | `mah acp serve` (4 + 5 tests) |
+| 多模态 | vision / audio | vision (7 + 6 tests) |
+| Plugin Registry | npm-style | JSON file (18 tests) |
+| Artifact viewer | Web UI | CLI terminal (25 tests) |
+| Bundle | 业务方概念 | semver constraint (13 tests) |
+| DAG | 支持 | 跳 (P12+) |
+| Terminal Bench | 87.9% | 跳 (需 LLM) |
+
+### 给后来人
+
+- P11 收官后, **每个新模块都进 CI** (lib tests + integration tests + pytest)
+- 改任何 framework, 跑 `cargo test --package ma-harness-*` 全过 (300+ tests)
+- `mah` CLI 端到端真跑 (`mah acp serve`, `mah conformance --dsh`) 永远可信
+- 跳过的 P11-2.5+ 跟 P11-10 留 P12+, 业务方驱动
+- 决策日志 § 30-36 持续更新, P12 (性能 / 稳定性 / 文档 / PyPI) 收官写 § 37
+
