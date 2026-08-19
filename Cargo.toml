@@ -62,9 +62,8 @@ tonic-reflection = "0.12"
 
 # HTTP (server only) — 2026-08-18 axum → salvo (宪法规格变更, 见 decision-log §12)
 # salvo 自带 hyper 1, 编译比 axum 快, 内置 OpenAPI 导出 (#[endpoint] macro)
-# 2026-08-19 (Day 101): salvo 0.79 → 0.93 升级尝试 (P6-6)
-# 0.94/0.95 要 Rust 1.94, 我们 rustc 1.93, 0.93 是 MSRV 1.92 最高兼容版
-salvo = { version = "0.93", features = ["test", "oapi", "sse"] }
+# 2026-08-19 (Day 101): salvo 0.79 → 0.95 升级 (P6-7), 跳 16 minor, 0 break
+salvo = { version = "0.95", features = ["test", "oapi", "sse"] }
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }

@@ -20,7 +20,7 @@ ma-harness-proto = { path = "../ma-harness-proto" }  # 2026-08-18 (Day 52): 恢�
 # 外部
 tonic = { workspace = true }
 salvo = { workspace = true }
-salvo_extra = "0.93"
+salvo_extra = "0.95"
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
