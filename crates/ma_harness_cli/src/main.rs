@@ -46,6 +46,10 @@ enum Commands {
         /// HTTP 监听端口
         #[arg(long, default_value = "50050")]
         http_port: u16,
+        /// 持久化 session store 路径 (sqlite db, 不传 = 内存)
+        /// 业务方重启 server 时 session 跟 event 从这个 db 恢复
+        #[arg(long)]
+        store_path: Option<PathBuf>,
     },
     /// 跑一次 agent (本地, 不连 server)
     Run {
@@ -101,8 +105,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { grpc_port, http_port } => {
-            start_server(grpc_port, http_port).await
+        Commands::Start { grpc_port, http_port, store_path } => {
+            start_server(grpc_port, http_port, store_path.as_deref()).await
         }
         Commands::Run { session, message, model } => {
             run_local_agent(session, message, model).await
@@ -121,11 +125,24 @@ async fn main() -> Result<()> {
 }
 
 /// 真实起 server: tonic gRPC + salvo HTTP, 后台 tokio 任务, ctrl-c 优雅退出
-async fn start_server(grpc_port: u16, http_port: u16) -> Result<()> {
+///
+/// `store_path` = Some(path) → SqliteStore 持久化 session
+/// `store_path` = None → InMemoryStore (Phase 1 默认)
+async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::path::Path>) -> Result<()> {
     let log = EventLog::open_in_memory()?;
     eprintln!("mah start: tonic gRPC on 0.0.0.0:{} + salvo HTTP on 0.0.0.0:{}", grpc_port, http_port);
 
-    let builder = ServerBuilder::with_stub(log);
+    // Phase 2.10 (Day 64): 业务方指定 store_path → SqliteStore 持久化
+    // Phase 1 默认 InMemoryStore
+    let mut builder = ServerBuilder::with_stub(log);
+    if let Some(path) = store_path {
+        let store = ma_harness_server::SqliteStore::open(path)
+            .map_err(|e| anyhow::anyhow!("open sqlite store {}: {e}", path.display()))?;
+        eprintln!("mah start: session store = sqlite:{}", path.display());
+        builder = builder.with_session_store(Arc::new(store));
+    } else {
+        eprintln!("mah start: session store = in-memory (no persistence)");
+    }
 
     // tonic gRPC server
     let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()

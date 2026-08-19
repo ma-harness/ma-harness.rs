@@ -134,4 +134,88 @@ mod tests {
         let builder = ServerBuilder::with_stub(log).with_session_store(store);
         let _session = builder.build_session_service();
     }
+
+    #[tokio::test]
+    async fn server_restart_persists_sessions_via_sqlite() {
+        // 2026-08-18 (Day 64) Phase 2.10 端到端测试:
+        // 1. 用 SqliteStore 写 2 个 session
+        // 2. drop ServerBuilder
+        // 3. 重新 open 同一 db, 拿 sessions 验证持久化
+        use ma_harness_proto::ma_harness::v1::{
+            session_service_server::SessionService, CreateSessionRequest, GetSessionRequest,
+            ListSessionsRequest, SessionState as ProtoSessionState,
+        };
+        use tonic::Request;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+
+        // 1. 写 2 个 session
+        let log1 = EventLog::open_in_memory().unwrap();
+        let store1: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(&db_path).unwrap());
+        let builder1 = ServerBuilder::with_stub(log1).with_session_store(store1.clone());
+        let svc1 = builder1.build_session_service();
+
+        let create_resp1 = svc1
+            .create(Request::new(CreateSessionRequest {
+                name: "session-A".to_string(),
+                mode: 0,
+                metadata: None,
+                enabled_plugins: vec![],
+            }))
+            .await
+            .unwrap();
+        let id_a = create_resp1.into_inner().session.unwrap().id;
+
+        let create_resp2 = svc1
+            .create(Request::new(CreateSessionRequest {
+                name: "session-B".to_string(),
+                mode: 0,
+                metadata: None,
+                enabled_plugins: vec!["hello".to_string()],
+            }))
+            .await
+            .unwrap();
+        let id_b = create_resp2.into_inner().session.unwrap().id;
+
+        // 关闭 svc1
+        drop(svc1);
+        drop(builder1);
+        drop(store1);
+
+        // 2. 重新 open (模拟 server 重启)
+        let log2 = EventLog::open_in_memory().unwrap();
+        let store2: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(&db_path).unwrap());
+        let builder2 = ServerBuilder::with_stub(log2).with_session_store(store2.clone());
+        let svc2 = builder2.build_session_service();
+
+        // 3. 验证 2 个 session 都还在
+        let list_resp = svc2
+            .list(Request::new(ListSessionsRequest {
+                page: 1,
+                page_size: 100,
+                state_filter: 0,
+            }))
+            .await
+            .unwrap();
+        let sessions = list_resp.into_inner().sessions;
+        assert_eq!(sessions.len(), 2, "重启后 2 个 session 都在");
+
+        // 验证具体 id 跟 name
+        let a = svc2
+            .get(Request::new(GetSessionRequest { id: id_a.clone() }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(a.name, "session-A");
+        assert_eq!(a.state, ProtoSessionState::Created as i32);
+
+        let b = svc2
+            .get(Request::new(GetSessionRequest { id: id_b.clone() }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(b.name, "session-B");
+        assert_eq!(b.enabled_plugins, vec!["hello".to_string()]);
+    }
 }
