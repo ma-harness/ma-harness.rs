@@ -198,7 +198,7 @@ fn sessions_router() -> Router {
 
 /// /v1/sessions 嵌套 router (Phase 5.3 / Day 92, 含 events endpoint)
 ///
-/// 同 sessions_router, 加 GET /v1/sessions/{id}/events.
+/// 同 sessions_router, 加 GET /v1/sessions/{id}/events + GET /v1/sessions/{id}/events/stream (P7-1.7)
 fn sessions_router_with_events() -> Router {
     Router::with_path("sessions")
         .get(list_sessions_handler)
@@ -208,7 +208,11 @@ fn sessions_router_with_events() -> Router {
             Router::with_path("{id}").push(Router::with_path("close").post(close_session_handler)),
         )
         .push(
-            Router::with_path("{id}").push(Router::with_path("events").get(get_session_events_handler)),
+            Router::with_path("{id}").push(
+                Router::with_path("events")
+                    .get(get_session_events_handler)
+                    .push(Router::with_path("stream").get(stream_session_events_handler)),
+            ),
         )
 }
 
@@ -768,6 +772,104 @@ async fn get_session_events_handler(
     }))
 }
 
+/// GET /v1/sessions/{id}/events/stream — SSE 实时事件流 (P7-1.7)
+///
+/// 简化版: 轮询 EventLog 每 1s, 推新 event 给 client.
+/// 完整 v2 用 broadcast channel (P8-2 + 真 pub-sub 一起做).
+/// 返 SseEvent 流, 每个 event 是 JSON.
+#[handler]
+async fn stream_session_events_handler(
+    req: &mut salvo::Request,
+    res: &mut salvo::Response,
+    id: PathParam<String>,
+) -> Result<(), salvo::Error> {
+    use futures::stream::StreamExt;
+
+    let session_id = id.0.clone();
+    let log = match get_global_event_log() {
+        Some(log) => log,
+        None => {
+            return Err(salvo::Error::other(
+                "EventLog 未初始化. 业务方应调 run_router_with_log_and_store",
+            ));
+        }
+    };
+
+    // 业务方可以传 since_seq query param (default 0)
+    let since_seq: i64 = req
+        .query::<String>("since_seq")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let event_stream = async_stream::stream! {
+        let mut current_seq = since_seq;
+        loop {
+            // 拉新 events
+            let log_clone = log.clone();
+            let sid = session_id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                log_clone.query(&ma_harness_core::log::EventQuery {
+                    session_id: sid,
+                    seq_from: Some(current_seq + 1),
+                    ..Default::default()
+                })
+            }).await;
+
+            match result {
+                Ok(Ok(page)) => {
+                    for stored in page.events {
+                        let payload = serde_json::json!({
+                            "seq": stored.seq,
+                            "event_type": stored.event.event_type as i32,
+                            "severity": stored.event.severity as i32,
+                            "session_id": stored.event.session_id,
+                            "payload_json": stored.event.payload_json,
+                            "error_message": stored.event.error_message,
+                            "timestamp": stored.event.ts.to_rfc3339(),
+                        });
+                        current_seq = stored.seq.max(current_seq);
+                        yield Ok::<_, std::convert::Infallible>(
+                            SseEvent::default()
+                                .name("event")
+                                .id(stored.seq.to_string())
+                                .text(payload.to_string()),
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    // log error, 推 error event, 继续轮询
+                    yield Ok(SseEvent::default()
+                        .name("error")
+                        .text(format!("event log error: {e}")));
+                }
+                Err(e) => {
+                    yield Ok(SseEvent::default()
+                        .name("error")
+                        .text(format!("join error: {e}")));
+                }
+            }
+
+            // heartbeat
+            yield Ok(SseEvent::default()
+                .name("heartbeat")
+                .text("ping"));
+
+            // 1s 后再轮询
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
+    };
+
+    let mut event_stream = Box::pin(event_stream);
+    let event_stream = async_stream::stream! {
+        while let Some(ev) = event_stream.next().await {
+            yield ev;
+        }
+    };
+
+    sse::stream(res, event_stream);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // 2026-08-18: 用 salvo::test::TestClient 标准 API
@@ -1256,5 +1358,35 @@ mod tests {
             .await;
         let v: serde_json::Value = resp.take_json().await.unwrap();
         assert_eq!(v["submitted"], false);
+    }
+
+    // P7-1.7: SSE events/stream
+    #[tokio::test]
+    async fn http_sse_events_stream_endpoint_exists() {
+        let _lock = SESSION_TEST_LOCK.lock();
+
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().unwrap());
+        let store: Arc<dyn crate::session_store::SessionStore> =
+            Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap());
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(ma_harness_core::StubModelAdapter),
+            log,
+            store,
+        ));
+
+        // 验 SSE 端点存在 + 返 200 + Content-Type: text/event-stream
+        // (业务方实际拿 body 用 EventSource 长连, server 测试不阻塞读 body)
+        let resp = TestClient::get(
+            "http://localhost/v1/sessions/empty-session/events/stream?since_seq=0",
+        )
+        .send(&service)
+        .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("event-stream"), "content-type 应含 event-stream, got: {ct}");
     }
 }
