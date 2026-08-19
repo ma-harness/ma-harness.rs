@@ -59,6 +59,9 @@ prost = "0.13"
 prost-types = "0.13"
 tonic-build = "0.12"
 tonic-reflection = "0.12"
+# 2026-08-19 (Day 101 / P7-1.2): tonic-web 暴露 gRPC 给浏览器 (gRPC-web 桥)
+# 跟 Web UI (port 3080) 配 tonic :50050, 业务方 fetch /api 走 gRPC-web
+tonic-web = "0.12"
 
 # HTTP (server only) — 2026-08-18 axum → salvo (宪法规格变更, 见 decision-log §12)
 # salvo 自带 hyper 1, 编译比 axum 快, 内置 OpenAPI 导出 (#[endpoint] macro)

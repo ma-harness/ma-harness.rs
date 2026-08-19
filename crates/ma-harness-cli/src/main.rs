@@ -344,14 +344,18 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
     let mut builder = ServerBuilder::with_stub(log);
     builder = builder.with_session_store(session_store.clone());
 
-    // tonic gRPC server
+    // tonic gRPC server (P7-1.2: tonic-web 暴露 gRPC-web 给浏览器)
+    // 2026-08-19 (Day 101): Web UI (P7-1) 通过 Vite proxy /api → tonic :50050 调 gRPC-web.
+    // tonic_web::enable() 包每个 service (NamedService trait 适配),
+    // 配 `accept_http1(true)` 让 server 接受 HTTP/1.1 (gRPC-web 协议).
     let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()
         .with_context(|| format!("invalid grpc_port: {}", grpc_port))?;
     let agent_svc = builder.build_agent_service();
     let session_svc = builder.build_session_service();
     let grpc_server = tonic::transport::Server::builder()
-        .add_service(AgentServiceServer::new(agent_svc))
-        .add_service(SessionServiceServer::new(session_svc))
+        .accept_http1(true)
+        .add_service(tonic_web::enable(AgentServiceServer::new(agent_svc)))
+        .add_service(tonic_web::enable(SessionServiceServer::new(session_svc)))
         .serve(grpc_addr);
 
     // salvo HTTP server

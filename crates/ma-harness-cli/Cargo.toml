@@ -34,6 +34,8 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }  # 2026-08-18 (Day 52): 恢复
+# 2026-08-19 (Day 101 / P7-1.2): tonic-web 暴露 gRPC 给浏览器
+tonic-web = { workspace = true }
 salvo = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
