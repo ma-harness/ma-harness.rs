@@ -47,7 +47,8 @@ mod plugin;
 mod service;
 
 pub use approval::{
-    ApprovalDecision, ApprovalPolicy, ApprovalRegistry, ApprovalRequest, ApprovalService, RiskLevel,
+    ApprovalDecision, ApprovalPolicy, ApprovalRegistry, ApprovalRequest, ApprovalService,
+    ChannelApprovalService, RiskLevel,
 };
 pub use context::Context;
 pub use disposable::{AsyncDisposable, Disposable, Scope};

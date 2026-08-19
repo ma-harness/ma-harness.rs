@@ -177,6 +177,122 @@ impl std::fmt::Debug for ApprovalRegistry {
     }
 }
 
+// ============================================================================
+// ChannelApprovalService (P7-3.4 / Day 101)
+// ============================================================================
+//
+// v2 完整 approval: oneshot channel 桥接, 业务方 (TUI / HTTP / CLI / Web UI)
+// 调 `submit_decision(request_id, decision)` 推送决策.
+//
+// 跟 v1 AlwaysApprove / AskApprove / PendingApprovals 区别:
+// - v1 是 stub, TUI 阻塞主循环 / HTTP 返 placeholder
+// - v2 真 oneshot 桥接, 工具调用 future 在 `request_approval` 处 suspend,
+//   业务方从别处 (key 事件 / HTTP POST) 调 `submit_decision` 唤醒
+//
+// 用法:
+// ```ignore
+// use ma_harness_cordis::{ChannelApprovalService, ApprovalDecision};
+//
+// let svc = Arc::new(ChannelApprovalService::new());
+// // 装到 ctx
+// ctx.install_approval(svc.clone(), ApprovalPolicy::Ask);
+//
+// // 业务方从 TUI / HTTP 推决策
+// svc.submit_decision("req-123", ApprovalDecision::Approved);
+// ```
+
+/// Channel 桥接的审批服务 (P7-3.4)
+///
+/// 内部 `Arc<Mutex<HashMap<request_id, oneshot::Sender>>>`.
+#[derive(Default, Clone)]
+pub struct ChannelApprovalService {
+    /// pending requests: tool_call_id -> oneshot::Sender
+    pending: std::sync::Arc<
+        parking_lot::Mutex<
+            std::collections::HashMap<String, tokio::sync::oneshot::Sender<ApprovalDecision>>,
+        >,
+    >,
+}
+
+impl ChannelApprovalService {
+    /// 新建空 service
+    pub fn new() -> Self {
+        Self {
+            pending: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+        }
+    }
+
+    /// 业务方调: 提交 decision 唤醒等待的 `request_approval` future
+    ///
+    /// `request_id` 通常是 `ApprovalRequest.tool_call_id`. 返 `true` 表示
+    /// 找到了对应 pending request, `false` 表示没找到 (已超时 / 已决策).
+    pub fn submit_decision(&self, request_id: &str, decision: ApprovalDecision) -> bool {
+        let mut map = self.pending.lock();
+        if let Some(tx) = map.remove(request_id) {
+            // ignore send error (receiver 已被 drop, e.g. 超时)
+            let _ = tx.send(decision);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 业务方调: 取消一个 pending request (返 Denied { reason: "cancelled" })
+    pub fn cancel(&self, request_id: &str) -> bool {
+        self.submit_decision(
+            request_id,
+            ApprovalDecision::Denied {
+                reason: "cancelled by caller".to_string(),
+            },
+        )
+    }
+
+    /// 当前 pending request 数量 (用于 UI 状态显示)
+    pub fn pending_count(&self) -> usize {
+        self.pending.lock().len()
+    }
+
+    /// 列当前 pending request_ids (用于 UI 状态显示)
+    pub fn pending_ids(&self) -> Vec<String> {
+        self.pending.lock().keys().cloned().collect()
+    }
+}
+
+#[async_trait]
+impl ApprovalService for ChannelApprovalService {
+    async fn request_approval(
+        &self,
+        _ctx: &Context,
+        request: &ApprovalRequest,
+    ) -> Result<ApprovalDecision, BoxedError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut map = self.pending.lock();
+            map.insert(request.tool_call_id.clone(), tx);
+        }
+        // 等业务方 push decision (TUI key 事件 / HTTP POST)
+        match rx.await {
+            Ok(decision) => Ok(decision),
+            Err(_) => {
+                // sender 被 drop (业务方 cancel 或 service 析构)
+                Ok(ApprovalDecision::Denied {
+                    reason: "approval channel closed".to_string(),
+                })
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for ChannelApprovalService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelApprovalService")
+            .field("pending_count", &self.pending_count())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +368,109 @@ mod tests {
         assert_eq!(json, "\"high\"");
         let parsed: RiskLevel = serde_json::from_str("\"low\"").unwrap();
         assert_eq!(parsed, RiskLevel::Low);
+    }
+
+    // P7-3.4: ChannelApprovalService 集成测试
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn make_request(tool_call_id: &str) -> ApprovalRequest {
+        ApprovalRequest {
+            tool_name: "fs.delete".into(),
+            arguments: serde_json::json!({}),
+            risk_level: RiskLevel::High,
+            context: "test".into(),
+            tool_call_id: tool_call_id.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_service_submit_decision_unblocks() {
+        let svc = Arc::new(ChannelApprovalService::new());
+        let ctx = Context::new();
+
+        // 业务方异步: spawn request, 100ms 后 submit
+        let svc2 = svc.clone();
+        let req = make_request("req-1");
+        let task = tokio::spawn(async move {
+            svc2.request_approval(&ctx, &req).await
+        });
+
+        // 等 service 装上 pending
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(svc.pending_count(), 1);
+
+        // 推 decision
+        let submitted = svc.submit_decision("req-1", ApprovalDecision::Approved);
+        assert!(submitted);
+
+        // 拿结果
+        let result = task.await.unwrap().unwrap();
+        assert_eq!(result, ApprovalDecision::Approved);
+        assert_eq!(svc.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn channel_service_submit_unknown_id_returns_false() {
+        let svc = ChannelApprovalService::new();
+        assert!(!svc.submit_decision("ghost", ApprovalDecision::Approved));
+    }
+
+    #[tokio::test]
+    async fn channel_service_cancel_returns_denied() {
+        let svc = Arc::new(ChannelApprovalService::new());
+        let ctx = Context::new();
+        let svc2 = svc.clone();
+        let req = make_request("req-2");
+        let task = tokio::spawn(async move {
+            svc2.request_approval(&ctx, &req).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let cancelled = svc.cancel("req-2");
+        assert!(cancelled);
+        let result = task.await.unwrap().unwrap();
+        assert!(matches!(result, ApprovalDecision::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn channel_service_sender_drop_returns_denied() {
+        // service 析构 → sender drop → receiver 返 Err → 转 Denied
+        let svc = Arc::new(ChannelApprovalService::new());
+        let ctx = Context::new();
+        let svc2 = svc.clone();
+        let req = make_request("req-3");
+        let task = tokio::spawn(async move {
+            svc2.request_approval(&ctx, &req).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(svc); // service drop → pending map drop → sender drop
+        let result = task.await.unwrap().unwrap();
+        assert!(matches!(result, ApprovalDecision::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn channel_service_pending_ids_lists_active() {
+        let svc = ChannelApprovalService::new();
+        assert!(svc.pending_ids().is_empty());
+        let ctx = Context::new();
+        let svc2 = svc.clone();
+        let req1 = make_request("req-a");
+        let t1 = tokio::spawn(async move { svc2.request_approval(&ctx, &req1).await });
+        let svc3 = svc.clone();
+        let req2 = make_request("req-b");
+        let t2 = tokio::spawn(async move {
+            svc3.request_approval(&Context::new(), &req2).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let ids = svc.pending_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"req-a".to_string()));
+        assert!(ids.contains(&"req-b".to_string()));
+
+        // 清理
+        svc.cancel("req-a");
+        svc.cancel("req-b");
+        let _ = t1.await;
+        let _ = t2.await;
     }
 }
