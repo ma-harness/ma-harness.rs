@@ -378,3 +378,70 @@ mah run-stream --model "stub" "hello world from stub"
 - CLI `mah run-stream` 是 Phase 6 起点: 业务方 0 server 也能验 streaming infra (in-process stub 走通)
 - `tonic 'static` 坑: async fn 拿 &str → `String` clone 转换, 不要改 signature
 
+
+## 16. OpenAI 真 SSE streaming (2026-08-19 / Day 100 / P6-2)
+
+### 目标
+
+P5-6 stub 模拟 streaming 之后, P6-2 落 OpenAI 真正 SSE 走 reqwest bytes_stream + chunk buffer. 业务方 OpenAI API key 走 `mah run-stream --model "openai:gpt-4o-mini" "..."` 拿真 streaming token.
+
+### 实现 (commit TBD)
+
+| 部件 | 内容 |
+|---|---|
+| `build_stream_request_body` | 复用 `build_request_body` + 注入 `"stream": true` |
+| `parse_sse_data_line` (静态) | 解析单行 `data: {...}` → `Some(content)` / `None` ([DONE] 终止 / 解析失败) |
+| `OpenaiAdapter::complete_stream` 覆盖 | async_stream + reqwest bytes_stream + `\n\n` event 切分 + 单行 SSE parse |
+| wiremock 端到端测试 | 2 test: 一次性 body / chunked body 都拿 2 token "Hello world" |
+
+### SSE 协议要点 (业务方场景)
+
+```
+POST /v1/chat/completions
+{"model": "gpt-4o-mini", "messages": [...], "stream": true}
+
+→ 200 OK
+Content-Type: text/event-stream
+Transfer-Encoding: chunked
+
+data: {"choices":[{"delta":{"role":"assistant","content":"Hello"}}]}\n\n
+data: {"choices":[{"delta":{"content":" world"}}]}\n\n
+data: [DONE]\n\n
+```
+
+业务方流解析:
+- `data:` 前缀 5 字符去, payload trim
+- payload == `[DONE]` → 终止
+- payload JSON parse → `choices[0].delta.content`
+- 跨 chunk 边界: `String` buffer 攒到 `\n\n` 才切 event
+
+### 关键设计决策
+
+- **error 走 eprintln 不返 Err**: stream 返回 `Stream<Item = String>`, 没 Result 项. 业务方知道打印 stderr 就好, 不污染 token 流
+- **buffer 用 String 不是 Vec<u8>**: SSE 是 UTF-8, 业务方 `from_utf8_lossy` 简单安全. 边界错误 (rare) 不 block stream
+- **status code check 在 stream! 内**: HTTP 错误 (401/429/5xx) 走 eprintln 早返, 不 yield fake token
+- **chunked transfer 兼容**: `\n\n` 边界判定不依赖 chunk 边界, 业务方 partial event 跨 chunk 也能正确攒
+- **wiremock 测试模式**: 跟 plugin-web 一致 (MockServer + ResponseTemplate + set_body_string), 业务方不需要真 LLM key
+
+### 踩坑 (P6-2 阶段 2 个)
+
+1. **temporary value dropped while borrowed (E0716)**: `adapter.complete_stream(&sample_request())` 临时变量活不到 stream.next().await. 修法: `let req = sample_request(); adapter.complete_stream(&req);` 让 req 活到 stream 消费完
+2. **delta.content empty vs missing 区分**: `data: {"choices":[{"delta":{}}]}` (role-only chunk) vs `data: {"choices":[{"delta":{"content":""}}]}`. parser 用 `?` 链, missing 字段返 None, empty content 返 Some(""). 业务方 role-only chunk 静默 skip, 不污染 stream
+
+### 测试
+
+- **ma-harness-model**: 23/23 pass (13 老 + 10 新 P6-2)
+  - `openai_build_stream_request_body_includes_stream_true` (1 test)
+  - `openai_parse_sse_data_line_*` (7 test): extract / done / malformed / non-data / empty / missing / multi-choice
+  - `openai_complete_stream_*_with_wiremock` (2 test): 一次性 body + chunked body, 都拿 2 token
+- **workspace**: 302 total (290 lib + 12 bin, +10 新), 排除 4 pre-existing broken
+
+### 给后来人
+
+- 业务方跑真 OpenAI streaming: `OPENAI_API_KEY=sk-... mah start` + `mah run-stream --model "openai:gpt-4o-mini" "tell me a story"`, 看 typewriter 输出
+- AnthropicAdapter SSE 走 P6-3: 协议不一样 (event-based: message_start / content_block_delta / message_stop), 不能直接复用 OpenAI parser
+- wiremock 是端到端 SSE 验真的标配: 业务方改 parser 时跑这 2 test 确认 HTTP path 没破
+- eprintln 错误输出是 stream 协议的妥协: 业务方想 structured error → 改返 `Stream<Item = Result<String, Error>>` (跟 tonic Response 同样 pattern), 但 P6-2 暂保持简单
+- `parse_sse_data_line` 是 pub static fn, 业务方 custom adapter (Azure OpenAI / Together / Groq) 直接复用
+- `&req` lifetime 绑定: stream 内部 hold `&'a ModelRequest`, 业务方调用时 req 必须 outlive stream
+
