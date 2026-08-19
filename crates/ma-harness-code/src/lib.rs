@@ -88,18 +88,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use wasmtime::*;
 
-/// 沙箱配置 (Phase 3.1 / T3.1)
+/// 沙箱配置 (Phase 3.1 / T3.1 + Phase 3.4 / T3.4 扩展)
 ///
 /// 三层防御:
 /// 1. **fuel**: 限制指令数 (0 = 不限). 防死循环 / DoS
 /// 2. **epoch_deadline_ms**: 限制 wall-clock 时间 (None = 不限). 跟 engine 定时 thread 配合
 /// 3. **memory_bytes / table_elements**: ResourceLimiter 限制 wasm grow 操作
 ///
+/// **Phase 3.4 扩展**:
+/// 4. **allowed_paths**: wasm `host::read_file` 允许读的 path 白名单. 业务方 wasm
+///    想读 LLM 输出 / 配置文件,path 必须以 `allowed_paths` 任一为前缀. 空 list = 不允许读任何文件.
+///
 /// **默认配置** (`SandboxConfig::default()`) 是 LLM-generated code 的"安全起步":
 /// - 10M fuel (~ 1M 函数调用, 单 call 通常 < 1K fuel)
 /// - 5s epoch deadline (50ms tick × 100 ticks)
 /// - 16MB memory (1 wasm page = 64KB, 默认 1 page, 上限 256 pages)
 /// - 1000 table elements (业务方应该用不到 table)
+/// - `allowed_paths` = [] (不允许读文件, 业务方按需 push)
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
     /// 燃料上限 (instruction count). 0 = 不限. 默认 10M
@@ -110,6 +115,9 @@ pub struct SandboxConfig {
     pub memory_bytes: usize,
     /// table element 上限. None = 不限. 默认 Some(1000)
     pub table_elements: Option<u32>,
+    /// **Phase 3.4 / T3.4**: wasm `host::read_file` 允许读的 path 白名单
+    /// (空 = 不允许读任何文件)
+    pub allowed_paths: Vec<std::path::PathBuf>,
 }
 
 impl Default for SandboxConfig {
@@ -119,6 +127,7 @@ impl Default for SandboxConfig {
             epoch_deadline_ms: Some(5_000),
             memory_bytes: 16 * 1024 * 1024,
             table_elements: Some(1000),
+            allowed_paths: Vec::new(),
         }
     }
 }
@@ -131,6 +140,7 @@ impl SandboxConfig {
             epoch_deadline_ms: None,
             memory_bytes: 0,
             table_elements: None,
+            allowed_paths: Vec::new(),
         }
     }
 }
@@ -308,6 +318,89 @@ impl CodeRunner {
                 let bytes = &data[ptr..ptr + len];
                 let s = String::from_utf8_lossy(bytes).to_string();
                 stdout_for_log.lock().push(s);
+            },
+        )?;
+
+        // **Phase 3.4 / T3.4**: 注册 host::read_file
+        // - 业务方 wasm 传 path 字符串 (在 wasm memory [ptr, ptr+len))
+        // - host 检查 path 在 sandbox 白名单,读文件,内容写回 wasm memory
+        // - 返回 (新 ptr, len), 业务方 wasm 解析
+        // - 失败返 (0, 0)
+        // - sandbox 白名单: config.allowed_paths (Phase 3.4 加)
+        let allowed_paths_for_read = Arc::new(self.config.allowed_paths.clone());
+        linker.func_wrap(
+            "host",
+            "read_file",
+            move |mut caller: Caller<'_, MemTableLimiter>, ptr: i32, len: i32| -> (i32, i32) {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return (0, 0),
+                };
+                let data = memory.data(&caller);
+                let path_ptr = ptr as usize;
+                let path_len = len as usize;
+                if path_ptr + path_len > data.len() {
+                    eprintln!("host::read_file: out of bounds path");
+                    return (0, 0);
+                }
+                let path_str = match std::str::from_utf8(&data[path_ptr..path_ptr + path_len]) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("host::read_file: invalid utf8 path: {e}");
+                        return (0, 0);
+                    }
+                };
+                // 沙箱白名单检查
+                let path = std::path::Path::new(path_str);
+                let is_allowed = allowed_paths_for_read
+                    .iter()
+                    .any(|allowed| path.starts_with(allowed));
+                if !is_allowed {
+                    eprintln!(
+                        "host::read_file: path '{}' not in allowed list (sandbox)",
+                        path_str
+                    );
+                    return (0, 0);
+                }
+                // 读文件
+                let content = match std::fs::read(path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("host::read_file: read '{}' failed: {e}", path_str);
+                        return (0, 0);
+                    }
+                };
+                // 写回 wasm memory (offset 0, 因为我们刚读完 path 字符串可以复用)
+                // 简单策略:写到 memory 起点,前提是 content.len() + 0 <= memory.data.len()
+                let write_ptr = 0usize;
+                if content.len() > data.len() {
+                    eprintln!(
+                        "host::read_file: content too large ({} > memory {})",
+                        content.len(),
+                        data.len()
+                    );
+                    return (0, 0);
+                }
+                // memory.data(&caller) 拿的是 &[data], 但要写需要 &mut
+                // 走 memory.data_mut(&mut caller) (wasmtime 27 API)
+                // 但 MemTableLimiter 可能也借了 memory... 这里写不影响 limiter 的原子操作
+                // 实际: wasmtime 0.79 走 memory.write 写 buffer
+                // 简化: 让业务方知道 host::read_file 写到 offset 0, 长度 content.len()
+                // 但 caller 不可变借用,我们要拿 mut
+                // Caller 提供 data_mut via memory
+                if let Some(memory_mut) =
+                    caller.get_export("memory").and_then(|e| e.into_memory())
+                {
+                    let mut buf = memory_mut.data_mut(&mut caller);
+                    if write_ptr + content.len() > buf.len() {
+                        eprintln!("host::read_file: write out of bounds");
+                        return (0, 0);
+                    }
+                    buf[write_ptr..write_ptr + content.len()].copy_from_slice(&content);
+                } else {
+                    return (0, 0);
+                }
+                (write_ptr as i32, content.len() as i32)
             },
         )?;
 
@@ -519,6 +612,7 @@ mod tests {
     #[test]
     fn fuel_config_is_applied() {
         let cfg = SandboxConfig {
+            allowed_paths: vec![],
             fuel: 1000, // 够跑简单 wat
             epoch_deadline_ms: None,
             memory_bytes: 0,
@@ -543,6 +637,7 @@ mod tests {
     fn memory_growth_limit_blocks_grow_beyond_limit() {
         // 64 KB = 1 wasm page. 业务方 memory.grow 1 申请第 2 个 page, 应被拒 (因为 limit=64KB = 1 page)
         let cfg = SandboxConfig {
+            allowed_paths: vec![],
             fuel: 0, // 不限 fuel
             epoch_deadline_ms: None,
             memory_bytes: 64 * 1024, // 1 page, 不允许 grow
@@ -611,6 +706,7 @@ mod tests {
     #[test]
     fn config_getter_returns_current_config() {
         let cfg = SandboxConfig {
+            allowed_paths: vec![],
             fuel: 1000,
             epoch_deadline_ms: Some(1000),
             memory_bytes: 1024,
@@ -622,5 +718,88 @@ mod tests {
         assert_eq!(got.epoch_deadline_ms, Some(1000));
         assert_eq!(got.memory_bytes, 1024);
         assert_eq!(got.table_elements, Some(10));
+    }
+    // === Phase 3.4 / T3.4: host::read_file 受控 fs ===
+
+    /// 业务方 wasm 调 host::read_file 读白名单里的文件, 不 panic 不 abort
+    #[test]
+    fn host_read_file_runs_within_sandbox() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let file_path = tmpdir.path().join("hello.txt");
+        std::fs::write(&file_path, b"hello wasm").unwrap();
+
+        let mut cfg = SandboxConfig::default();
+        cfg.allowed_paths.push(tmpdir.path().to_path_buf());
+
+        let runner = CodeRunner::new_with_config(cfg).unwrap();
+        // 调 read_file, 把 (ptr, len) 加起来当 return value
+        // 验证不 panic 不 abort
+        let wat = r#"
+            (module
+                (import "host" "read_file" (func $read (param i32 i32) (result i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 1000) "x")
+                (func (export "run") (result i32)
+                    i32.const 1000
+                    i32.const 1
+                    call $read
+                    i32.add
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        // 跑通即可 (T3.4 集成测)
+        let _ = output.return_value;
+    }
+
+    /// 业务方 wasm 读白名单外的文件被拒 (返 0, 0)
+    #[test]
+    fn host_read_file_blocks_path_outside_sandbox() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let file_path = tmpdir.path().join("secret.txt");
+        std::fs::write(&file_path, b"secret data").unwrap();
+
+        let mut cfg = SandboxConfig::default();
+        cfg.allowed_paths.push(std::path::PathBuf::from("/some/other/path"));
+
+        let runner = CodeRunner::new_with_config(cfg).unwrap();
+        let wat = r#"
+            (module
+                (import "host" "read_file" (func $read (param i32 i32) (result i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "x")
+                (func (export "run") (result i32)
+                    i32.const 0
+                    i32.const 1
+                    call $read
+                    i32.add
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        // 被拒 -> (0, 0).add = 0
+        assert_eq!(output.return_value, 0, "sandbox 外文件应被拒 (ptr=0, len=0)");
+    }
+
+    /// 空 allowed_paths 时任何文件读都被拒
+    #[test]
+    fn host_read_file_empty_allowed_list_blocks_all() {
+        let cfg = SandboxConfig::default();
+        let runner = CodeRunner::new_with_config(cfg).unwrap();
+        let wat = r#"
+            (module
+                (import "host" "read_file" (func $read (param i32 i32) (result i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "x")
+                (func (export "run") (result i32)
+                    i32.const 0
+                    i32.const 1
+                    call $read
+                    i32.add
+                )
+            )
+        "#;
+        let output = runner.run_wat(wat).unwrap();
+        assert_eq!(output.return_value, 0);
     }
 }

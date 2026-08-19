@@ -2014,6 +2014,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "parking_lot",
+ "tempfile",
  "thiserror 1.0.69",
  "wasmtime",
  "wat",
