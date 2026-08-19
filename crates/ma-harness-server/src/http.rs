@@ -29,6 +29,10 @@ pub fn set_global_adapter(adapter: Arc<dyn ModelAdapter>) {
 }
 
 /// 构造 salvo Router (基础: /health + /version)
+///
+/// **Phase 3.5 (T3.5)**: handler 改用 `#[endpoint]` 而非 `#[handler]`,
+/// 这样 salvo-oapi 0.79 `merge_router` 能识别 + 提取 OpenAPI 注解.
+/// 业务方 `mah openapi export` 拿到的 spec 包含这些路由.
 pub fn router() -> Router {
     Router::new()
         .push(Router::with_path("health").get(health))
@@ -48,8 +52,8 @@ pub fn run_router(adapter: Arc<dyn ModelAdapter>) -> Router {
         )
 }
 
-/// /health 处理器
-#[handler]
+/// /health 处理器 (Phase 3.5: 改用 #[endpoint] for OpenAPI export)
+#[endpoint]
 async fn health() -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
@@ -57,8 +61,8 @@ async fn health() -> Json<serde_json::Value> {
     }))
 }
 
-/// /version 处理器
-#[handler]
+/// /version 处理器 (Phase 3.5: 改用 #[endpoint] for OpenAPI export)
+#[endpoint]
 async fn version() -> Json<serde_json::Value> {
     Json(json!({
         "name": "ma-harness",

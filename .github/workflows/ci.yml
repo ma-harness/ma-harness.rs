@@ -112,6 +112,19 @@ jobs:
       - name: Smoke test: mah load-plugin hello
         run: ./target/debug/mah load-plugin hello
 
+      - name: OpenAPI drift check
+        # Phase 3.5 / T3.5: 生成 spec 跟 docs/api/openapi.json diff, 不一致 fail
+        run: |
+          set -e
+          ./target/debug/mah open-api export --output /tmp/openapi.new.json
+          if ! diff -q /tmp/openapi.new.json docs/api/openapi.json > /dev/null 2>&1; then
+            echo "::error::OpenAPI spec drift detected!"
+            echo "Run 'mah open-api export --output docs/api/openapi.json' locally and commit."
+            diff /tmp/openapi.new.json docs/api/openapi.json || true
+            exit 1
+          fi
+          echo "OpenAPI spec up to date"
+
   # ============================================================================
   # Test (Windows) — 验 Windows 也能 build + test
   # ============================================================================

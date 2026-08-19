@@ -134,6 +134,24 @@ enum Commands {
         #[arg(long, default_value = "gpt-4o-mini")]
         model: String,
     },
+    /// **Phase 3.5 / T3.5**: 导出 OpenAPI spec (CI 同步用)
+    ///
+    /// 例子:
+    ///   mah openapi export --output docs/api/openapi.json
+    OpenApi {
+        #[command(subcommand)]
+        action: OpenApiAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum OpenApiAction {
+    /// 从 server router 导出当前 OpenAPI spec
+    Export {
+        /// 输出文件 (.json / .yaml, 格式按扩展名)
+        #[arg(long, default_value = "openapi.json")]
+        output: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -174,6 +192,9 @@ async fn main() -> Result<()> {
         Commands::RunPrompt { prompt, api_key, model } => {
             run_prompt(&prompt, api_key.as_deref(), &model).await
         }
+        Commands::OpenApi { action } => match action {
+            OpenApiAction::Export { output } => export_openapi(&output),
+        },
     }
 }
 
@@ -567,6 +588,54 @@ fn print_bench_info(crate_name: Option<&str>) -> Result<()> {
     println!("  target/criterion/<crate>/<bench_name>/report/index.html");
     println!();
     println!("详细 bench 列表见 docs/benchmark-design.md § 3 + docs/benchmark-report-week11.md");
+    Ok(())
+}
+
+/// **Phase 3.5 / T3.5**: 从 server router 导出 OpenAPI spec
+///
+/// 走 salvo-oapi 0.79 `OpenApi::new("title", "0.1").merge_router(&router)`,
+/// 然后 to_pretty_json / to_yaml 写到文件.
+///
+/// CI drift 检查:
+///   1. 跑 `mah openapi export --output /tmp/new.json`
+///   2. diff /tmp/new.json docs/api/openapi.json
+///   3. drift → fail
+fn export_openapi(output: &std::path::Path) -> Result<()> {
+    use salvo::oapi::OpenApi;
+    use ma_harness_core::StubModelAdapter;
+    use std::sync::Arc;
+
+    // 构造完整 router (含 /v1/runs) + stub adapter
+    // run_router 内部会 set_global_adapter, OpenAPI 导出只关心 router 结构, 不发真 HTTP
+    let router = ma_harness_server::http::run_router(Arc::new(StubModelAdapter));
+    let doc = OpenApi::new("ma-harness API", "0.1.0").merge_router(&router);
+
+    // 按扩展名决定 json / yaml
+    let ext = output.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    let content: String = match ext {
+        "yaml" | "yml" => doc
+            .to_yaml()
+            .map_err(|e| anyhow::anyhow!("openapi to_yaml failed: {e}"))?,
+        _ => doc
+            .to_pretty_json()
+            .map_err(|e| anyhow::anyhow!("openapi to_pretty_json failed: {e}"))?,
+    };
+
+    // 写文件
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create output dir: {}", parent.display()))?;
+        }
+    }
+    std::fs::write(output, &content)
+        .with_context(|| format!("write openapi: {}", output.display()))?;
+
+    eprintln!(
+        "mah openapi export: wrote {} ({} bytes)",
+        output.display(),
+        content.len()
+    );
     Ok(())
 }
 
