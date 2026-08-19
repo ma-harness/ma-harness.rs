@@ -37,6 +37,8 @@ async-stream = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 criterion = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
 
 [[bench]]
 name = "agent"

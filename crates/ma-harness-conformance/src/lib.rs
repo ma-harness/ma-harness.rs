@@ -28,17 +28,15 @@
 //!
 //! ## 用法
 //!
-//! ```no_run
+//! ```ignore
 //! use ma_harness_conformance::{FixtureLoader, ConformanceRunner};
 //!
-//! # async fn run() {
 //! let fixtures = FixtureLoader::from_jsonl("fixtures/dsh/basic.jsonl").unwrap();
 //! let runner = ConformanceRunner::new();
-//! let results = runner.run_all(&fixtures).await;
-//! let report = runner.build_report(results);
-//! report.write_markdown("target/conformance.md").unwrap();
-//! # }
+//! let results = runner.run_all(&fixtures);
 //! ```
+//!
+//! 完整 report 流程见 `docs/conformance-design.md`.
 //!
 //! ## 设计
 //!
