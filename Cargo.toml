@@ -11,6 +11,7 @@ members = [
     "crates/ma_harness_demo",
     "crates/ma_harness_conformance",
     "crates/ma_harness_sandbox",  # 2026-08-18 (Day 55): Phase 2.2 landlock sandbox
+    "crates/ma_harness_model",  # 2026-08-18 (Day 57): Phase 2.3 OpenAI / Anthropic adapter
     "plugins/ma_harness_plugin_hello",
     "plugins/ma_harness_plugin_bash",
     "plugins/ma_harness_plugin_fs",
