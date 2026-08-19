@@ -317,17 +317,23 @@ impl TuiApp {
         }
     }
 
-    /// 画 UI: 3 个 panel (上: title bar, 中: 2x1 split, 下: events)
+    /// 画 UI: 4 个 panel (Phase 4 改进: 加 events panel)
+    ///
+    /// - Title bar (3 行): ma-harness TUI
+    /// - Row 1: Sessions (左 50%) | Plugins (右 50%)
+    /// - Row 2: Events (全宽, 滚动最新 20 条)
+    /// - Status bar (3 行): ticks / uptime / events count
     fn ui(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        // 主布局: title (3 行) + body (rest)
+        // 主布局: title (3) + row1 (Min 5) + row2 (Min 8) + status (3)
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // title
-                Constraint::Min(0),     // body
-                Constraint::Length(3),  // status
+                Constraint::Length(3),   // title
+                Constraint::Min(5),      // row1: sessions + plugins
+                Constraint::Min(8),      // row2: events (滚动)
+                Constraint::Length(3),   // status
             ])
             .split(area);
 
@@ -341,15 +347,15 @@ impl TuiApp {
             ),
             Span::raw(" "),
             Span::styled(
-                "(Phase 3.9 / T3.9 — press 'q' to quit)",
+                "(Phase 4 — press 'q' to quit)",
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
         .block(Block::default().borders(Borders::ALL).title("ma-harness"));
         frame.render_widget(title, main_chunks[0]);
 
-        // Body: Sessions | Plugins (左右 1:1)
-        let body_chunks = Layout::default()
+        // Row 1: Sessions | Plugins (左右 1:1)
+        let row1_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_chunks[1]);
@@ -377,7 +383,7 @@ impl TuiApp {
                     .borders(Borders::ALL)
                     .title(format!("Sessions ({})", sessions.len())),
             );
-        frame.render_widget(sessions_list, body_chunks[0]);
+        frame.render_widget(sessions_list, row1_chunks[0]);
         drop(sessions);
 
         // Plugins panel
@@ -397,8 +403,51 @@ impl TuiApp {
                     .borders(Borders::ALL)
                     .title(format!("Plugins ({})", plugins.len())),
             );
-        frame.render_widget(plugins_list, body_chunks[1]);
+        frame.render_widget(plugins_list, row1_chunks[1]);
         drop(plugins);
+
+        // Row 2: Events panel (滚动最新 20 条)
+        let events = self.events.lock();
+        let event_items: Vec<ListItem> = events
+            .iter()
+            .rev() // 最新在最上
+            .map(|e| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("#{}", e.seq),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("[{}]", e.timestamp),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{:8}", e.severity.to_lowercase()),
+                        Style::default().fg(match e.severity.as_str() {
+                            "Error" => Color::Red,
+                            "Warn" => Color::Magenta,
+                            _ => Color::Cyan,
+                        }),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{}/{}", e.session_id, e.event_type),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]))
+            })
+            .collect();
+        let events_list = List::new(event_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Events (latest {})", events.len())),
+            );
+        frame.render_widget(events_list, main_chunks[2]);
+        let event_count = events.len();
+        drop(events);
 
         // Status bar
         let status = Paragraph::new(Line::from(vec![
@@ -413,12 +462,12 @@ impl TuiApp {
             ),
             Span::raw("  "),
             Span::styled(
-                format!("events: {}", self.events.lock().len()),
+                format!("events: {}", event_count),
                 Style::default().fg(Color::Yellow),
             ),
         ]))
         .block(Block::default().borders(Borders::ALL).title("status"));
-        frame.render_widget(status, main_chunks[2]);
+        frame.render_widget(status, main_chunks[3]);
     }
 }
 
