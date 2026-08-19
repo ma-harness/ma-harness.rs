@@ -176,7 +176,9 @@ pub fn run_router_with_log_and_store(
                 )
                 .push(sessions_router_with_events())
                 // P7-2.5: HTTP approval 端点
-                .push(approvals_router()),
+                .push(approvals_router())
+                // P10-7: Prometheus /v1/metrics
+                .push(Router::with_path("metrics").get(metrics_handler)),
         )
 }
 
@@ -802,6 +804,17 @@ pub struct TokenStatsResponse {
 pub struct ModelTokenStats {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
+}
+
+// P10-7: Prometheus /v1/metrics 端点 (走 metrics.rs)
+#[handler]
+async fn metrics_handler(res: &mut salvo::Response) -> Result<(), salvo::Error> {
+    use crate::metrics::METRICS;
+    let body = METRICS.render();
+    res.headers_mut()
+        .insert("Content-Type", "text/plain; version=0.0.4".parse().unwrap());
+    res.write_body(body).map_err(salvo::Error::other)?;
+    Ok(())
 }
 
 /// GET /v1/sessions/{id}/token-stats
@@ -1495,6 +1508,36 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(ct.contains("event-stream"), "content-type 应含 event-stream, got: {ct}");
+    }
+
+    // P10-7: Prometheus /v1/metrics 端点
+    #[tokio::test]
+    async fn http_metrics_returns_prometheus_format() {
+        let _lock = SESSION_TEST_LOCK.lock();
+
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().unwrap());
+        let store: Arc<dyn crate::session_store::SessionStore> =
+            Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap());
+        let service = Service::new(run_router_with_log_and_store(
+            Arc::new(ma_harness_core::StubModelAdapter),
+            log,
+            store,
+        ));
+
+        let mut resp = TestClient::get("http://localhost/v1/metrics")
+            .send(&service)
+            .await;
+        assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/plain"), "content-type 应含 text/plain, got: {ct}");
+        let body = resp.take_string().await.unwrap_or_default();
+        assert!(body.contains("# HELP ma_harness_uptime_seconds"));
+        assert!(body.contains("ma_harness_sessions_total"));
+        assert!(body.contains("ma_harness_approvals_total"));
     }
 
     // P8-2: /v1/sessions/{id}/token-stats

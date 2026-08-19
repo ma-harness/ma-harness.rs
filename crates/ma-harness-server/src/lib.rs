@@ -40,6 +40,7 @@ use ma_harness_core::{EventLog, ModelAdapter, StubModelAdapter};
 
 pub mod agent_service;
 pub mod http;
+pub mod metrics;
 pub mod session_service;
 pub mod session_store;
 
