@@ -18,3 +18,5 @@ ma_harness_seam = { path = "../../crates/ma_harness_seam" }
 ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
 ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
 anyhow = { workspace = true }
+# Phase 2.2 (T2.2): inventory 分布式注册
+inventory = { workspace = true }

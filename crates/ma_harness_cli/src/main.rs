@@ -22,7 +22,10 @@ use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
 use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
 };
-use ma_harness_seam::PluginRegistry;
+use ma_harness_seam::{PluginLoader, PluginRegistry};
+// Phase 2.2 (T2.2): 引用 hello plugin 触发 link, inventory::submit! 才有 effect
+#[allow(unused_imports)]
+use ma_harness_plugin_hello as _hello;
 use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl};
 
 #[derive(Parser, Debug)]
@@ -62,8 +65,16 @@ enum Commands {
         #[arg(long, default_value = "stub")]
         model: String,
     },
-    /// 列出已装载 plugin
+    /// 列出已装载 plugin (走 inventory 分布式注册)
     Plugins,
+    /// 按名装载 plugin (Phase 2.2 / T2.2 inventory + dylib 走 PluginLoader)
+    LoadPlugin {
+        /// plugin 名 (e.g. "hello", "bash", "fs")
+        name: String,
+        /// 可选 ctx 标识 (debug 用, 默认 "default")
+        #[arg(long, default_value = "default")]
+        ctx_id: String,
+    },
     /// 查 session 事件
     Events {
         /// Session ID
@@ -112,6 +123,7 @@ async fn main() -> Result<()> {
             run_local_agent(session, message, model).await
         }
         Commands::Plugins => list_plugins(),
+        Commands::LoadPlugin { name, ctx_id } => load_plugin(&name, &ctx_id),
         Commands::Events { session } => list_events(&session),
         Commands::Conformance { fixtures, dsh, output, verbose } => {
             run_conformance(&fixtures, dsh, &output, verbose)
@@ -203,13 +215,31 @@ async fn run_local_agent(session: Option<String>, message: String, model: String
 }
 
 fn list_plugins() -> Result<()> {
-    let mut reg = PluginRegistry::new();
-    reg.register(ma_harness_plugin_hello::HelloPlugin)
-        .map_err(|e| anyhow::anyhow!("register hello failed: {}", e))?;
-    println!("Loaded plugins:");
-    for name in reg.list() {
-        println!("  - {}", name);
+    // Phase 2.2 (T2.2): 走 inventory 查所有已注册 plugin (跨 crate 收集)
+    // 不再硬编 ma_harness_plugin_hello::HelloPlugin, 走 PluginLoader::list()
+    let names = PluginLoader::list();
+    if names.is_empty() {
+        println!("(no plugins registered via inventory)");
+    } else {
+        println!("Registered plugins ({} total):", names.len());
+        for name in names {
+            println!("  - {}", name);
+        }
     }
+    Ok(())
+}
+
+fn load_plugin(name: &str, ctx_id: &str) -> Result<()> {
+    // Phase 2.2 (T2.2): 按名查 inventory, factory 构造, install 到 ctx
+    use ma_harness_cordis::Context;
+    let ctx = Context::new();
+    eprintln!(
+        "mah load-plugin: looking up '{}' in ctx '{}'",
+        name, ctx_id
+    );
+    PluginLoader::load_by_name(&ctx, name)
+        .map_err(|e| anyhow::anyhow!("load '{}' failed: {}", name, e))?;
+    println!("OK: loaded plugin '{}' into ctx '{}'", name, ctx_id);
     Ok(())
 }
 

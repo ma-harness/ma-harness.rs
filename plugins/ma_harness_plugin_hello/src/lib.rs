@@ -16,7 +16,7 @@
 #![warn(missing_docs)]
 
 use ma_harness_cordis::Context;
-use ma_harness_seam::{ctx_key, dsh_plugin_dual, dsh_service_dual};
+use ma_harness_seam::{ctx_key, dsh_plugin_dual, dsh_service_dual, Plugin, PluginEntry};
 
 // ============================================================================
 // 公开 typed key (seam re-export, 编译期 snake_case 校验)
@@ -68,6 +68,29 @@ impl HelloPlugin {
         ctx.set(GREETING_TEMPLATE, DEFAULT_TEMPLATE.to_string());
         Ok(())
     }
+}
+
+// ============================================================================
+// Phase 2.2 (T2.2): inventory 分布式注册
+// ============================================================================
+//
+// 任何 link 这 crate 的 binary (mah.exe / 测试 binary) 在启动时自动调
+// `inventory::submit!` 把 HelloPlugin 注册到全局 PluginEntry 表.
+// 然后 PluginLoader::load_by_name(ctx, "hello") 能找到并 install.
+//
+// 设计:
+// - factory 是 `fn() -> Box<dyn Plugin>` 零大小 fn pointer (C ABI-safe)
+// - 跨 dylib 安全(只是构造 + 装, plugin 自己 install 用 ctx)
+// - name 是 &'static str 永远 live (literal)
+
+// 桥: HelloPlugin 默认 impl `Plugin` (seam 公开 trait) 通过 `dsh_plugin_dual`,
+// factory 返回 Box<dyn Plugin> 用 BlanketImpl 形式
+fn _hello_plugin_factory() -> Box<dyn Plugin> {
+    Box::new(HelloPlugin)
+}
+
+inventory::submit! {
+    PluginEntry::new("hello", _hello_plugin_factory)
 }
 
 // ============================================================================
@@ -154,5 +177,34 @@ mod tests {
         // 装一次后, service 已在 ctx 里, greet 能用
         let svc = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
         assert_eq!(svc.greet(&ctx, "Phase 2.1"), "Hello, Phase 2.1!");
+    }
+
+    /// **Phase 2.2 (T2.2) 新增**: 验证 hello plugin 通过 inventory 提交后,
+    /// PluginLoader::load_by_name(ctx, "hello") 能找到并 install.
+    /// 跑这 test 时同一 binary 内的 inventory 含 "hello" (本 crate submit!),
+    /// 所以 load_by_name 不需硬编注册.
+    #[test]
+    fn inventory_load_by_name_finds_hello_plugin() {
+        use ma_harness_seam::PluginLoader;
+        let ctx = Context::new();
+        // inventory::iter 查表, 找 "hello" entry
+        assert!(PluginLoader::contains("hello"), "hello 应该被 inventory submit! 注册");
+        // load_by_name 走 factory 构造 HelloPlugin, install 到 ctx
+        PluginLoader::load_by_name(&ctx, "hello").unwrap();
+        // 装完 ctx 里有 HelloService (via inject), 拿得到
+        let svc = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
+        assert_eq!(svc.greet(&ctx, "T2.2 inventory"), "Hello, T2.2 inventory!");
+    }
+
+    /// **Phase 2.2 (T2.2) 新增**: 验证 PluginLoader::list() 含 "hello"
+    #[test]
+    fn inventory_list_contains_hello() {
+        use ma_harness_seam::PluginLoader;
+        let names = PluginLoader::list();
+        assert!(
+            names.contains(&"hello"),
+            "expected 'hello' in PluginLoader::list(), got: {:?}",
+            names
+        );
     }
 }

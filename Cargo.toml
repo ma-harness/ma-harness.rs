@@ -105,6 +105,9 @@ dashmap = "6"
 parking_lot = "0.12"
 arc-swap = "1.7"
 
+# 分布式插件注册 (Phase 2.2 / T2.2 — 按名查 plugin)
+inventory = "0.3"
+
 # 时间 / ID
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

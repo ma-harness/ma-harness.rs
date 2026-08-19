@@ -1844,6 +1844,7 @@ name = "ma_harness_plugin_hello"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "inventory",
  "ma_harness_cordis",
  "ma_harness_plugin_macro",
  "ma_harness_seam",
@@ -1955,6 +1956,7 @@ dependencies = [
  "async-trait",
  "criterion",
  "futures",
+ "inventory",
  "ma_harness_cordis",
  "ma_harness_core",
  "ma_harness_plugin_macro",

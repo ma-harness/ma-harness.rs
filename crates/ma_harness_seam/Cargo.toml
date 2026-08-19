@@ -24,6 +24,8 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
+# Phase 2.2 (T2.2) — 分布式插件注册
+inventory = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
