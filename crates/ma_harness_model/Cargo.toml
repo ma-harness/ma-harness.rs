@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_model"
+name = "ma-harness-model"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 # 内部
-ma_harness_core = { path = "../ma_harness_core" }
+ma-harness-core = { path = "../ma_harness_core" }
 
 # 外部
 async-trait = { workspace = true }

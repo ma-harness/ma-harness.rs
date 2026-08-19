@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_plugin_macro"
+name = "ma-harness-plugin-macro"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,7 @@ proc-macro = true
 
 [dependencies]
 # 内部依赖 (dsh_service_dual / dsh_plugin_dual 展开时引用)
-ma_harness_cordis = { path = "../ma_harness_cordis" }
+ma-harness-cordis = { path = "../ma_harness_cordis" }
 # 注意: 不能 dep ma_harness_seam (cyclic — seam re-export DshService 来自本 crate)
 # seam 引用是 user 端用 use ma_harness_seam::dsh_*_dual; 时引入, macro 展开的 ::ma_harness_seam::Service
 # 由 user crate 的 path resolution 提供. trybuild 编译时由 user crate (plugin_hello) 提供.
@@ -32,6 +32,6 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 # 集成测试用 (dsh_tool / dsh_command 生成的代码引用这些)
-ma_harness_core = { path = "../ma_harness_core" }
+ma-harness-core = { path = "../ma_harness_core" }
 # trybuild: 编译失败 fixture 测试 (Phase 2.4)
 trybuild = { workspace = true }

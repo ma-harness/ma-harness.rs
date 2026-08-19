@@ -1984,21 +1984,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "ma_harness_cli"
+name = "ma-harness-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "clap",
  "futures",
- "ma_harness_code",
- "ma_harness_conformance",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_hello",
- "ma_harness_proto",
- "ma_harness_seam",
- "ma_harness_server",
+ "ma-harness-code",
+ "ma-harness-conformance",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-hello",
+ "ma-harness-proto",
+ "ma-harness-seam",
+ "ma-harness-server",
  "salvo",
  "tokio",
  "tonic",
@@ -2008,7 +2008,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_code"
+name = "ma-harness-code"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2019,7 +2019,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_conformance"
+name = "ma-harness-conformance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2028,13 +2028,13 @@ dependencies = [
  "chrono",
  "futures",
  "insta",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_bash",
- "ma_harness_plugin_cordis",
- "ma_harness_plugin_hello",
- "ma_harness_proto",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-bash",
+ "ma-harness-plugin-cordis",
+ "ma-harness-plugin-hello",
+ "ma-harness-proto",
+ "ma-harness-seam",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2047,7 +2047,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_cordis"
+name = "ma-harness-cordis"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2063,7 +2063,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_core"
+name = "ma-harness-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2071,7 +2071,7 @@ dependencies = [
  "chrono",
  "criterion",
  "futures",
- "ma_harness_cordis",
+ "ma-harness-cordis",
  "parking_lot",
  "rusqlite",
  "serde",
@@ -2084,20 +2084,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_demo"
+name = "ma-harness-demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_bash",
- "ma_harness_plugin_cordis",
- "ma_harness_plugin_fs",
- "ma_harness_plugin_hello",
- "ma_harness_plugin_skill",
- "ma_harness_plugin_subagent",
- "ma_harness_plugin_web",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-bash",
+ "ma-harness-plugin-cordis",
+ "ma-harness-plugin-fs",
+ "ma-harness-plugin-hello",
+ "ma-harness-plugin-skill",
+ "ma-harness-plugin-subagent",
+ "ma-harness-plugin-web",
+ "ma-harness-seam",
  "tempfile",
  "tokio",
  "tracing",
@@ -2105,12 +2105,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_model"
+name = "ma-harness-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_core",
+ "ma-harness-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -2120,15 +2120,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_bash"
+name = "ma-harness-plugin-bash"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "serde",
  "serde_json",
  "tempfile",
@@ -2138,15 +2138,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_cordis"
+name = "ma-harness-plugin-cordis"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2155,15 +2155,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_fs"
+name = "ma-harness-plugin-fs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "serde",
  "serde_json",
  "tempfile",
@@ -2173,25 +2173,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_hello"
+name = "ma-harness-plugin-hello"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "inventory",
- "ma_harness_cordis",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "tokio",
 ]
 
 [[package]]
-name = "ma_harness_plugin_macro"
+name = "ma-harness-plugin-macro"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "ma_harness_cordis",
- "ma_harness_core",
+ "ma-harness-cordis",
+ "ma-harness-core",
  "proc-macro2",
  "quote",
  "schemars",
@@ -2201,14 +2201,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_skill"
+name = "ma-harness-plugin-skill"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "serde",
  "serde_yaml",
  "tempfile",
@@ -2218,15 +2218,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_subagent"
+name = "ma-harness-plugin-subagent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2237,15 +2237,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_plugin_web"
+name = "ma-harness-plugin-web"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
- "ma_harness_seam",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
+ "ma-harness-seam",
  "reqwest",
  "serde",
  "serde_json",
@@ -2256,11 +2256,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_proto"
+name = "ma-harness-proto"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "ma_harness_core",
+ "ma-harness-core",
  "prost",
  "prost-types",
  "serde_json",
@@ -2271,11 +2271,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_sandbox"
+name = "ma-harness-sandbox"
 version = "0.1.0"
 dependencies = [
  "landlock",
- "ma_harness_cordis",
+ "ma-harness-cordis",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2283,7 +2283,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ma_harness_seam"
+name = "ma-harness-seam"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2291,16 +2291,16 @@ dependencies = [
  "criterion",
  "futures",
  "inventory",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_plugin_macro",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-plugin-macro",
  "serde",
  "serde_json",
  "uuid",
 ]
 
 [[package]]
-name = "ma_harness_server"
+name = "ma-harness-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2309,9 +2309,9 @@ dependencies = [
  "chrono",
  "dashmap",
  "futures",
- "ma_harness_cordis",
- "ma_harness_core",
- "ma_harness_proto",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-proto",
  "parking_lot",
  "prost",
  "prost-types",

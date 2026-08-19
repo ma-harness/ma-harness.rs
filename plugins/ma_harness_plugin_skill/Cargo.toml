@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_plugin_skill"
+name = "ma-harness-plugin-skill"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,10 +13,10 @@ description = "ma-harness first-party plugin 'skill' (加载 .skill/ 目录, Wee
 workspace = true
 
 [dependencies]
-ma_harness_seam = { path = "../../crates/ma_harness_seam" }
-ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
-ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
-ma_harness_core = { path = "../../crates/ma_harness_core" }
+ma-harness-seam = { path = "../../crates/ma_harness_seam" }
+ma-harness-cordis = { path = "../../crates/ma_harness_cordis" }
+ma-harness-plugin-macro = { path = "../../crates/ma_harness_plugin_macro" }
+ma-harness-core = { path = "../../crates/ma_harness_core" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "fs"] }

@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_plugin_hello"
+name = "ma-harness-plugin-hello"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 # 用公开 seam API, 不直接用 cordis (内部)
-ma_harness_seam = { path = "../../crates/ma_harness_seam" }
-ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
-ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
+ma-harness-seam = { path = "../../crates/ma_harness_seam" }
+ma-harness-cordis = { path = "../../crates/ma_harness_cordis" }
+ma-harness-plugin-macro = { path = "../../crates/ma_harness_plugin_macro" }
 anyhow = { workspace = true }
 # Phase 2.2 (T2.2): inventory 分布式注册
 inventory = { workspace = true }

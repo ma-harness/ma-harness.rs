@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_code"
+name = "ma-harness-code"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

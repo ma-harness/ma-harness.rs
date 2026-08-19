@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_cordis"
+name = "ma-harness-cordis"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

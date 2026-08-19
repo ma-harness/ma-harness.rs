@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_plugin_bash"
+name = "ma-harness-plugin-bash"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,10 +14,10 @@ workspace = true
 
 [dependencies]
 # 公开 API (seam) + 内部 (cordis 写 typed key)
-ma_harness_seam = { path = "../../crates/ma_harness_seam" }
-ma_harness_cordis = { path = "../../crates/ma_harness_cordis" }
-ma_harness_plugin_macro = { path = "../../crates/ma_harness_plugin_macro" }
-ma_harness_core = { path = "../../crates/ma_harness_core" }
+ma-harness-seam = { path = "../../crates/ma_harness_seam" }
+ma-harness-cordis = { path = "../../crates/ma_harness_cordis" }
+ma-harness-plugin-macro = { path = "../../crates/ma_harness_plugin_macro" }
+ma-harness-core = { path = "../../crates/ma_harness_core" }
 # 外部
 anyhow = { workspace = true }
 thiserror = { workspace = true }

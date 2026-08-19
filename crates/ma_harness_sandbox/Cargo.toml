@@ -1,5 +1,5 @@
 [package]
-name = "ma_harness_sandbox"
+name = "ma-harness-sandbox"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 # 内部
-ma_harness_cordis = { path = "../ma_harness_cordis" }
+ma-harness-cordis = { path = "../ma_harness_cordis" }
 
 # 外部
 serde = { workspace = true }
