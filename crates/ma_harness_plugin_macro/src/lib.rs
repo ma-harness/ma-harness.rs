@@ -22,8 +22,9 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
-use syn::{parse_macro_input, DeriveInput, ItemFn};
+use quote::{quote, ToTokens};
+use syn::parse::{Parse, ParseStream};
+use syn::{parse_macro_input, DeriveInput, Ident, ItemFn, LitStr, Token};
 
 // ============================================================================
 // ctx_key! — 已移到 ma_harness_seam (proc-macro crate 不允许 export macro_rules!)
@@ -364,3 +365,199 @@ pub fn dsh_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
 fn _unused() {
     let _f: TokenStream2 = quote! {};
 }
+
+/// syn 2.x attribute 解析: `key = "value", key2 = "value2"` 形式 (逗号分隔的 name-value 对)
+struct DshDualAttrs {
+    pairs: std::collections::HashMap<String, LitStr>,
+}
+
+impl Parse for DshDualAttrs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut pairs = std::collections::HashMap::new();
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let val: LitStr = input.parse()?;
+            pairs.insert(key.to_string(), val);
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self { pairs })
+    }
+}
+
+fn parse_dual_attrs(attr: TokenStream) -> DshDualAttrs {
+    syn::parse2(attr.into()).unwrap_or_else(|_| DshDualAttrs { pairs: std::collections::HashMap::new() })
+}
+
+fn take_lit_or(attrs: &DshDualAttrs, key: &str, default: &str) -> String {
+    attrs.pairs.get(key).map(|s| s.value()).unwrap_or_else(|| default.to_string())
+}
+
+// ============================================================================
+// #[dsh_service_dual] — Phase 2.1 macro 增强
+// ============================================================================
+//
+// 一次 derive 双重 impl `ma_harness_cordis::Service` + `ma_harness_seam::Service`.
+// 取代 plugin 作者手写 20 行 boilerplate (见 plugins/ma_harness_plugin_hello/src/lib.rs).
+//
+// # 语法
+//
+// ```ignore
+// #[dsh_service_dual(name = "hello", ctor = "HelloService::create")]
+// pub struct HelloService;
+//
+// impl HelloService {
+//     pub fn create(_ctx: &Context) -> Result<Self, BoxedError> { Ok(HelloService) }
+// }
+// ```
+//
+// 生成:
+// - `impl CordisService for HelloService { type Ctx = Context; type Error = BoxedError; fn install 委托 ctor; fn name = "hello" }`
+// - `impl SeamService for HelloService { type Ctx = Context; type Error = BoxedError; fn install 委托 Cordis; fn name = "hello" }`
+//
+// # attribute (逗号分隔的 key = "value" 对)
+//
+// - `name = "..."` — 必填, 实例名 (跟 Plugin name 对齐), 缺省时用 struct ident lowercase
+// - `ctx = "..."` — 可选, ctx type path (默认 `ma_harness_cordis::Context`)
+// - `error = "..."` — 可选, Error type path (默认 `ma_harness_cordis::BoxedError`)
+// - `ctor = "..."` — 必填, 静态 install 函数的 FQN (`Type::create` 或 `<Type as Trait>::create`), 缺省 `Type::create`
+//
+// # 限制 (Phase 2.1)
+//
+// - 只支持 unit/newtype/空 struct (HelloService; / HelloService(T);) — 不解析字段
+// - user 写一个 `fn ctor(ctx: &Ctx) -> Result<Self, Error>`, macro 不接管
+// - 不支持 generic struct (Phase 2.2 加)
+#[proc_macro_attribute]
+pub fn dsh_service_dual(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attrs = parse_dual_attrs(attr);
+    let input: DeriveInput = parse_macro_input!(item as DeriveInput);
+
+    let name = take_lit_or(&attrs, "name", &input.ident.to_string());
+    let ctx_str = take_lit_or(&attrs, "ctx", "::ma_harness_cordis::Context");
+    let err_str = take_lit_or(&attrs, "error", "::ma_harness_cordis::BoxedError");
+    let ctor_str = take_lit_or(&attrs, "ctor", "Self::create");
+    let ctx_ty: TokenStream2 = ctx_str.parse().unwrap_or(quote!(::ma_harness_cordis::Context));
+    let err_ty: TokenStream2 = err_str.parse().unwrap_or(quote!(::ma_harness_cordis::BoxedError));
+    let ctor: TokenStream2 = ctor_str.parse().unwrap_or(quote!(Self::create));
+
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+    let attrs_doc = &input.attrs;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let expanded = quote! {
+        #(#attrs_doc)*
+        #vis struct #struct_name #impl_generics #where_clause;
+
+        // 内部 cordis::Service impl (主)
+        impl #impl_generics ::ma_harness_cordis::Service for #struct_name #ty_generics #where_clause {
+            type Ctx = #ctx_ty;
+            type Error = #err_ty;
+            fn install(ctx: &Self::Ctx) -> ::std::result::Result<Self, Self::Error>
+            where
+                Self: ::std::marker::Sized,
+                Self::Error: ::std::marker::Sized,
+            {
+                #ctor(ctx)
+            }
+            fn name(&self) -> &str {
+                #name
+            }
+        }
+
+        // 公开 seam::Service impl (委托 cordis)
+        impl #impl_generics ::ma_harness_seam::Service for #struct_name #ty_generics #where_clause {
+            type Ctx = #ctx_ty;
+            type Error = #err_ty;
+            fn install(ctx: &Self::Ctx) -> ::std::result::Result<Self, Self::Error>
+            where
+                Self: ::std::marker::Sized,
+            {
+                <Self as ::ma_harness_cordis::Service>::install(ctx)
+            }
+            fn name(&self) -> &str {
+                #name
+            }
+        }
+    };
+    expanded.into()
+}
+
+// ============================================================================
+// #[dsh_plugin_dual] — Phase 2.1 plugin 增强
+// ============================================================================
+//
+// 一次 derive 双重 impl `ma_harness_cordis::Plugin` + `ma_harness_seam::Plugin`.
+//
+// # 语法
+//
+// ```ignore
+// #[dsh_plugin_dual(name = "hello", install = "HelloPlugin::install_into")]
+// pub struct HelloPlugin;
+//
+// impl HelloPlugin {
+//     pub fn install_into(&self, ctx: &Context) -> anyhow::Result<()> { ... }
+// }
+// ```
+//
+// # attribute
+//
+// - `name = "..."` — 必填, 插件名, 缺省时用 struct ident lowercase
+// - `install = "..."` — 必填, install 方法 FQN (`Type::install_into`), 缺省 `Type::install_into`
+
+#[proc_macro_attribute]
+pub fn dsh_plugin_dual(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attrs = parse_dual_attrs(attr);
+    let input: DeriveInput = parse_macro_input!(item as DeriveInput);
+
+    let name = take_lit_or(&attrs, "name", &input.ident.to_string().to_lowercase());
+    let install_str = take_lit_or(&attrs, "install", "Self::install_into");
+    let install: TokenStream2 = install_str.parse().unwrap_or(quote!(Self::install_into));
+
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+    let attrs_doc = &input.attrs;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let expanded = quote! {
+        #(#attrs_doc)*
+        #vis struct #struct_name #impl_generics #where_clause;
+
+        // 内部 cordis::Plugin impl (主)
+        impl #impl_generics ::ma_harness_cordis::Plugin for #struct_name #ty_generics #where_clause {
+            fn install(&self, ctx: &::ma_harness_cordis::Context) -> ::anyhow::Result<()> {
+                #install(self, ctx)
+            }
+            fn name(&self) -> &str {
+                #name
+            }
+        }
+
+        // 公开 seam::Plugin impl (委托 cordis)
+        impl #impl_generics ::ma_harness_seam::Plugin for #struct_name #ty_generics #where_clause {
+            fn install(&self, ctx: &::ma_harness_cordis::Context) -> ::anyhow::Result<()> {
+                <Self as ::ma_harness_cordis::Plugin>::install(self, ctx)
+            }
+            fn name(&self) -> &str {
+                #name
+            }
+        }
+    };
+    expanded.into()
+}
+
+// ============================================================================
+// 辅助: 让 #[dsh_listener::on(Event::X)] 真正生成 trait impl
+// ============================================================================
+//
+// Phase 2.1 增强: `#[dsh_listener]` 改用 build-style 解析, 扫描 impl 块的
+// `#[on(EventType)]` 方法, 拼成完整 Listener impl. 不再需要 user 手写 dispatch.
+//
+// 暂只实现 PoC, 完整版在 P2-T0.1 后续 PR.
+//
+// 当前保持 Phase 1 stub (透传 fn).
+
+#[allow(dead_code)]
+fn _dual_macro_unused_marker(_t: &dyn ToTokens) {}

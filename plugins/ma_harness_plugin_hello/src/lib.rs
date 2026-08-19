@@ -1,43 +1,48 @@
-﻿//! ma_harness_plugin_hello ?端到?demo plugin (seam 风格)
+﻿//! ma_harness_plugin_hello — 端到端 demo plugin (seam 风格)
 //!
-//! **目的**: 演示 ma-harness 公开 API (seam) 的最小可用链?
+//! **目的**: 演示 ma-harness 公开 API (seam) 的最小可用链路.
 //!
 //! **关键设计**:
 //! - 只用 `ma_harness_seam::*` 公开 API
-//! - `ma_harness_cordis` 仅作为底层引?(typed key), 通过 seam 暴露
-//! - 5 ?proc-macro (来自 ma_harness_plugin_macro) 通过 seam re-export
+//! - `ma_harness_cordis` 仅作为底层引用(typed key), 通过 seam 暴露
+//! - 5 个 proc-macro (来自 ma_harness_plugin_macro) 通过 seam re-export
+//! - **Phase 2.1**: 用 `#[dsh_service_dual]` / `#[dsh_plugin_dual]` 一次生成双 trait impl,
+//!   取代 Phase 1 手动双重 impl cordis + seam 的 20 行 boilerplate.
 //!
-//! 详细设计?`docs/ma-harness-arch-map.md` §11 (Week 1 Day 4 + Week 3-4 重写).
+//! 详细设计见 `docs/ma-harness-arch-map.md` §11 (Week 1 Day 4 + Week 3-4 重写).
+//! Phase 2.1 macro 增强设计见 `docs/ma-harness-arch-map.md` §11.1 (Day 55).
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 use ma_harness_cordis::Context;
-use ma_harness_cordis::Plugin as CordisPlugin;
-use ma_harness_cordis::Service as CordisService;
-use ma_harness_seam::{ctx_key, Plugin as SeamPlugin, Service as SeamService};
+use ma_harness_seam::{ctx_key, dsh_plugin_dual, dsh_service_dual};
 
 // ============================================================================
-// 公开 typed key (seam re-export, 编译?snake_case 校验)
+// 公开 typed key (seam re-export, 编译期 snake_case 校验)
 // ============================================================================
 
-/// greeting 模板. 业务?set 改之, service 读之.
+/// greeting 模板. 业务方 set 改之, service 读之.
 pub static GREETING_TEMPLATE: ma_harness_cordis::CtxKey<String> = ctx_key!("greeting_template");
 
 /// 默认模板
 pub const DEFAULT_TEMPLATE: &str = "Hello, {who}!";
 
 // ============================================================================
-// Service: HelloService
+// Service: HelloService (Phase 2.1 macro 一次生成 cordis + seam 两套 impl)
 // ============================================================================
-//
-// 双重 impl: cordis::Service (?ctx 内部对接) + seam::Service (公开 API 一?.
-// 两份方法签名完全相同, 业务方写 seam ?ctx 内部 cordis 都自动满?
 
-/// Hello service ?每次 greet 都从 ctx ?template
+/// Hello service — 每次 greet 都从 ctx 读 template
+#[dsh_service_dual(name = "hello", ctor = "HelloService::create")]
 pub struct HelloService;
 
 impl HelloService {
+    /// 通过 ctx 构造自身 (user 写一次, macro 委托到 cordis::Service::install,
+    /// seam::Service::install 再委托回 cordis — 全链路不重复实现)
+    pub fn create(_ctx: &Context) -> Result<Self, ma_harness_cordis::BoxedError> {
+        Ok(HelloService)
+    }
+
     /// 从 ctx 里的 template 渲染问候
     pub fn greet(&self, ctx: &Context, who: &str) -> String {
         let template = ctx
@@ -47,64 +52,26 @@ impl HelloService {
     }
 }
 
-impl CordisService for HelloService {
-    type Ctx = Context;
-    type Error = ma_harness_cordis::BoxedError;
-    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
-        Ok(HelloService)
-    }
-    fn name(&self) -> &str {
-        "hello"
-    }
-}
-
-// 公开 seam 镜像 (?CordisService ?impl ?
-impl SeamService for HelloService {
-    type Ctx = Context;
-    type Error = ma_harness_cordis::BoxedError;
-    fn install(_ctx: &Context) -> Result<Self, Self::Error> {
-        Ok(HelloService)
-    }
-    fn name(&self) -> &str {
-        "hello"
-    }
-}
-
 // ============================================================================
-// Plugin: HelloPlugin
+// Plugin: HelloPlugin (Phase 2.1 macro 一次生成 cordis + seam 两套 impl)
 // ============================================================================
-//
-// 双重 impl: cordis::Plugin (?ctx 内部对接) + seam::Plugin (公开 API).
 
-/// Hello plugin ?install 时注?HelloService + 写默?typed key
+/// Hello plugin — install 时注入 HelloService + 写默认 typed key
+#[dsh_plugin_dual(name = "hello", install = "HelloPlugin::install_into")]
 pub struct HelloPlugin;
 
-impl CordisPlugin for HelloPlugin {
-    fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        // 2026-08-18: fully-qualified 消歧义 (CordisService + SeamService 都有同名 install)
+impl HelloPlugin {
+    /// 委托 cordis::Plugin::install, seam::Plugin::install 再委托 cordis
+    pub fn install_into(&self, ctx: &Context) -> anyhow::Result<()> {
         let svc = <HelloService as ma_harness_cordis::Service>::install(ctx)?;
         ctx.inject(std::sync::Arc::new(svc));
         ctx.set(GREETING_TEMPLATE, DEFAULT_TEMPLATE.to_string());
         Ok(())
     }
-
-    fn name(&self) -> &str {
-        "hello"
-    }
-}
-
-impl SeamPlugin for HelloPlugin {
-    fn install(&self, ctx: &Context) -> anyhow::Result<()> {
-        // 委托?CordisPlugin::install (impl 体同)
-        <Self as CordisPlugin>::install(self, ctx)
-    }
-    fn name(&self) -> &str {
-        "hello"
-    }
 }
 
 // ============================================================================
-// 单元测试 (?Week 1 Day 4 一? 验证 seam API 工作)
+// 单元测试 (跟 Week 1 Day 4 一致, 验证 macro 生成的 impl 行为跟手写 impl 等价)
 // ============================================================================
 
 #[cfg(test)]
@@ -131,7 +98,7 @@ mod tests {
 
     #[test]
     fn seam_plugin_registry_works() {
-        // ?seam::PluginRegistry 装载 HelloPlugin
+        // 通过 seam::PluginRegistry 装载 HelloPlugin
         let mut reg = PluginRegistry::new();
         reg.register(HelloPlugin).unwrap();
         assert_eq!(reg.list(), vec!["hello".to_string()]);
@@ -139,17 +106,14 @@ mod tests {
 
     #[test]
     fn plugin_install_injects_service_and_key() {
-        // ?seam::PluginRegistry 装载, 拿它内部 ctx
         let mut reg = PluginRegistry::new();
         reg.register(HelloPlugin).unwrap();
-        // PluginRegistry 内部 ctx 暂时不暴? Phase 2 ?accessor
-        // Phase 1 简? 验证 plugin 装载 + list 包含 "hello"
         assert!(reg.list().contains(&"hello".to_string()));
     }
 
     #[test]
     fn service_greet_uses_live_template() {
-        // 直接?service + ctx, 不走 plugin (用 fully-qualified 消歧义)
+        // 直接拿 service + ctx, 不走 plugin
         let ctx = Context::new();
         ctx.set(GREETING_TEMPLATE, DEFAULT_TEMPLATE.to_string());
         let svc = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
@@ -157,8 +121,38 @@ mod tests {
         // 默认
         assert_eq!(svc.greet(&ctx, "World"), "Hello, World!");
 
-        // ?ctx, 下次 greet 用新 template
+        // 改 ctx, 下次 greet 用新 template
         ctx.set(GREETING_TEMPLATE, "Hey {who}!".to_string());
         assert_eq!(svc.greet(&ctx, "World"), "Hey World!");
+    }
+
+    /// Phase 2.1 新增: 验证 macro 生成的双 trait impl 一致 (cordis + seam install 同结果)
+    #[test]
+    fn dsh_service_dual_generates_consistent_impls() {
+        let ctx = Context::new();
+        // 走 cordis 拿 service
+        let svc_cordis = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
+        // 走 seam 拿 service (委托 cordis)
+        let svc_seam = <HelloService as ma_harness_seam::Service>::install(&ctx).unwrap();
+        // 两套 install 返回的 service 同 type, name 一致 (用 FQN 消歧义, 因为 cordis + seam 都有 name)
+        assert_eq!(
+            <HelloService as ma_harness_cordis::Service>::name(&svc_cordis),
+            <HelloService as ma_harness_seam::Service>::name(&svc_seam),
+        );
+        assert_eq!(
+            <HelloService as ma_harness_cordis::Service>::name(&svc_cordis),
+            "hello",
+        );
+    }
+
+    /// Phase 2.1 新增: 验证 macro 生成的 Plugin 双 trait impl 一致
+    #[test]
+    fn dsh_plugin_dual_generates_consistent_impls() {
+        let ctx = Context::new();
+        // seam 委托 cordis, 行为一致
+        <HelloPlugin as ma_harness_seam::Plugin>::install(&HelloPlugin, &ctx).unwrap();
+        // 装一次后, service 已在 ctx 里, greet 能用
+        let svc = <HelloService as ma_harness_cordis::Service>::install(&ctx).unwrap();
+        assert_eq!(svc.greet(&ctx, "Phase 2.1"), "Hello, Phase 2.1!");
     }
 }
