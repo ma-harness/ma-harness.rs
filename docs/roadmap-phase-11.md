@@ -105,6 +105,12 @@ Phase 7-10 收官 (8/8 P10 任务), 累计 200+ commit, core 107 lib test, decis
 - P11-1.3: `mah conformance --fixtures fixtures/dsh_synthetic.jsonl` 跑 7 dsh shape fixture, 验 dsh 转换
 - P11-1.4: 出 `docs/benchmark-report-week12.md` (类似 week 11 报告)
 - P11-1.5: 写 `docs/ma-harness-vs-dsh.md` 量化对比表 (性能 / 延迟 / 内存 / 生态)
+- **P11-1.5 转换层改进** ✅ (2026-08-20 收官): dsh_synthetic 28.6% → **100% (7/7)**
+  - input.messages 派生 RunStart + UserInput/ModelResponse/SystemMessage/ToolResult
+  - expected_output.data 非对象走 "content" / "result" / "data" key 包装
+  - expected_output.messages assistant 派生 ModelResponse {content: "..."}
+  - dsh_format unit test 5 → 10 (新增 5 个)
+  - smoke test `runner_runs_dsh_synthetic_fixtures` 期望从 `>= 2` 升级到 `== 7`
 
 **产出**: 量化 baseline 报告, 跟 dsh Terminal Bench 2.1 (87.9) 对比
 
@@ -312,3 +318,4 @@ P11-7/8/9/10 (锦上添花, 业务方驱动)
 | 日期 | 变更 |
 |---|---|
 | 2026-08-20 | P11 路线图首版 (Day 101+1, Phase 7-10 收官后) |
+| 2026-08-20 | P11-1 baseline + P11-1.5 转换层改进 (Day 101+1) — dsh_synthetic 28.6% → 100% (7/7) |

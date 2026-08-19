@@ -143,7 +143,17 @@ fn parse_category(s: Option<&str>) -> FixtureCategory {
     }
 }
 
-/// 转换 input
+/// 转换 input (P11-1.5 改进: messages 派生完整 events)
+///
+/// 优先级:
+/// 1. input.events 非空: 直接用 (dsh 风格 + explicit events)
+/// 2. input.events 空 + messages 非空: 派生完整 ma-harness event 序列
+///    - 第一个 user message → `RunStart` (前置, 表示 session 启动)
+///    - user message → `UserInput`
+///    - assistant message → `ModelResponse`
+///    - system message → `SystemMessage`
+///    - tool message → `ToolResult`
+/// 3. tools 字段非空 + user message 触发 model 调用 → 自动派生 `ToolCall` (P11-1.5 v1 简化: 不派生, 让 fixture 显式给)
 fn convert_input(input: DshInput) -> FixtureInput {
     let mut events = input.events
         .into_iter()
@@ -154,12 +164,35 @@ fn convert_input(input: DshInput) -> FixtureInput {
         })
         .collect::<Vec<_>>();
 
-    // 如果 input.events 空但 messages 不空, 从 messages 第一个 user message 派生 RunStart
-    if events.is_empty() {
-        if let Some(first_user) = input.messages.iter().find(|m| m.role == "user") {
+    // P11-1.5: input.events 空 + messages 非空, 派生完整 events (跟 framework 视角对齐)
+    if events.is_empty() && !input.messages.is_empty() {
+        // 第一个 user message 触发 RunStart (前置)
+        if input.messages.iter().any(|m| m.role == "user") {
             events.push(FixtureEvent {
-                event_type: "UserInput".to_string(),
-                payload: serde_json::json!({"content": first_user.content}),
+                event_type: "RunStart".to_string(),
+                payload: serde_json::json!({"model": "stub"}),
+                timestamp_ms: None,
+            });
+        }
+        for msg in &input.messages {
+            let event_type = match msg.role.as_str() {
+                "user" => "UserInput",
+                "assistant" => "ModelResponse",
+                "system" => "SystemMessage",
+                "tool" => "ToolResult",
+                _ => continue,
+            };
+            events.push(FixtureEvent {
+                event_type: event_type.to_string(),
+                payload: serde_json::json!({
+                    match event_type {
+                        "UserInput" => "content",
+                        "ModelResponse" => "content",
+                        "SystemMessage" => "content",
+                        "ToolResult" => "result",
+                        _ => "content",
+                    }: msg.content
+                }),
                 timestamp_ms: None,
             });
         }
@@ -172,7 +205,7 @@ fn convert_input(input: DshInput) -> FixtureInput {
     }
 }
 
-/// 转换 expected output
+/// 转换 expected output (P11-1.5 改进: ModelResponse 包装成 `{content: "..."}` 跟 ma-harness 视角对齐)
 fn convert_expected(expected: DshExpectedOutput) -> FixtureOutput {
     let events: Vec<ExpectedEvent> = expected
         .events
@@ -182,9 +215,15 @@ fn convert_expected(expected: DshExpectedOutput) -> FixtureOutput {
             let payload_match: BTreeMap<String, serde_json::Value> = match e.data {
                 serde_json::Value::Object(m) => m.into_iter().collect(),
                 other => {
-                    // 非 object (e.g. array, string) 包成 "data" key
+                    // P11-1.5: 特殊处理 ModelResponse (ma-harness 视角: {content: "..."})
+                    // 跟 UserInput / SystemMessage / ToolResult 都按 content 包装
                     let mut map = BTreeMap::new();
-                    map.insert("data".to_string(), other);
+                    let key = match e.event_type.as_str() {
+                        "UserInput" | "ModelResponse" | "SystemMessage" | "ToolError" => "content",
+                        "ToolResult" => "result",
+                        _ => "data",
+                    };
+                    map.insert(key.to_string(), other);
                     map
                 }
             };
@@ -319,6 +358,9 @@ mod tests {
 
     #[test]
     fn parse_dsh_derives_user_input_from_messages() {
+        // P11-1.5: messages 派生完整 ma-harness 视角 events
+        // - 第一个 user message 触发 RunStart (前置)
+        // - user → UserInput, assistant → ModelResponse
         let json = r#"{
             "name": "from_messages",
             "input": {
@@ -332,9 +374,13 @@ mod tests {
         }"#;
         let f: DshFixture = serde_json::from_str(json).unwrap();
         let ma = dsh_to_fixture(f);
-        assert_eq!(ma.input.events.len(), 1);
-        assert_eq!(ma.input.events[0].event_type, "UserInput");
-        assert_eq!(ma.input.events[0].payload["content"], "hi");
+        // 期望 3 events: RunStart + UserInput + ModelResponse
+        assert_eq!(ma.input.events.len(), 3);
+        assert_eq!(ma.input.events[0].event_type, "RunStart");
+        assert_eq!(ma.input.events[1].event_type, "UserInput");
+        assert_eq!(ma.input.events[1].payload["content"], "hi");
+        assert_eq!(ma.input.events[2].event_type, "ModelResponse");
+        assert_eq!(ma.input.events[2].payload["content"], "hello");
     }
 
     #[test]
@@ -388,8 +434,30 @@ mod tests {
 
     #[test]
     fn parse_dsh_non_object_data() {
+        // P11-1.5: non-object `data` 字段被包成 map
+        // 用非特殊 event type (Log), 让 fallback "data" key 路径被覆盖
+        // (特殊 event type 走 "content"/"result" key, 不走 "data" key)
         let json = r#"{
             "name": "string_data",
+            "input": {"session_id": "s", "events": []},
+            "expected_output": {
+                "events": [
+                    {"type": "Log", "data": "raw_string_response"}
+                ]
+            }
+        }"#;
+        let f: DshFixture = serde_json::from_str(json).unwrap();
+        let ma = dsh_to_fixture(f);
+        // Log 是非特殊 event type, key 走 fallback "data"
+        assert_eq!(ma.output.events[0].event_type, "Log");
+        assert_eq!(ma.output.events[0].payload_match.get("data").unwrap(), "raw_string_response");
+    }
+
+    #[test]
+    fn parse_dsh_non_object_data_for_model_response_uses_content_key() {
+        // P11-1.5: ModelResponse 的 string data 走 "content" key (ma-harness 视角对齐)
+        let json = r#"{
+            "name": "string_data_mr",
             "input": {"session_id": "s", "events": []},
             "expected_output": {
                 "events": [
@@ -399,6 +467,8 @@ mod tests {
         }"#;
         let f: DshFixture = serde_json::from_str(json).unwrap();
         let ma = dsh_to_fixture(f);
-        assert_eq!(ma.output.events[0].payload_match.get("data").unwrap(), "raw_string_response");
+        // ModelResponse → "content" key (特殊 event type)
+        assert_eq!(ma.output.events[0].event_type, "ModelResponse");
+        assert_eq!(ma.output.events[0].payload_match.get("content").unwrap(), "raw_string_response");
     }
 }

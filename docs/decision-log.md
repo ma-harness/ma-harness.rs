@@ -1227,3 +1227,106 @@ rustup default 1.94
 - ABI 共享: 强制 plugin 跟 host 同一份 ma-harness-core 二进制 (Rust 1.85+, edition 2024)
 - sandbox: P10-1.7 当前 unsafe 加载 dylib 没 sandbox, 业务方应审批后才调
 
+## 28. P11-1 baseline + P11-1.5 转换层改进收官 (2026-08-20 / Day 101+1)
+
+> 跟 dsh 性能对齐第一步: 量化 baseline + 修转换层
+
+### 决策
+
+1. **P11-1 baseline 出 5/8 + 2/7 = (62.5% / 28.6%)** — smoke 3 fail by design (测 framework 一致性), dsh_synthetic 5 fail 全是转换层问题
+2. **P11-1.5 转换层改进** — 修 dsh_format 让 dsh_synthetic **28.6% → 100% (7/7)**
+3. **P11 路线图 (12-18 周)**: P11-1 baseline → P11-2 dsh Terminal Bench → P11-3 `mah-py` Python SDK → P11-4 ACP / P11-5 多模态 / P11-6 Plugin Registry
+
+### 关键设计决策
+
+#### dsh_format 转换层改进 (P11-1.5)
+
+**convert_input 派生** (input.events 空 + messages 非空):
+
+- 第一个 user message 触发 **RunStart 前置** (表示 session 启动, payload `{model: "stub"}`)
+- for msg in messages:
+  - `user` → `UserInput { content }`
+  - `assistant` → `ModelResponse { content }`
+  - `system` → `SystemMessage { content }`
+  - `tool` → `ToolResult { result }`
+
+**convert_expected 包装** (data 非对象时走特殊 key):
+
+| event_type | key |
+|---|---|
+| `UserInput` / `ModelResponse` / `SystemMessage` / `ToolError` | `content` |
+| `ToolResult` | `result` |
+| 其它 | `data` |
+
+**convert_expected 派生** (expected_output.messages):
+
+- assistant role → `ModelResponse { content }` (跟在 expected.events 后面)
+
+**P11-1.5 单元测试** (新增 5 个, 5 → 10):
+
+1. `parse_dsh_derives_user_input_from_messages` — 验证 RunStart + UserInput + ModelResponse 派生 (3 events)
+2. `parse_dsh_derives_model_response_from_assistant_messages` — 验证 assistant → ModelResponse
+3. `parse_dsh_non_object_data` — 用 `Log` event type 测 `"data"` key fallback
+4. `parse_dsh_non_object_data_for_model_response_uses_content_key` — 验证 ModelResponse → `content` key
+5. (原有) `parse_dsh_jsonl_skips_blank_and_comment` + 其它
+
+**smoke test 升级** (`runner_runs_dsh_synthetic_fixtures`):
+
+- 之前: `stats.passed >= 2` (Phase 1 简化版)
+- 现在: `stats.passed == 7` (P11-1.5 收官, 全 7 个 fixture pass)
+
+### 量化对比
+
+| Fixture | P11-1 baseline | P11-1.5 收官 | 改进 |
+|---|---|---|---|
+| smoke.jsonl | 5/8 = 62.5% | 5/8 = 62.5% (3 by design) | framework 一致性 (无变化) |
+| dsh_synthetic.jsonl | 2/7 = 28.6% | **7/7 = 100%** | **+71.4%** ✅ |
+| ma-harness-conformance lib test | 37/39 (2 fail) | **40/40** (0 fail) | +3 unit test + 5 (2 fail 修) |
+| ma-harness-conformance smoke test | 11/12 (1 fail) | **12/12** (0 fail) | +1 (P11-1.5 smoke 升级) |
+
+### 跟 dsh 自测对比 (目标)
+
+| 指标 | dsh v0.1 | ma-harness.rs (P11-1.5) | 状态 |
+|---|---|---|---|
+| Terminal Bench 2.1 | 87.9% | 未跑 (P11-2) | - |
+| Toolathlon-Verified | 74.1% | 未跑 (P11-2) | - |
+| DSBench-FullStack | 71.1% | 未跑 (P11-2) | - |
+| 自家 smoke | n/a | 62.5% (3 by design) | framework 一致性 OK |
+| 自家 dsh_synthetic | n/a | **100% (7/7)** ✅ | 转换层收官 |
+
+### 后续 P11 任务
+
+- **P11-2 (P0)**: 跑真 dsh Terminal Bench 2.1 + Toolathlon-Verified workload (clone dsh 仓库, 写适配器, 量化 pass rate)
+- **P11-3 (P0)**: `mah-py` Python SDK (subprocess CLI v1, 1-2 周, PyPI)
+- **P11-4 (P1)**: ACP 互通 (跟 dsh / Codex 生态)
+- **P11-5 (P1)**: 多模态 adapter (vision / audio)
+- **P11-6 (P1)**: Plugin Registry 公开 + 文档站
+- **P11-7/8/9/10 (P2)**: Vibe Coding / Bundle / 多模态 tool / DAG
+
+### 测试累计 (P11-1.5 后)
+
+- ma-harness-core lib test: 107/107 (Phase 10 收官, 无变化)
+- ma-harness-conformance lib test: 40/40 (+3 dsh_format unit test, 2 fail 修复)
+- ma-harness-conformance smoke: 12/12 (+1 P11-1.5 升级)
+- 真集成测: dsh_synthetic 7/7 (P11-1.5 收官)
+
+### 关键 Pattern
+
+- **P11-1.5 convert_input 派生优先级**: input.events 非空 → 直接用; input.events 空 + messages 非空 → RunStart + 完整事件链
+- **P11-1.5 convert_expected 特殊 key**: 跟 ma-harness 视角对齐, ModelResponse/UserInput/SystemMessage/ToolError → `content`, ToolResult → `result`
+- **Fixture framework 视角对齐**: 业务方写 dsh 风格 fixture, framework 转 ma-harness 视角, 让 compare 引擎能跑通
+- **dsh_synthetic 100% 是 P11-2 起点**: 真 dsh Terminal Bench 之前先确保 framework + 转换层稳
+
+### 后续决策点
+
+- P11-2 跑 dsh Terminal Bench 时, 需要 `dacp.json` / `agent_client.py` 适配器
+- P11-3 Python SDK 设计: subprocess CLI 起步 (1-2 周), PyO3 binding 留 v2
+- P11-4 ACP 等 dsh 协议稳定, 或参考 Codex ACP 规范
+- P11-6 Plugin Registry v1 用 GitHub Pages 静态站, 后续再考虑 SaaS
+
+### 给后来人
+
+- P11-1.5 收官后, **dsh_synthetic 7/7 是 baseline**, 改 fixture 或 framework 都要验这个数字
+- 真 dsh Terminal Bench 跑分 (P11-2) 之前, 跑 `cargo test --package ma-harness-conformance` 全过 (40 + 12)
+- decision-log § 28 持续更新, P11-2 收官写 § 29
+

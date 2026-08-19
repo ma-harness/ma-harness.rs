@@ -268,9 +268,10 @@ fn dsh_format_loads_synthetic_fixtures() {
     let fs = parse_dsh_jsonl(content).expect("parse");
     assert_eq!(fs.len(), 2);
     assert_eq!(fs[0].name, "dsh_smoke_1");
-    // input.events 从 messages 派生
-    assert_eq!(fs[0].input.events.len(), 1);
-    assert_eq!(fs[0].input.events[0].event_type, "UserInput");
+    // P11-1.5: input.events 从 messages 派生 RunStart (前置) + UserInput
+    assert_eq!(fs[0].input.events.len(), 2);
+    assert_eq!(fs[0].input.events[0].event_type, "RunStart");
+    assert_eq!(fs[0].input.events[1].event_type, "UserInput");
     // output.events 含 expected events + assistant message 派生
     assert!(fs[0].output.events.iter().any(|e| e.event_type == "RunStart"));
     assert!(fs[0].output.events.iter().any(|e| e.event_type == "ModelResponse"));
@@ -304,11 +305,12 @@ fn runner_runs_dsh_synthetic_fixtures() {
     let runner = ConformanceRunner::new();
     let results = runner.run_all(&fs);
     let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
-    // dsh_synthetic.jsonl 7 个 fixture, runner 是 Phase 1 简化版 (只回放 input.events,
-    // 不真跑 agent), 所以实际 pass 数 ≈ 2 (session_lifecycle + payload_alias 完美匹配).
-    // TODO(P8+): 真实现 ConformanceRunner (P8-1 上下文压缩路线时一起做),
-    //             让 5 个 fail 的 fixture (agent_basic / error_path / alias_camelcase /
-    //             assistant_derives / non_object_data) 也 pass, 期望 >= 7
+    // P11-1.5: 转换层改进后, 7/7 fixture 全 pass
+    // - input.messages 派生完整 ma-harness 视角 events (RunStart + UserInput/ModelResponse/...)
+    // - expected_output.data 非对象走 "data" key fallback
+    // - expected_output.messages assistant 派生 ModelResponse
+    // - alias 兼容 (tools/expectedOutput/payload)
     assert_eq!(stats.errored, 0, "runner errors: {:?}", results.iter().filter(|r| r.error.is_some()).collect::<Vec<_>>());
-    assert!(stats.passed >= 2, "expected >= 2 pass (Phase 1 简化版), got {} (total {})", stats.passed, stats.total);
+    assert_eq!(stats.passed, 7, "expected 7 pass (P11-1.5 收官), got {} (failed={}, total={})", stats.passed, stats.failed, stats.total);
+    assert_eq!(stats.failed, 0, "expected 0 fail, got {:?}", stats.failed);
 }

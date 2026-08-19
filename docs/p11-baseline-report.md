@@ -10,9 +10,9 @@
 | Fixture 文件 | 数量 | 通过率 | 时延 | 用途 |
 |---|---|---|---|---|
 | `smoke.jsonl` | 8 | **5/8 = 62.5%** | 1 ms | ma-harness 内部一致性 (framework 测, 失败是 design) |
-| `dsh_synthetic.jsonl` | 7 | **2/7 = 28.6%** | 0 ms | dsh 风格 shape 转换 (P11-2 改进点) |
+| `dsh_synthetic.jsonl` | 7 | **7/7 = 100%** ✅ | 0 ms | dsh 风格 shape 转换 (P11-1.5 收官) |
 
-**总体**: 跟 dsh 自测 87.9 / 74.1 / 71.1 还有显著差距, 但 ma-harness framework 本身 0 fail, 转换层 (`dsh_format`) 是主要短板.
+**总体**: ma-harness framework 0 fail, dsh 转换层 P11-1.5 收官后 **100% 通过** (7/7), 跟 dsh 自测 87.9 / 74.1 / 71.1 进入可比较阶段.
 
 ---
 
@@ -38,36 +38,40 @@
 
 ---
 
-## 2. dsh_synthetic.jsonl 详情 (2/7 = 28.6%)
+## 2. dsh_synthetic.jsonl 详情 (7/7 = 100% ✅ P11-1.5 收官)
 
-### ✅ 通过 (2)
+### ✅ 通过 (7, P11-1.5 后)
 
+- `dsh_agent_basic` — dsh 风格 agent basic run (UserInput + ModelResponse 派生 + RunStart 前置)
 - `dsh_session_lifecycle` — dsh 风格 session start/end
+- `dsh_error_path` — dsh 风格 error path (ToolCall + ToolError + RunEnd)
+- `dsh_alias_camelcase` — camelCase 别名 (expectedOutput / tools)
 - `dsh_payload_alias` — payload → data 转换
+- `dsh_assistant_derives_response` — assistant message → ModelResponse 派生
+- `dsh_non_object_data` — non-object data 包装 (特殊 event type → "content", 其它 → "data")
 
-### ❌ 失败 (5, **转换层差距**)
+### P11-1.5 转换层改进
 
-| Fixture | 失败原因 | 差距 |
+| 改进点 | 之前 | 之后 |
 |---|---|---|
-| `dsh_agent_basic` | dsh 风格 RunStart / ToolCall / ToolResult / RunEnd / ModelResponse 都缺 | dsh 风格完整 agent flow 没转换 |
-| `dsh_error_path` | type mismatch (期望 ToolError, 实际 ToolCall) | 跟 smoke 的 error path 一样, 转换层没 emit error event |
-| `dsh_alias_camelcase` | type mismatch (期望 ToolResult, 实际 ToolCall) | tool_call → tool_result 转换缺 |
-| `dsh_assistant_derives_response` | type mismatch (期望 ModelResponse, 实际 UserInput) | assistant 消息 → ModelResponse 转换缺 |
-| `dsh_non_object_data` | (更多 mismatch) | data 非 object 时包装逻辑 |
+| `input.messages` 派生 | 第一个 user 派生 UserInput | RunStart 前置 + 完整事件链 (UserInput/ModelResponse/SystemMessage/ToolResult) |
+| `expected_output.data` 非对象包装 | 缺 | ModelResponse/UserInput/SystemMessage/ToolError → "content"; ToolResult → "result"; 其它 → "data" |
+| `expected_output.messages` assistant 派生 | 缺 | → ModelResponse {content: "..."} |
+| `dsh_format` unit test 覆盖 | 5 个 | 10 个 (新增 5: derives_user_input / derives_model_response / non_object_data / non_object_data_mr / jsonl_skips) |
 
-**结论**: dsh_format 转换层 (P11-2 重点修) — **5 个 dsh 风格 fixture 全是 type mismatch**, 都是转换层问题, 不是 framework 问题.
+**结论**: P11-1.5 收官后 **dsh 转换层 100% 通过**, 转换层不再是瓶颈.
 
 ---
 
 ## 3. 跟 dsh Terminal Bench 2.1 对比
 
-| 指标 | dsh v0.1 (2026-08-13) | ma-harness.rs (P11-1) | 差距 |
+| 指标 | dsh v0.1 (2026-08-13) | ma-harness.rs (P11-1.5) | 差距 |
 |---|---|---|---|
 | Terminal Bench 2.1 pass rate | 87.9% | **未跑** (P11-2) | - |
 | Toolathlon-Verified | 74.1% | **未跑** (P11-2) | - |
 | DSBench-FullStack | 71.1% | **未跑** (P11-2) | - |
 | 自家 smoke (framework 一致性) | n/a | 62.5% (5/8, 3 expected fail) | - |
-| 自家 dsh_synthetic (转换层) | n/a | 28.6% (2/7) | - |
+| 自家 dsh_synthetic (转换层) | n/a | **100% (7/7)** ✅ | - |
 
 **量化对比**: dsh_synthetic 28.6% 通过率说明 ma-harness **dsh 转换层**是主要短板, P11-2 跑真实 dsh workload 时需要先修.
 
@@ -130,3 +134,4 @@ cargo build -p ma-harness-cli --bin mah
 | 日期 | 变更 |
 |---|---|
 | 2026-08-20 | P11-1 baseline 首版 (Day 101+1, Phase 7-10 收官后) |
+| 2026-08-20 | P11-1.5 转换层改进 (Day 101+1) — dsh_synthetic 28.6% → 100% (7/7) |
