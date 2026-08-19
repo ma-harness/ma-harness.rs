@@ -1,0 +1,20 @@
+# buf generate 配置文件 (可选, 现代 Go workflow)
+#
+# 跑:
+#   buf generate
+#
+# 要:
+#   go install github.com/bufbuild/buf/cmd/buf@latest
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+#   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+#
+# buf 自动找 ../proto 里的 .proto, 业务方不用管具体路径
+
+version: v1
+plugins:
+  - plugin: go
+    out: ma_harness_pb
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: ma_harness_pb
+    opt: paths=source_relative
