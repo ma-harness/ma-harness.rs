@@ -155,6 +155,24 @@ enum Commands {
         #[command(subcommand)]
         action: OpenApiAction,
     },
+    /// **P6-1 / Day 99**: 走 gRPC RunStream RPC, 实时打印 token (跟 stub/真 LLM 都能跑)
+    ///
+    /// 例子:
+    ///   mah run-stream --grpc-url http://localhost:50051 "hello"
+    ///   mah run-stream --grpc-url http://server:50051 --model "openai:gpt-4o-mini" "tell me a joke"
+    RunStream {
+        /// 业务方需求描述 (LLM 输入)
+        prompt: String,
+        /// gRPC server URL (默认 localhost:50051)
+        #[arg(long, default_value = "http://localhost:50051")]
+        grpc_url: String,
+        /// Session ID (留空 = 新建)
+        #[arg(long)]
+        session: Option<String>,
+        /// 模型 (默认 "stub", 真 LLM 走 "openai:gpt-4o-mini" / "anthropic:claude-3-5-sonnet" 等)
+        #[arg(long, default_value = "stub")]
+        model: String,
+    },
     /// **Phase 3.7 / T3.7**: 显式 enforce landlock (Linux) / seatbelt (Mac) / stub (其他)
     ///
     /// ⚠️ **警告**: 一旦 enforce 是全进程 (不可逆). 业务方决定要不要跑.
@@ -297,6 +315,9 @@ async fn main() -> Result<()> {
             SandboxAction::Status => print_sandbox_status(),
         },
         Commands::Tui { log, store_path } => run_tui(log.as_deref(), store_path.as_deref()),
+        Commands::RunStream { prompt, grpc_url, session, model } => {
+            Box::pin(run_stream_cmd(&prompt, &grpc_url, session.as_deref(), &model)).await
+        }
     }
 }
 
@@ -705,6 +726,122 @@ fn extract_wat_from_llm_response(text: &str) -> Option<String> {
 }
 
 // enumerate helper: walk over bytes with index
+
+
+/// **P6-1 (Day 99)**: 解析 `mah run-stream --model <S>` 字符串 → (proto::ModelAdapter enum int, model name)
+///
+/// 业务方格式:
+///   "stub"                       → (0=Unspecified, "stub")  [server 自己 stub fallback]
+///   "openai:gpt-4o-mini"         → (1=Openai,  "gpt-4o-mini")
+///   "anthropic:claude-3-5-sonnet" → (1=Openai,  "claude-3-5-sonnet")  [proto 暂未分, 走 Openai 通道]
+///   "gpt-4o-mini" (无 prefix)     → (0=Unspecified, "gpt-4o-mini")
+///   "weird:foo" (未知 provider)  → (0=Unspecified, "foo")
+fn parse_model_arg(s: &str) -> (i32, String) {
+    if let Some((provider, name)) = s.split_once(':') {
+        let adapter = match provider {
+            "openai" => 1,      // proto ModelAdapter::Openai
+            "anthropic" => 1,   // proto 暂未分, fallback Openai 通道
+            _ => 0,             // 未知 provider → Unspecified, server 自己处理
+        };
+        (adapter, name.to_string())
+    } else {
+        // "stub" / "gpt-4o-mini" 等无 prefix → 0 (Unspecified)
+        (0, s.to_string())
+    }
+}
+
+
+/// **P6-1 (Day 99)**: 走 gRPC RunStream RPC, 业务方命令行拿 streaming token
+///
+/// 流程:
+/// 1. 连 gRPC server (tonic)
+/// 2. 构造 AgentRunRequest (session_id / model_config)
+/// 3. 调 stub.RunStream(req) 拿 server-streaming response
+/// 4. iter AgentStreamEvent, 拿 message.content[0].text 实时打印
+///
+/// 跟 bindings/python/stream_client.py 同样模式, 走 stub adapter 也能跑 (3 word "hello world from stub" → 3 token)
+async fn run_stream_cmd(
+    prompt: &str,
+    grpc_url: &str,
+    session: Option<&str>,
+    model: &str,
+) -> Result<()> {
+    use futures::StreamExt;
+    use ma_harness_proto::ma_harness::v1::{
+        agent_service_client::AgentServiceClient, agent_stream_event::Event, AgentRunRequest,
+        ContentBlock, Message, ModelConfig, TextBlock, ToolRole,
+    };
+    use std::io::Write;
+
+    // 1. 连 gRPC server
+    // tonic 0.12 Endpoint::try_from 要 'static 生命周期, async fn 拿 &str 绑 'static 必 fail.
+    // 修法 (P6-1 踩坑): grpc_url.to_string() 转 owned, 后续 'static 走 owned String.
+    let grpc_url_owned = grpc_url.to_string();
+    let endpoint = tonic::transport::Endpoint::try_from(grpc_url_owned.clone())
+        .map_err(|e| anyhow::anyhow!("parse grpc url {grpc_url_owned}: {e}"))?;
+    let channel = endpoint.connect().await?;
+    let mut client = AgentServiceClient::new(channel);
+
+    // 2. 构造 AgentRunRequest
+    let session_id = session
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("cli-stream-{}", uuid::Uuid::new_v4()));
+    let (adapter_int, model_name) = parse_model_arg(model);
+    let req = AgentRunRequest {
+        session_id: session_id.clone(),
+        input: Some(Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: ToolRole::User as i32,
+            content: vec![ContentBlock {
+                content: Some(ma_harness_proto::ma_harness::v1::content_block::Content::Text(
+                    TextBlock {
+                        text: prompt.to_string(),
+                    },
+                )),
+            }],
+            created_at: None,
+            session_id: session_id.clone(),
+        }),
+        model_config: Some(ModelConfig {
+            adapter: adapter_int,
+            model: model_name,
+            temperature: 0.0,
+            max_tokens: 1024,
+            system_prompt: "".to_string(),
+        }),
+        options: None,
+    };
+
+    eprintln!("mah run-stream: prompt = {prompt}");
+    eprintln!("mah run-stream: grpc_url = {grpc_url}");
+    eprintln!("mah run-stream: model = {model}");
+
+    // 3. 调 RunStream 拿 server-streaming
+    let mut stream = client.run_stream(req).await?.into_inner();
+    let mut collected = Vec::new();
+    while let Some(event) = stream.next().await {
+        let event = event?;
+        if let Some(Event::Message(msg)) = event.event {
+            if let Some(ContentBlock {
+                content: Some(ma_harness_proto::ma_harness::v1::content_block::Content::Text(t)),
+            }) = msg.content.first()
+            {
+                let token = &t.text;
+                collected.push(token.clone());
+                // 实时打印 (无 newline, 类似 typewriter)
+                print!("{token}");
+                std::io::stdout().flush().ok();
+            }
+        }
+    }
+    println!(); // 最后换行
+    eprintln!(
+        "\n--- done: {} tokens, full content: {:?} ---",
+        collected.len(),
+        collected.join("")
+    );
+    Ok(())
+}
 
 
 /// **Phase 3.3 / T3.3**: 业务方 prompt → LLM 生成 .wat → wasm 沙箱跑
@@ -1172,5 +1309,56 @@ End."#;
         // 应含 export run + i32.const 5
         assert!(wat.contains("export \"run\""));
         assert!(wat.contains("i32.const 5"));
+    }
+
+    // === P6-1 (Day 99): mah run-stream CLI ===
+
+    /// parse_model_arg: "stub" → (0, "stub")
+    #[test]
+    fn parse_model_arg_stub() {
+        let (adapter, name) = parse_model_arg("stub");
+        assert_eq!(adapter, 0, "stub 应走 Unspecified");
+        assert_eq!(name, "stub");
+    }
+
+    /// parse_model_arg: "openai:gpt-4o-mini" → (1, "gpt-4o-mini")
+    #[test]
+    fn parse_model_arg_openai() {
+        let (adapter, name) = parse_model_arg("openai:gpt-4o-mini");
+        assert_eq!(adapter, 1, "openai 应走 Openai enum (1)");
+        assert_eq!(name, "gpt-4o-mini");
+    }
+
+    /// parse_model_arg: "anthropic:claude-3-5-sonnet" → (1, "claude-3-5-sonnet")
+    /// (proto 暂未分, fallback Openai 通道)
+    #[test]
+    fn parse_model_arg_anthropic() {
+        let (adapter, name) = parse_model_arg("anthropic:claude-3-5-sonnet");
+        assert_eq!(adapter, 1, "anthropic 暂走 Openai 通道");
+        assert_eq!(name, "claude-3-5-sonnet");
+    }
+
+    /// parse_model_arg: "gpt-4o-mini" (无 prefix) → (0, "gpt-4o-mini")
+    #[test]
+    fn parse_model_arg_no_prefix() {
+        let (adapter, name) = parse_model_arg("gpt-4o-mini");
+        assert_eq!(adapter, 0, "无 prefix 应走 Unspecified");
+        assert_eq!(name, "gpt-4o-mini");
+    }
+
+    /// parse_model_arg: "weird:foo" (未知 provider) → (0, "foo")
+    #[test]
+    fn parse_model_arg_unknown_provider() {
+        let (adapter, name) = parse_model_arg("weird:foo");
+        assert_eq!(adapter, 0, "未知 provider 应走 Unspecified");
+        assert_eq!(name, "foo");
+    }
+
+    /// parse_model_arg: 多个 `:` 切第一对 (split_once) → ("openai", "gpt-4o:turbo" 保留)
+    #[test]
+    fn parse_model_arg_multi_colon() {
+        let (adapter, name) = parse_model_arg("openai:gpt-4o:turbo");
+        assert_eq!(adapter, 1);
+        assert_eq!(name, "gpt-4o:turbo", "split_once 只切第一个 `:`");
     }
 }

@@ -29,7 +29,7 @@
 # 编译 (网络通后)
 cargo build --workspace
 
-# 跑全部测试 (~271 lib test)
+# 跑全部测试 (~292 lib test)
 cargo test --workspace --lib
 
 # 跑 benchmark (criterion)
@@ -75,7 +75,7 @@ ma-harness.rs/
 │   ├── ma-harness-plugin-macro/    → 5 proc-macro (publish=true)
 │   ├── ma-harness-proto/           → Prost/tonic codegen
 │   ├── ma-harness-server/          → gRPC + salvo HTTP (7 paths)
-│   ├── ma-harness-cli/             → `mah` 二进制 (12 子命令)
+│   ├── ma-harness-cli/             → `mah` 二进制 (13 子命令)
 │   ├── ma-harness-sandbox/         → landlock 沙箱
 │   ├── ma-harness-model/           → OpenAI / Anthropic adapter
 │   ├── ma-harness-code/            → wasmtime Code Mode (publish=true)
@@ -92,7 +92,7 @@ ma-harness.rs/
     └── ma-harness-plugin-cordis/   → ctx 反射
 ```
 
-## `mah` CLI (12 子命令)
+## `mah` CLI (13 子命令)
 
 ```bash
 # Server
@@ -102,6 +102,7 @@ mah start [--grpc-port 50051] [--http-port 50050] [--store-path <db>]
 # Local agent
 mah run [--session <id>] [--model stub] "echo hi"
 mah run-prompt "compute 1+1, return the result as i32"  # LLM → .wat → wasm sandbox
+mah run-stream --grpc-url http://localhost:50051 "hello"   # 走 gRPC RunStream 拿实时 token (Day 99)
 
 # Plugins
 mah plugins                                     # 列出已装载 plugin (inventory)
@@ -182,7 +183,7 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 | 累计 commit | 130+ (持续增长) |
 | Workspace member | 19 (13 crates/ + 7 plugins/) |
 | 累计代码 | ~20000 行 |
-| 累计 lib test | 271 (全过) |
+| 累计 lib test | 292 (全过) |
 | 累计 trybuild fixture | 18 |
 | crates.io publish | 5/19 (cordis, code, core, plugin-macro, seam) |
 | HTTP API paths | 7 (3 → 7) |
@@ -238,6 +239,12 @@ OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
 - P5-9: pyo3 评估 ([`docs/pyo3-evaluation.md`](./docs/pyo3-evaluation.md)) ✅
 
 **Phase 5 收官 9/9** (Day 90-98)
+
+### 🚧 Phase 6 (Day 99-): 真 LLM streaming + perf
+- P6-1: `mah run-stream` CLI (gRPC RunStream 客户端) ✅ (Day 99)
+- P6-2: OpenaiAdapter / AnthropicAdapter 走真 SSE (reqwest + bytes stream) — TODO
+- P6-3: 性能 benchmark — TODO
+- P6-4: TUI 增强 (j/k 跨 panel / 选中状态持久化) — TODO
 
 ## 网络环境
 

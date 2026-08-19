@@ -315,3 +315,66 @@ workspace lib test 全过, integration test (server http/gRPC) 28/0 全过, plug
 - **ABI 兼容**: 业务方 Python 版本必须跟 wheel cp 版本匹配
 - **替代方案**: 如果只是想要 no-network, 可以走 embedded gRPC (走法 B) 业务方 0 改动
 
+
+## 15. `mah run-stream` CLI (2026-08-19 / Day 99 / P6-1)
+
+### 目标
+
+Phase 5 落地 RunStream (gRPC streaming) + HTTP SSE 之后, 业务方命令行也能直接调 RunStream RPC 拿 streaming token. 跟 `bindings/python/stream_client.py` 同样模式, 走 stub / 真 LLM 都能跑.
+
+### CLI 用法
+
+```bash
+# 启动 server (default stub adapter)
+mah start
+
+# 另一个 terminal, 跑 streaming client
+mah run-stream --grpc-url http://localhost:50051 "hello"
+
+# 走真 OpenAI (需 server 端配置 OPENAI_API_KEY)
+mah run-stream --grpc-url http://server:50051 --model "openai:gpt-4o-mini" "tell me a joke"
+
+# 走 Anthropic (proto 暂未分, fallback Openai 通道, Phase 6 加)
+mah run-stream --model "anthropic:claude-3-5-sonnet" "explain rust lifetimes"
+
+# 走 stub (默认, 不需真 LLM)
+mah run-stream --model "stub" "hello world from stub"
+```
+
+### 实现要点 (commit TBD)
+
+| 部件 | 内容 |
+|---|---|
+| 新 subcommand | `Commands::RunStream { prompt, grpc_url, session, model }` (4 args) |
+| `parse_model_arg(s)` helper | `"provider:name"` 拆 `(adapter_int, name)`, 单一职责好测 |
+| `run_stream_cmd` async fn | 4 步: tonic connect → 构造 AgentRunRequest → stub.RunStream → iter AgentStreamEvent typewriter 打印 |
+| stdout 实时 flush | `print!` + `stdout.flush()`, 类似 OpenAI streaming 体验 |
+| eprintln 元信息 | prompt / grpc_url / model 在 stderr, 不污染 stdout token 流 |
+| 6 unit test | stub / openai / anthropic / no-prefix / unknown-provider / multi-colon 6 种 model 字符串解析 |
+
+### 关键设计决策
+
+- **model 字符串走 `<provider>:<name>` 格式** (跟 OpenAI/Anthropic 生态一致), 不用 `--provider` 单独 flag, 少一次输入
+- **proto `ModelAdapter` enum 暂未分 Anthropic/Stub** (只有 Openai=1, Unspecified=0): 业务方传 `anthropic:claude-3-5-sonnet` 走 Openai 通道 (1), server 端 ModelAdapter::complete 自己挑 backend, Phase 6+ 改 ModelAdapter proto 加 Anthropic=2 / Stub=3
+- **session_id 留空 = 新建**: 用 uuid 生成 `cli-stream-<uuid>`, 业务方不留 state, 真要复用就 `--session <id>` 显式
+- **`Box::pin` 包 future**: async fn 返 `Result<()>`, 但 main() match 期望所有 arm 同型, 用 Box::pin 解决类型推断 (跟 `start_server` 同样模式)
+- **CLI 第一个真 gRPC client**: 之前 `mah run` / `mah run-prompt` 都走 in-process, P6-1 是 CLI 第一次碰 tonic transport
+
+### 踩坑 (P6-1 阶段 1 个)
+
+1. **tonic 0.12 `Endpoint::try_from` 要 `'static` 生命周期**: async fn 拿 `&str` 绑 `'static` 必 fail (`error[E0521]: borrowed data escapes outside of function`). 修法: 函数内 `grpc_url.to_string()` 转 owned, 后续 `'static` 走 owned String. 不要改 signature 拿 `String` (跟其他 helper 不一致). 业务方模式: `let owned = s.to_string(); Endpoint::try_from(owned.clone()).map_err(...)?;`
+
+### 测试
+
+- **ma-harness-cli**: 17/17 pass (11 老 + 6 新 P6-1 parse_model_arg_*)
+- **workspace**: 292 total (280 lib + 12 bin, +6 新), 排除 4 pre-existing broken (plugin-macro trybuild, plugin-hello trait scope, conformance FixtureEvent, cordis doctest)
+
+### 给后来人
+
+- 业务方跑 stub streaming demo: `mah start` 跟 `mah run-stream --model stub "hello world from stub"` 同时开, 看 3 word typewriter 输出
+- 真 LLM streaming 走 P6-2: OpenaiAdapter / AnthropicAdapter 走真 SSE (reqwest + bytes stream 解析)
+- 业务方想从 Python 调: `bindings/python/stream_client.py` 已经走通, 直接跑
+- 业务方想从浏览器调: `EventSource("/v1/runs/stream")` 拿 SSE (P5-8)
+- CLI `mah run-stream` 是 Phase 6 起点: 业务方 0 server 也能验 streaming infra (in-process stub 走通)
+- `tonic 'static` 坑: async fn 拿 &str → `String` clone 转换, 不要改 signature
+
