@@ -2308,6 +2308,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "chrono",
+ "criterion",
  "futures",
  "insta",
  "ma-harness-cordis",
@@ -2334,6 +2335,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "criterion",
  "dashmap",
  "futures",
  "parking_lot",

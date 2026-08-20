@@ -4,7 +4,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ma_harness_conformance::dsh_format::{parse_dsh_jsonl, DshFixtureCache};
-use std::io::Write;
+use std::fmt::Write;
 
 fn generate_fixture_jsonl(n: usize) -> String {
     let mut s = String::new();

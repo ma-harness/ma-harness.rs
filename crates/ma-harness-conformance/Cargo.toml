@@ -41,6 +41,8 @@ ma-harness-plugin-cordis = { path = "../../plugins/ma-harness-plugin-cordis" }
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 insta = { workspace = true }
+# benches/dsh_cache.rs 用 criterion 跑 micro-bench
+criterion = { workspace = true }
 
 [[bench]]
 name = "dsh_cache"

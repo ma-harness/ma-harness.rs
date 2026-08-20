@@ -21,6 +21,7 @@ static BENCH_KEY_INT: CtxKey<u64> = CtxKey::new_unchecked("bench_key_int");
 struct BenchService;
 
 impl Service for BenchService {
+    type Ctx = Context;
     type Error = std::convert::Infallible;
     fn install(_ctx: &Context) -> Result<Self, Self::Error> {
         Ok(BenchService)

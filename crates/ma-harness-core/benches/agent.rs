@@ -5,7 +5,7 @@
 //! 设计: 见 `docs/benchmark-design.md` § 3.2.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ma_harness_core::agent::{AgentLoop, AgentRunRequest, ModelRequest, StubModelAdapter};
+use ma_harness_core::agent::{AgentLoop, AgentRunRequest, ModelAdapter, ModelRequest, StubModelAdapter};
 use ma_harness_core::event::{EventType, SessionEvent};
 use ma_harness_core::log::EventLog;
 use std::sync::Arc;
@@ -95,6 +95,7 @@ fn bench_stub_model_complete(c: &mut Criterion) {
     };
 
     c.bench_function("stub_model_complete", |b| {
+        // StubModelAdapter: Copy (line 117 agent.rs), 闭包多次执行 OK
         b.to_async(&runtime).iter(|| {
             let adapter = adapter;
             let req = req.clone();

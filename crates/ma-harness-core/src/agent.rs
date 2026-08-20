@@ -114,6 +114,7 @@ pub trait ModelAdapter: Send + Sync + 'static {
 }
 
 /// StubModelAdapter — Phase 1 默认, 返回零响应
+#[derive(Clone, Copy)]
 pub struct StubModelAdapter;
 
 #[async_trait]
