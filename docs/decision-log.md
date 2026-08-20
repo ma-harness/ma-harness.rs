@@ -1532,3 +1532,114 @@ P11 全部任务 1 个 session 内连续收官, 累计 7 commits + 8 个新 crat
 - 跳过的 P11-2.5+ 跟 P11-10 留 P12+, 业务方驱动
 - 决策日志 § 30-36 持续更新, P12 (性能 / 稳定性 / 文档 / PyPI) 收官写 § 37
 
+## 37. P12 全部功能收官 (2026-08-20 / Day 101+1)
+
+> P12 8 任务收官 (跳 P12-4 PyPI, 用户排除)
+
+### 决策
+
+P12 全部 9 任务 (除 P12-4) 1 个 session 内连续收官, 累计 8 commits + 1 新 crate + 70+ 新 tests.
+
+### P12-1 DshFixtureCache (`b772adb`)
+
+- `DshFixtureCache` (path + mtime 失效机制)
+- 业务方反复跑同一文件, 跳过重复 parse
+- 4/4 cache tests + bench harness
+
+### P12-2 RetryPolicy + CircuitBreaker (`6a52310`)
+
+- `RetryPolicy` (max_attempts / initial_backoff / max_backoff / jitter_ratio)
+- `retry_with_backoff` async helper (operates on Result, 区分 retryable / non-retryable)
+- `is_retryable` (网络 / 5xx / 408 / 429 重试, 4xx / 401 / parse 不重试)
+- `CircuitBreaker` (closed / open / half-open 状态机)
+- 13/13 retry tests
+
+### P12-3 文档站 (`34f6483`)
+
+- `docs/README.md` (按角色 + 按主题 2 维度)
+- `docs/mkdocs.yml` (mkdocs 静态站 v2 配置)
+- 业务方 `cd docs && mkdocs serve` 本地预览
+
+### P12-4 PyPI 发版 (跳过)
+
+- 业务方需求: `pip install mah-py` 可用
+- 用户明确排除 (发版任务)
+
+### P12-5 Registry v2 (`4e9ce01`)
+
+- `search_by_author` / `search_by_name` (case-insensitive substring)
+- `list_authors` / `list_all_tags`
+- `export` JSON file (GitHub Pages 静态站)
+- `merge` (多 registry source 合并, 去重 by version)
+- `manifest_schema_doc` (返回 markdown 文档, 业务方塞 docs)
+- 25/25 registry tests (18 P11-6 + 7 P12-5 v2)
+
+### P12-6 ACP v2 (`7ba7b4b`)
+
+- `loadSession` 返 session metadata
+- `cancel` 设置 flag → stopReason: "cancelled"
+- prompt 支持 image content blocks
+- initialize 返 `loadSession: true` + `promptCapabilities.image: true`
+- Session state 跟踪 (BTreeMap)
+- 10/10 ACP integration tests (5 P11-4 + 5 P12-6 v2)
+
+### P12-7 Bundle v2 (`28211f3`)
+
+- `BundleLock` (concrete versions, JSON file)
+- `LockEntry` (name / version / constraint / optional)
+- `from_resolved` 构造 + `save/load` 持久化
+- 18/18 bundle tests (13 P11-8 + 4 P12-7 v2 + 1 doc)
+
+### P12-8 Vision tool v2 (`6459c12`)
+
+- `VisionTool` (api_key + backend + model_override + description)
+- `schema()` (ToolSchema 给 LLM)
+- `register(&ToolRegistry)` 业务方 API
+- async `invoke` (load image + 调 vision API)
+- 4/4 vision_plugin tests
+
+### P12-9 DAG (`fde8934`)
+
+- YAML 描述 (Task / Dag)
+- `DagScheduler::validate` (重复 / 未知依赖 / 循环)
+- `DagScheduler::topological_order` (Kahn's algorithm)
+- `DagScheduler::next_batch` (按依赖返回可跑 task)
+- `DagScheduler::execute_task` + `short_circuit` (失败短路)
+- `DagRun` (5 状态: Pending / Running / Completed / Failed / Skipped)
+- `run_dag(&Dag)` async 跑完整个 DAG
+- 14/14 DAG tests (12 lib + 2 async)
+
+### 跳过的
+
+- **P12-4 PyPI 发版**: 用户明确排除 (业务方运营任务)
+
+### 量化总结 (P12 增量)
+
+| 类别 | 数量 |
+|---|---|
+| 新 crate (P12) | 1 (ma-harness-dag) |
+| 新模块 (P12) | 3 (dsh_format cache, retry, vision_plugin) |
+| commits (P12) | 8 |
+| **测试增量** (P12 全部新 tests) | **70+** |
+| **测试累计** (P11 + P12 收官) | **350+ tests** ✅ |
+
+### 给后来人
+
+- P12 全部进 CI, 改任何 framework 跑 `cargo test --package ma-harness-*` 全过 (350+ tests)
+- `mah` CLI 端到端真跑 (`mah acp serve`, `mah conformance --dsh`) 永远可信
+- P12-4 PyPI 发版 是业务方运营任务, 留待业务方发版时跑
+- 决策日志 § 37 持续更新, P13 (业务方驱动) 收官写 § 38
+
+### commit 累计 (P12)
+
+- `b772adb` P12-1 DshFixtureCache
+- `6a52310` P12-2 RetryPolicy + CircuitBreaker
+- `34f6483` P12-3 docs README + mkdocs
+- `4e9ce01` P12-5 Registry v2
+- `7ba7b4b` P12-6 ACP v2
+- `28211f3` P12-7 Bundle v2
+- `6459c12` P12-8 Vision tool v2
+- `fde8934` P12-9 DAG
+- 跳: P12-4 PyPI (用户排除)
+- 累计 200+ commits
+

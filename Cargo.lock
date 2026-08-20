@@ -2228,6 +2228,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "ma-harness-artifact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ma-harness-bundle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "ma-harness-registry",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "ma-harness-cli"
 version = "0.1.0"
 dependencies = [
@@ -2249,6 +2275,8 @@ dependencies = [
  "ma-harness-tui",
  "prost-types",
  "salvo",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tonic",
@@ -2340,6 +2368,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-dag"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ma-harness-demo"
 version = "0.1.0"
 dependencies = [
@@ -2367,12 +2410,15 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "criterion",
  "futures",
+ "ma-harness-cordis",
  "ma-harness-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2529,6 +2575,21 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+ "uuid",
+]
+
+[[package]]
+name = "ma-harness-registry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "ma-harness-core",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
  "uuid",
 ]
 

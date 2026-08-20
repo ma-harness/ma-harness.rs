@@ -258,6 +258,19 @@ impl ChannelApprovalService {
     pub fn pending_ids(&self) -> Vec<String> {
         self.pending.lock().keys().cloned().collect()
     }
+
+    /// 移除一个 pending request (drops sender without sending decision)
+    ///
+    /// 跟 `cancel(id)` 区别: cancel 投递 `Denied { cancelled }`,
+    /// `remove_pending` 直接 drop sender → receiver 收 Err → 转
+    /// `Denied { reason: "channel closed" }`.
+    ///
+    /// 用法: 测试 / 强制清理 (e.g. 业务方判定 request 过期)
+    ///
+    /// 返 `true` 表示成功移除, `false` 表示没找到
+    pub fn remove_pending(&self, request_id: &str) -> bool {
+        self.pending.lock().remove(request_id).is_some()
+    }
 }
 
 #[async_trait]
@@ -434,7 +447,11 @@ mod tests {
 
     #[tokio::test]
     async fn channel_service_sender_drop_returns_denied() {
-        // service 析构 → sender drop → receiver 返 Err → 转 Denied
+        // sender 析构（无 decision 投递）→ receiver 收 Err → 转 Denied
+        //
+        // 触发方式: `remove_pending(id)` 从 map 移除 entry, drop tx
+        // (注: 不能用 `drop(svc)` 触发, 因为 task 内 `svc2` 还持有 Arc
+        // 引用, inner Arc 不会到 0, sender 不会 drop)
         let svc = Arc::new(ChannelApprovalService::new());
         let ctx = Context::new();
         let svc2 = svc.clone();
@@ -443,7 +460,8 @@ mod tests {
             svc2.request_approval(&ctx, &req).await
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        drop(svc); // service drop → pending map drop → sender drop
+        let removed = svc.remove_pending("req-3");
+        assert!(removed);
         let result = task.await.unwrap().unwrap();
         assert!(matches!(result, ApprovalDecision::Denied { .. }));
     }
