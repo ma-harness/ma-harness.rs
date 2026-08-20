@@ -37,22 +37,22 @@
 
 ### 性能 / 优化 (跑 dsh Terminal Bench 业务方)
 
-- [P11-2 dsh 真实 snapshot 跑分](dsh-benchmark-report.md) — 9/9 = 100% 等价
-- [P11 路线图](roadmap-phase-11.md) — 后续 9 任务 (P11-3 到 P11-10)
-- [P11 全收官报告](p11-final-report.md) — P11 收官 + 跟 dsh 对照
-- [P12 全收官报告](p12-final-report.md) — P12 收官 (发版 / 稳定性 / 文档 / PyPI)
+- [P11-2 dsh 真实 snapshot 跑分](reports/dsh-benchmark-report.md) — 9/9 = 100% 等价
+- [P11 路线图](reports/roadmap-phase-11.md) — 后续 9 任务 (P11-3 到 P11-10)
+- [P11 全收官报告](reports/p11-final-report.md) — P11 收官 + 跟 dsh 对照
+- [P12 全收官报告](reports/p12-final-report.md) — P12 收官 (发版 / 稳定性 / 文档 / PyPI)
 - [benchmark 设计](benchmark-design.md) — bench 体系
-- [week 11 benchmark 报告](benchmark-report-week11.md) — perf baseline
-- [week 11 conformance 报告](conformance-report-week11.md) — conformance baseline
+- [week 11 benchmark 报告](reports/benchmark-report-week11.md) — perf baseline
+- [week 11 conformance 报告](reports/conformance-report-week11.md) — conformance baseline
 
 ### 历史 / 决策追溯
 
 - [决策日志](decision-log.md) — § 1-39 历次 design 决策
-- [P11 baseline 报告](p11-baseline-report.md) — dsh_synthetic 28.6% → 100%
-- [P11 全收官报告](p11-final-report.md) — P11 收官
-- [P12 全收官报告](p12-final-report.md) — P12 收官
-- [Roadmap Phase 7](roadmap-phase-7.md) — Phase 7-10 路线
-- [Roadmap Phase 11](roadmap-phase-11.md) — P11 路线
+- [P11 baseline 报告](reports/p11-baseline-report.md) — dsh_synthetic 28.6% → 100%
+- [P11 全收官报告](reports/p11-final-report.md) — P11 收官
+- [P12 全收官报告](reports/p12-final-report.md) — P12 收官
+- [Roadmap Phase 7](reports/roadmap-phase-7.md) — Phase 7-10 路线
+- [Roadmap Phase 11](reports/roadmap-phase-11.md) — P11 路线
 
 ---
 
@@ -69,26 +69,26 @@
 ### Conformance / 跑分
 
 - [Conformance 设计](conformance-design.md)
-- [P11-2 dsh 真实 snapshot 跑分](dsh-benchmark-report.md)
-- [P11 baseline 报告](p11-baseline-report.md)
-- [P11 全收官报告](p11-final-report.md)
-- [P12 全收官报告](p12-final-report.md)
-- [week 11 conformance 报告](conformance-report-week11.md)
-- [week 11 benchmark 报告](benchmark-report-week11.md)
+- [P11-2 dsh 真实 snapshot 跑分](reports/dsh-benchmark-report.md)
+- [P11 baseline 报告](reports/p11-baseline-report.md)
+- [P11 全收官报告](reports/p11-final-report.md)
+- [P12 全收官报告](reports/p12-final-report.md)
+- [week 11 conformance 报告](reports/conformance-report-week11.md)
+- [week 11 benchmark 报告](reports/benchmark-report-week11.md)
 - [Benchmark 设计](benchmark-design.md)
 
 ### Roadmap / 路线
 
-- [Roadmap Phase 7](roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
-- [Roadmap Phase 11](roadmap-phase-11.md) — P11 (跟 dsh 对齐)
-- [P11 baseline 报告](p11-baseline-report.md)
-- [P11 全收官报告](p11-final-report.md)
-- [P12 全收官报告](p12-final-report.md)
+- [Roadmap Phase 7](reports/roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
+- [Roadmap Phase 11](reports/roadmap-phase-11.md) — P11 (跟 dsh 对齐)
+- [P11 baseline 报告](reports/p11-baseline-report.md)
+- [P11 全收官报告](reports/p11-final-report.md)
+- [P12 全收官报告](reports/p12-final-report.md)
 
 ### 实验 / 评估
 
-- [PyO3 评估](pyo3-evaluation.md) — Python binding 选型
-- [Code Mode deferred](code-mode-deferred.md) — wasm 模式延后决策
+- [PyO3 评估](reports/pyo3-evaluation.md) — Python binding 选型
+- [Code Mode deferred](reports/code-mode-deferred.md) — wasm 模式延后决策
 
 ### Crate 内部文档 (P11 收官)
 
@@ -126,7 +126,7 @@
 
 1. **新业务方**: [Python SDK README](../../crates/mah-py/README.md) → 5 examples → [ACP 模块](../../crates/ma-harness-cli/src/acp.rs)
 2. **改 ma-harness 内部**: [架构总览](ma-harness-arch-map.md) → [conformance 设计](conformance-design.md) → [决策日志](decision-log.md)
-3. **跑 Terminal Bench**: [dsh-benchmark-report](dsh-benchmark-report.md) → [P11 全收官报告](p11-final-report.md) → [P12 全收官报告](p12-final-report.md)
+3. **跑 Terminal Bench**: [dsh-benchmark-report](reports/dsh-benchmark-report.md) → [P11 全收官报告](reports/p11-final-report.md) → [P12 全收官报告](reports/p12-final-report.md)
 
 ## 给后来人
 

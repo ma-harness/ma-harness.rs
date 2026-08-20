@@ -1,11 +1,11 @@
 # Conformance Report — Week 11 (2026-08-18)
 
 > **状态**: 模板, 待网络通后跑 dsh 真实 fixture 填充.
-> 关联: [`conformance-design.md`](./conformance-design.md) § 6 报告格式.
+> 关联: [`conformance-design.md`](../conformance-design.md) § 6 报告格式.
 
 
 
-[English](../conformance-report-week11.md) — coming soon. 中文为主.
+[English](../../conformance-report-week11.md) — coming soon. 中文为主.
 
 
 ---
