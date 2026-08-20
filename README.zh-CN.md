@@ -244,6 +244,40 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ---
 
+## 🌾 "码来 / Code, come forth!"
+
+> **"码来！转转转——"**
+>
+> AI agent 横行的年代, Rust 给 dsh 装上了缰绳。
+> 这是 **`ma-harness.rs`**——一个 Rust 重写的 AI agent orchestrator,
+> 跟 DeepSeek `dsh` 行为对齐, 冷启动 30%+ 加速, 热路径 10× 提速。
+> 类型严, 编译过, debug 不抖。
+>
+> **📢 声明**: 本项目**仅用于学习与研究**。代码细节大量借助 LLM 协助
+> (包括注释的幽默感和 commit message 偶尔的中二病),
+> **但每一行都经过 641 项 cargo test 的严格检验**,
+> 请大家放心使用。
+>
+> 有问题或新需求？欢迎[开 issue](https://github.com/ma-harness/ma-harness.rs/issues)
+> 或联系作者。项目维护不易, 如果您觉得有用, 欢迎扫码资助一点 **API token 费用**,
+> 让我们多烧几个 GPU, 多发几个 release, 多熬几个通宵:
+>
+> <table>
+> <tr>
+>   <td align="center"><b>微信</b></td>
+>   <td align="center"><b>支付宝</b></td>
+> </tr>
+> <tr>
+>   <td><img src="docs/assets/donate-wechat.png" width="200" alt="微信收款码"></td>
+>   <td><img src="docs/assets/donate-alipay.jpg" width="200" alt="支付宝收款码"></td>
+> </tr>
+> </table>
+>
+> *哪怕只是一杯瑞幸的量, 也是一份莫大的鼓励 ☕。*
+> *用 Rust 写的代码没有 bug, 只有"还没被发现的 feature"。*
+
+---
+
 ## 📜 License
 
 双协议, 任选其一:
