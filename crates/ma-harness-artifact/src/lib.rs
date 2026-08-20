@@ -129,7 +129,7 @@ pub fn detect_artifact(path: impl AsRef<Path>, bytes: &[u8]) -> ArtifactKind {
         Some("rs") | Some("py") | Some("js") | Some("ts") | Some("tsx") | Some("jsx")
         | Some("go") | Some("java") | Some("kt") | Some("swift") | Some("c") | Some("cpp")
         | Some("h") | Some("hpp") | Some("cs") | Some("rb") | Some("php") | Some("sh")
-        | Some("bash") | Some("zsh") | Some("fish") | Some("sql") | Some("html") => {
+        | Some("bash") | Some("zsh") | Some("fish") | Some("sql") => {
             return ArtifactKind::Code;
         }
         _ => {}
@@ -156,12 +156,11 @@ pub fn detect_artifact(path: impl AsRef<Path>, bytes: &[u8]) -> ArtifactKind {
     }
 
     // JSON: 必须是 { 或 [ 开头 (用 strict mode 检测)
-    if head.iter().find(|&&b| !b.is_ascii_whitespace()).copied() == Some(b'{')
-        || head.iter().find(|&&b| !b.is_ascii_whitespace()).copied() == Some(b'[')
+    let first_non_ws = head.iter().find(|&&b| !b.is_ascii_whitespace()).copied();
+    if (first_non_ws == Some(b'{') || first_non_ws == Some(b'['))
+        && serde_json::from_slice::<serde_json::Value>(bytes).is_ok()
     {
-        if serde_json::from_slice::<serde_json::Value>(bytes).is_ok() {
-            return ArtifactKind::Json;
-        }
+        return ArtifactKind::Json;
     }
 
     // TOML: 简单检查含 [section] 或 key = value
@@ -182,7 +181,7 @@ pub fn detect_artifact(path: impl AsRef<Path>, bytes: &[u8]) -> ArtifactKind {
     }
 
     // 二进制: 含 null bytes 或非 UTF-8
-    if !std::str::from_utf8(bytes).is_ok() {
+    if std::str::from_utf8(bytes).is_err() {
         return ArtifactKind::Binary;
     }
 
@@ -269,10 +268,10 @@ pub fn render_terminal(kind: &ArtifactKind, bytes: &[u8]) -> String {
                 out.push_str("Headings:\n");
                 for line in &lines {
                     let trimmed = line.trim();
-                    if trimmed.starts_with("# ") {
-                        out.push_str(&format!("  H1: {}\n", &trimmed[2..]));
-                    } else if trimmed.starts_with("## ") {
-                        out.push_str(&format!("  H2: {}\n", &trimmed[3..]));
+                    if let Some(h1) = trimmed.strip_prefix("# ") {
+                        out.push_str(&format!("  H1: {h1}\n"));
+                    } else if let Some(h2) = trimmed.strip_prefix("## ") {
+                        out.push_str(&format!("  H2: {h2}\n"));
                     }
                 }
             }

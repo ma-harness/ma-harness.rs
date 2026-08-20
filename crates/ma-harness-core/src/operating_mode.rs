@@ -14,10 +14,11 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 /// Operating mode 枚举 (P8-4)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatingMode {
     /// 全功能, 装所有 first-party plugins
+    #[default]
     Default,
     /// 不加载 plugins, 纯 LLM 调 (轻量, 测试)
     Minimal,
@@ -26,12 +27,6 @@ pub enum OperatingMode {
     Ptc,
     /// 允许 model 创建新 plugin / service / tool
     Creator,
-}
-
-impl Default for OperatingMode {
-    fn default() -> Self {
-        OperatingMode::Default
-    }
 }
 
 impl OperatingMode {
@@ -76,10 +71,8 @@ impl OperatingMode {
 
     /// 这种模式是否允许 model 创建新 plugin (Creator 启用)
     pub fn allows_plugin_creation(self) -> bool {
-        match self {
-            OperatingMode::Creator => true,
-            _ => false,
-        }
+        // clippy 提示: match {x => true, _ => false} 简化为 `matches!`
+        matches!(self, OperatingMode::Creator)
     }
 
     /// 这种模式需要的最小 system prompt 提示 (给 model 解释当前模式)

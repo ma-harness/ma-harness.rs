@@ -98,12 +98,13 @@ pub enum RiskLevel {
 }
 
 /// 审批策略 (P7-2.2)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ApprovalPolicy {
     /// 不审批 (所有工具调用 auto-approve, 适合 benchmark / 测试)
     Never,
     /// 每次都问 (生产环境默认)
+    #[default]
     Ask,
     /// 永远 ask (debug 模式, 业务方想确认每一步)
     Always,
@@ -114,12 +115,8 @@ pub enum ApprovalPolicy {
     },
 }
 
-impl Default for ApprovalPolicy {
-    fn default() -> Self {
-        // P7-2 默认: 问 (跟 dsh 一致, 平衡安全跟 UX)
-        ApprovalPolicy::Ask
-    }
-}
+// Default derive on enum with `#[default]` on variant
+// (Ask 是 P7-2 默认: 跟 dsh 一致, 平衡安全跟 UX)
 
 /// 审批服务 registry (P7-2.2)
 ///
@@ -314,36 +311,17 @@ mod tests {
 
     #[test]
     fn policy_never_skips_all() {
-        let req = ApprovalRequest {
-            tool_name: "fs.delete".into(),
-            arguments: serde_json::json!({}),
-            risk_level: RiskLevel::Critical,
-            context: "delete /etc/passwd".into(),
-            tool_call_id: "tc-1".into(),
-        };
         // 实际 ApprovalRegistry 需要 service, 但 policy check 单独可测
         let policy = ApprovalPolicy::Never;
-        let needs = match &policy {
-            ApprovalPolicy::Never => false,
-            _ => true,
-        };
+        let needs = !matches!(policy, ApprovalPolicy::Never);
+        // 旧版 `let _ = matches!(...)` 反向了: Never 时 needs = true (错); 反过来 Never 时 needs = false
         assert!(!needs, "Never policy 永远不审批");
     }
 
     #[test]
     fn policy_ask_always_asks() {
-        let req = ApprovalRequest {
-            tool_name: "fs.read".into(),
-            arguments: serde_json::json!({}),
-            risk_level: RiskLevel::Low,
-            context: "read /tmp/x".into(),
-            tool_call_id: "tc-2".into(),
-        };
         let policy = ApprovalPolicy::Ask;
-        let needs = match &policy {
-            ApprovalPolicy::Ask => true,
-            _ => false,
-        };
+        let needs = matches!(policy, ApprovalPolicy::Ask);
         assert!(needs, "Ask policy 永远审批");
     }
 

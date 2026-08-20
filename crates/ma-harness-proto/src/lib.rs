@@ -32,7 +32,9 @@
 //! - 两者通过 `From` / `TryFrom` 互转
 
 #![deny(unsafe_code)]
-#![warn(missing_docs)]
+// protoc 生成的 .rs 没 doc comments, 抑制 `missing_docs` lint (rust 1.94+ 默认 warn)
+// 整个 crate 都是 generated code (mod ma_harness::v1), 没必要 enforce doc
+#![allow(missing_docs)]
 
 /// tonic-build 生成的 Protobuf 代码 (3 个 .proto 的 message + service)
 pub mod ma_harness {

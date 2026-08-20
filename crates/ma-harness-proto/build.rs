@@ -67,7 +67,7 @@ fn main() {
         .build_client(true)
         .file_descriptor_set_path(out_dir.join("ma_harness_descriptor.bin"))
         .out_dir(&out_dir)
-        .compile(
+        .compile_protos(
             &[
                 proto_dir.join("agent.proto"),
                 proto_dir.join("session.proto"),

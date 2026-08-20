@@ -10,7 +10,9 @@ publish = true
 description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳定)"
 
 [lints]
-workspace = true
+# workspace lints 不继承: 这个 crate 全 generated code, 不需要 strict doc lint
+# 实际 lint 在 src/lib.rs 头部用 #![allow(missing_docs)] 抑制 (Cargo.toml [lints] 段
+# 在 cargo clippy --workspace 跨 crate 跑时可能不生效, lib.rs 的 inner attribute 更可靠)
 
 [build-dependencies]
 # 2026-08-18 (Day 52): 用本地 vendor/protoc (npmmirror 镜像下载), 不走 protoc-prebuilt

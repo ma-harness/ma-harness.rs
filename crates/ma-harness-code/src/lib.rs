@@ -291,7 +291,8 @@ impl CodeRunner {
             // 简化: 直接设一个固定大值, 跑完 trap 在 deadline 上
             // 50ms tick → 100 ticks = 5s
             let ticks = ms / 50;
-            let _ = store.set_epoch_deadline(ticks);
+            // set_epoch_deadline 返回 (), let 绑定无用, 直接调用
+            store.set_epoch_deadline(ticks);
         }
         // 业务方应该在自己的服务里 spawn 一个 task 调 engine.increment_epoch() 推 epoch
         // 简化: CodeRunner 不自动开 epoch thread (测试 / 同步 context 友好)
@@ -390,7 +391,8 @@ impl CodeRunner {
                 // Caller 提供 data_mut via memory
                 if let Some(memory_mut) = caller.get_export("memory").and_then(|e| e.into_memory())
                 {
-                    let mut buf = memory_mut.data_mut(&mut caller);
+                    // data_mut() 本身返回 &mut [u8] (mut borrow), 不需要再 `let mut`
+                    let buf = memory_mut.data_mut(&mut caller);
                     if write_ptr + content.len() > buf.len() {
                         eprintln!("host::read_file: write out of bounds");
                         return (0, 0);

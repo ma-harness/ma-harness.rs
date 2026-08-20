@@ -15,7 +15,7 @@ use ma_harness_cordis::{
     ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalService, BoxedError, Context,
     RiskLevel,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 
 /// 集成测试用 error type (P7-2.7)
 #[derive(Debug)]

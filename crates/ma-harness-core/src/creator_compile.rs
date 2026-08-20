@@ -155,14 +155,9 @@ pub fn dylib_filename(spec_name: &str) -> String {
 fn sanitize_lib_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
-        let valid = c.is_ascii_alphanumeric() || c == '_';
-        let replacement = if valid {
-            c
-        } else if c == '-' {
-            '_'
-        } else {
-            '_'
-        };
+        // valid alphanumeric + '_' 直接保留, 其他 (含 '-') 替换成 '_'
+        // (clippy 报 identical blocks, 简化)
+        let replacement = if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' };
         out.push(replacement);
     }
     // 末尾 . / 空格 (Windows 修剪)
@@ -190,10 +185,8 @@ pub fn compile_plugin(
     let start = std::time::Instant::now();
 
     // 1. 准备输出目录
-    let temp_root = cfg
-        .temp_root
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir());
+    // clippy 报 redundant closure: 函数指针直接传, 不用包 || closure
+    let temp_root = cfg.temp_root.clone().unwrap_or_else(std::env::temp_dir);
     let output_root = cfg
         .output_dir
         .clone()

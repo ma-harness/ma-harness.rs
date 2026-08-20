@@ -131,8 +131,11 @@ impl SubagentService {
         parent_ctx: &Context,
         message: &str,
     ) -> Result<SpawnResult, SubagentError> {
-        let mut spec = SubagentSpec::default();
-        spec.message = message.to_string();
+        // clippy 提示: field assignment outside initializer, 改用 struct update syntax
+        let spec = SubagentSpec {
+            message: message.to_string(),
+            ..SubagentSpec::default()
+        };
         self.spawn_with_spec(parent_ctx, &spec).await
     }
 

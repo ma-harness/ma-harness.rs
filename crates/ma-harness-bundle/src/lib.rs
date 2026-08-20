@@ -55,7 +55,6 @@
 use ma_harness_registry::Registry;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// Bundle manifest

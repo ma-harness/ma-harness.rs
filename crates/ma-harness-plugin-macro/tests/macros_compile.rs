@@ -8,8 +8,8 @@
 //! 5. #[dsh_command] 生成 clap 入口
 //! 6. #[dsh_handler] 不报错 (Phase 1 占位)
 
-use ma_harness_cordis::{Context, Service};
-use ma_harness_core::{ToolSchema, ToolRegistry};
+use ma_harness_cordis::Context;
+use ma_harness_core::ToolSchema;
 // 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
 // 1. `ctx_key!` 在 ma_harness_seam (proc-macro crate 不允许 export macro_rules!)
 // 2. derive macro `#[proc_macro_derive(DshService, ...)]` 在 proc-macro crate root
@@ -39,6 +39,7 @@ fn ctx_key_basic() {
 // #[dsh_service]
 // ============================================================================
 
+/// 测试 service, 验证 #[DshService] 宏自动 impl Service trait
 #[derive(DshService)]
 pub struct MyTestService;
 
@@ -46,12 +47,14 @@ impl MyTestService {
     // 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
     // ma_harness_cordis::Service trait 要求 `fn install`, 之前写 `fn new` 不符合 trait.
     // 改 `install` 后 #[DshService] (cordis Service impl) 才能调用 MyTestService::install.
+    /// 构造 service (cordis Service trait 要求)
     pub fn install(_ctx: &Context) -> anyhow::Result<Self> {
         Ok(MyTestService)
     }
 }
 
 impl MyTestService {
+    /// 测试方法, 验证宏生成的 trait impl 正常工作
     pub fn do_something(&self) -> &'static str {
         "done"
     }
@@ -68,10 +71,12 @@ fn dsh_service_implements_service() {
 // #[dsh_listener] (Phase 1: 标记用, 不生成代码)
 // ============================================================================
 
-#[derive(DshListener)]
+/// 测试 listener, 验证 #[DshListener] 宏标记 (Phase 1: 标记用, 不生成代码)
+#[derive(DshListener, Default)]
 pub struct MyTestListener;
 
 impl MyTestListener {
+    /// 构造 listener
     pub fn new() -> Self {
         MyTestListener
     }
@@ -162,6 +167,7 @@ async fn dsh_command_dispatch_works() {
 // #[dsh_handler] (Phase 1: 透传占位)
 // ============================================================================
 
+/// 测试 handler, 验证 #[dsh_handler] 宏 (Phase 1: 透传占位)
 #[dsh_handler(adapter = "test_adapter")]
 pub async fn test_handler(req: String, _ctx: Context) -> anyhow::Result<String> {
     Ok(req)

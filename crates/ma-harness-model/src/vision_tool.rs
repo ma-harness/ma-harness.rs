@@ -231,7 +231,6 @@ pub const VISION_TOOL_DESCRIPTION: &str = "Describe one or more images using a v
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
     fn png_bytes() -> Vec<u8> {
         vec![

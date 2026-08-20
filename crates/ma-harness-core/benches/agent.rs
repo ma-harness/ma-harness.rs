@@ -3,6 +3,8 @@
 //! 跑法: `cargo bench -p ma_harness_core --bench agent`
 //!
 //! 设计: 见 `docs/benchmark-design.md` § 3.2.
+#![allow(missing_docs)] // bench 文件: criterion macro 公开 fn 较多, 不强制 doc
+
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ma_harness_core::agent::{AgentLoop, AgentRunRequest, ModelAdapter, ModelRequest, StubModelAdapter};
@@ -96,8 +98,8 @@ fn bench_stub_model_complete(c: &mut Criterion) {
 
     c.bench_function("stub_model_complete", |b| {
         // StubModelAdapter: Copy (line 117 agent.rs), 闭包多次执行 OK
+        // clippy 报 redundant binding: `let adapter = adapter` 没意义 (Copy type 已自动 copy)
         b.to_async(&runtime).iter(|| {
-            let adapter = adapter;
             let req = req.clone();
             async move {
                 let _ = black_box(adapter.complete(&req).await);

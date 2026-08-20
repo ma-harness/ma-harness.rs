@@ -245,14 +245,15 @@ impl SessionEvent {
     /// 2. severity >= Error 时 error_message 必须非空
     /// 3. model_visible 必须跟 event_type.model_visible() 一致 (防止误标)
     pub fn validate(&self) -> Result<(), String> {
-        if self.model_visible && self.payload_json.as_deref().map_or(true, str::is_empty) {
+        // clippy 提示: `map_or(default, fn)` 简化为 `is_none_or(fn)`
+        if self.model_visible && self.payload_json.as_deref().is_none_or(str::is_empty) {
             return Err(format!(
                 "model_visible event {} ({}) 必须有非空 payload_json",
                 self.event_type, self.id
             ));
         }
         if matches!(self.severity, Severity::Error | Severity::Fatal)
-            && self.error_message.as_deref().map_or(true, str::is_empty)
+            && self.error_message.as_deref().is_none_or(str::is_empty)
         {
             return Err(format!(
                 "severity={} 事件 {} ({}) 必须有非空 error_message",

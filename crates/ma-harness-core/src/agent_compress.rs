@@ -188,7 +188,8 @@ mod tests {
     fn estimate_tokens_cjk() {
         // 6 CJK chars / 1.5 = 4 tokens
         let t = estimate_tokens("中文测试字符");
-        assert!(t >= 3 && t <= 5, "CJK 应估 3-5 tokens, got {}", t);
+        // clippy 提示: 数字范围用 `(3..=5).contains(&t)`, 替代手写 `t >= 3 && t <= 5`
+        assert!((3..=5).contains(&t), "CJK 应估 3-5 tokens, got {t}");
     }
 
     #[test]

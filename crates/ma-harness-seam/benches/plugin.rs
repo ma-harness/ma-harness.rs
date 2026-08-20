@@ -3,6 +3,8 @@
 //! 跑法: `cargo bench -p ma_harness_seam --bench plugin`
 //!
 //! 设计: 见 `docs/benchmark-design.md` § 3.3.
+#![allow(missing_docs)] // bench 文件: criterion macro 公开 fn 较多, 不强制 doc
+
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ma_harness_cordis::{Context, Plugin as CordisPlugin};

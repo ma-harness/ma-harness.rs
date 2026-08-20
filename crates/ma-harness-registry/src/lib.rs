@@ -54,6 +54,7 @@ pub enum PluginSource {
     Local(String),
     /// Git URL (v2)
     Git {
+        /// Git 仓库 URL (https:// or git@)
         url: String,
         /// Optional commit / tag / branch
         rev: Option<String>,

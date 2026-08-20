@@ -2,6 +2,8 @@
 //!
 //! 跑法: `cargo bench -p ma-harness-model --bench streaming`
 //!
+#![allow(missing_docs)] // bench 文件: criterion macro 公开 fn 较多, 不强制 doc
+
 //! ## Bench 列表
 //!
 //! 1. `parse_sse_data_line_throughput` — OpenAI `data: {json}` 行 parse 速度

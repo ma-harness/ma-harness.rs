@@ -4,6 +4,9 @@
 //! 输出: `target/criterion/core/<bench_name>/report/index.html`
 //!
 //! 设计: 见 `docs/benchmark-design.md` § 3.1。
+#![allow(missing_docs)] // bench 文件: 公开函数 (bench fn) 较多, 不强制 doc (跟 lib.rs 一致)
+
+//! 设计: 见 `docs/benchmark-design.md` § 3.1。
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ma_harness_cordis::{Context, CtxKey, Listener, ListenerEvent, Service};
@@ -34,6 +37,7 @@ impl Service for BenchService {
 /// 测试用 event
 #[derive(Clone)]
 struct BenchEvent {
+    #[allow(dead_code)] // 跟 ListenerEvent 关联, payload 字段在基准里是占位 (未来扩展)
     payload: u64,
 }
 

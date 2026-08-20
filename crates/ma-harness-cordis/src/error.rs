@@ -68,8 +68,8 @@ impl BoxedError {
         Self(Box::new(e))
     }
 
-    /// 借用内部 error
-    pub fn as_ref(&self) -> &(dyn std::error::Error + Send + Sync) {
+    /// 借用内部 error (返回 dyn Error trait object, 跟 std `as_ref` 区分, 避免跟 `AsRef` trait 混淆)
+    pub fn as_dyn_error(&self) -> &(dyn std::error::Error + Send + Sync) {
         &*self.0
     }
 

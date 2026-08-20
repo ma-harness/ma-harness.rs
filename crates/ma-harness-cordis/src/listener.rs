@@ -48,10 +48,14 @@ where
 /// **用 `parking_lot::RwLock<HashMap>`** 而不是 dashmap: listener 写入少 (只在 install 阶段),
 /// 读取多 (emit 时频繁). RwLock 读锁可共享, 更合适.
 ///
+/// (priority, listener) 二元组, dispatch 时按 priority 升序遍历
+/// 抽出来给 ListenerRegistry 字段用, 解决 clippy::type_complexity 提示
+type PrioritizedListener = (i32, Arc<dyn AnyListener>);
+
 /// Phase 2.9 (Day 63) 加 priority 排序: emit 按 priority 升序 dispatch (低先 fire).
 #[derive(Default)]
 pub(crate) struct ListenerRegistry {
-    inner: RwLock<HashMap<TypeId, Vec<(i32, Arc<dyn AnyListener>)>>>,
+    inner: RwLock<HashMap<TypeId, Vec<PrioritizedListener>>>,
 }
 
 /// type-erased listener, 内部 downcast 到具体 E 调 handle

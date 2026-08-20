@@ -40,6 +40,7 @@ pub(crate) struct PluginRegistry {
 
 impl PluginRegistry {
     /// 构造一个新的 plugin registry
+    #[allow(dead_code)] // 跟 `PluginRegistry::default()` 等价, 保留作语义别名 (Phase 2 计划)
     pub(crate) fn new() -> Self {
         Self::default()
     }

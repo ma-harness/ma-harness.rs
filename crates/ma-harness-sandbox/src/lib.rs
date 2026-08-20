@@ -187,44 +187,21 @@ impl Default for LinuxLandlockEnforcer {
 #[cfg(target_os = "linux")]
 impl Enforcer for LinuxLandlockEnforcer {
     fn enforce(&self, policy: &Policy) -> Result<(), EnforceError> {
-        use landlock::{
-            Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI,
-        };
+        use landlock::{AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI};
 
-        // 1. 检查内核 ABI
-        let abi = ABI::new_current();
-        if abi < ABI::V1 {
-            return Err(EnforceError::LandlockNotSupported);
-        }
+        // 1. 选定最低 ABI 等级 (V1 = kernel 5.13 引入, 业务方主流生产环境都覆盖)
+        //    Ruleset::default() 会自动 probe 当前内核实际 ABI
+        let abi = ABI::V1;
 
-        // 2. 构造 ruleset (允许的 FS 操作: read / write / execute / make dir / remove 等)
+        // 2. 构造 ruleset (handle_access 一次性给 V1 全部 FS access rights,
+        //    12 个单独 handle_access 是 landlock 0.4.0 老 API, 0.4.7 用 from_all 简化)
         let mut ruleset = Ruleset::default()
-            .handle_access(Access::from(AccessFs::ReadFile))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access ReadFile: {e}")))?
-            .handle_access(Access::from(AccessFs::ReadDir))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access ReadDir: {e}")))?
-            .handle_access(Access::from(AccessFs::WriteFile))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access WriteFile: {e}")))?
-            .handle_access(Access::from(AccessFs::RemoveDir))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access RemoveDir: {e}")))?
-            .handle_access(Access::from(AccessFs::RemoveFile))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access RemoveFile: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeChar))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeChar: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeDir))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeDir: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeReg))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeReg: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeSock))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeSock: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeFifo))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeFifo: {e}")))?
-            .handle_access(Access::from(AccessFs::MakeSym))
-            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access MakeSym: {e}")))?
+            .handle_access(AccessFs::from_all(abi))
+            .map_err(|e| EnforceError::ApplyFailed(format!("handle_access from_all: {e}")))?
             .create()
             .map_err(|e| EnforceError::ApplyFailed(format!("create ruleset: {e}")))?;
 
-        // 3. 添加 read 规则
+        // 3. 添加 read 规则 (read_paths 内每条 path 加 read file + read dir 两条)
         for rule in &policy.read_paths {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
@@ -235,7 +212,7 @@ impl Enforcer for LinuxLandlockEnforcer {
                     )),
                 })?;
                 ruleset = ruleset
-                    .add_rule(PathBeneath::new(fd, Access::from(AccessFs::ReadFile)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::ReadFile))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
                         source: Box::new(std::io::Error::new(
@@ -243,7 +220,7 @@ impl Enforcer for LinuxLandlockEnforcer {
                             format!("{e:?}"),
                         )),
                     })?
-                    .add_rule(PathBeneath::new(fd, Access::from(AccessFs::ReadDir)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::ReadDir))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
                         source: Box::new(std::io::Error::new(
@@ -265,7 +242,7 @@ impl Enforcer for LinuxLandlockEnforcer {
                     )),
                 })?;
                 ruleset = ruleset
-                    .add_rule(PathBeneath::new(fd, Access::from(AccessFs::WriteFile)))
+                    .add_rule(PathBeneath::new(fd, AccessFs::WriteFile))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
                         source: Box::new(std::io::Error::new(
@@ -284,10 +261,8 @@ impl Enforcer for LinuxLandlockEnforcer {
         tracing::info!(
             read_paths = policy.read_paths.len(),
             write_paths = policy.write_paths.len(),
-            "landlock sandbox enforced (Linux {}.{}.{})",
-            abi.major,
-            abi.minor,
-            abi.patch
+            "landlock sandbox enforced (ABI {})",
+            abi
         );
         Ok(())
     }

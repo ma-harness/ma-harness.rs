@@ -298,6 +298,7 @@ pub fn infer_risk_level(tool_name: &str) -> RiskLevel {
 mod tests {
     use super::*;
     use futures::future::BoxFuture;
+    use serde_json::json;
 
     type InvokeFn =
         dyn Fn(Value, &Context) -> BoxFuture<'static, anyhow::Result<Value>> + Send + Sync;
@@ -418,7 +419,7 @@ mod tests {
         // 第 2 次才成功 (模拟 transient fail)
         let counter = Arc::new(parking_lot::Mutex::new(0u32));
         let c2 = counter.clone();
-        let flaky: Arc<InvokeFn> = Arc::new(move |args, ctx| {
+        let flaky: Arc<InvokeFn> = Arc::new(move |_args, _ctx| {
             let c = c2.clone();
             Box::pin(async move {
                 let mut count = c.lock();
@@ -476,5 +477,3 @@ mod tests {
         assert!(err.to_string().contains("tool failed"));
     }
 }
-
-use serde_json::json;

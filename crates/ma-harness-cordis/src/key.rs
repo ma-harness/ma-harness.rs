@@ -65,9 +65,10 @@ const fn is_lower_or_underscore(c: u8) -> bool {
 pub(crate) fn check_snake_case_or_panic(name: &str) {
     if !is_snake_case(name) {
         // 错误信息给 "出问题的字符位置", 方便用户定位
+        // clippy 提示: 数字用 `is_ascii_digit()`, 替代手写 range check
         let first_bad = name
             .bytes()
-            .position(|c| !is_lower_or_underscore(c) && !(c >= b'0' && c <= b'9'))
+            .position(|c| !is_lower_or_underscore(c) && !c.is_ascii_digit())
             .unwrap_or(0);
         let bad_char = name.as_bytes().get(first_bad).copied().unwrap_or(b'?') as char;
         panic!(

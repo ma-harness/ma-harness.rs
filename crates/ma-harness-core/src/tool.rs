@@ -12,7 +12,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde_json::Value;
 
-use ma_harness_cordis::{ApprovalDecision, ApprovalRequest, Context, RiskLevel};
+use ma_harness_cordis::Context;
 
 pub use crate::tool_pipeline::ToolConfig;
 

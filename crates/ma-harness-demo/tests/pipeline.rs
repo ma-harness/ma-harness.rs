@@ -9,7 +9,7 @@ use ma_harness_cordis::Context;
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
 use ma_harness_plugin_bash::{BashPlugin, BashService, MAX_RUNTIME_MS};
 use ma_harness_plugin_cordis::{CordisPlugin, CordisService};
-use ma_harness_plugin_fs::{FsPlugin, FsService, READ_ALLOW_LIST};
+use ma_harness_plugin_fs::{FsPlugin, FsService};
 use ma_harness_plugin_hello::{HelloPlugin, HelloService, GREETING_TEMPLATE};
 use ma_harness_plugin_skill::{SkillPlugin, SkillService, SKILLS_DIR};
 use ma_harness_plugin_subagent::{SubagentPlugin, SubagentService, MAX_DEPTH};
@@ -72,7 +72,7 @@ fn typed_keys_overridable() {
 
 #[tokio::test]
 async fn agent_run_emits_four_events() {
-    let ctx = make_ctx();
+    let _ctx = make_ctx();
     let log = EventLog::open_in_memory().unwrap();
     let agent = AgentLoop::new(log.clone(), Arc::new(StubModelAdapter));
 

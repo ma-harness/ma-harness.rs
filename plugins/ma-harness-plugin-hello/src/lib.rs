@@ -15,7 +15,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-use ma_harness_cordis::{Context, Listener, ListenerEvent};
+use ma_harness_cordis::{Context, Listener};
 use ma_harness_seam::{
     ctx_key, dsh_listener_priority, dsh_plugin_dual, dsh_service_dual, Plugin, PluginEntry,
     PluginManifest,
@@ -164,6 +164,7 @@ pub struct AsyncSleepResource {
 }
 
 impl AsyncSleepResource {
+    /// 构造一个 AsyncSleepResource, 返 (resource, disposed_flag)
     pub fn new(name: &str) -> (Self, std::sync::Arc<std::sync::atomic::AtomicBool>) {
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         (

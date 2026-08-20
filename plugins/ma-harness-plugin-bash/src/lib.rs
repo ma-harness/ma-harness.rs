@@ -277,10 +277,10 @@ mod tests {
         );
     }
 
-    /// 跨平? timeout (Phase 1 测试?sleep)
+    /// 跨平台 timeout (Phase 1 测试 sleep)
     #[tokio::test]
     async fn run_respects_timeout() {
-        let ctx = ctx_with_default_timeout();
+        let _ctx = ctx_with_default_timeout();
         let svc = BashService;
         let result = svc
             .run_command_with_timeout(&sleep_cmd("5"), Duration::from_millis(100))
