@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }  # P11-5: vision model image base64 encoding
+tokio = { workspace = true }  # P12-2: retry_with_backoff async sleep
 
 [dev-dependencies]
 criterion = { workspace = true }

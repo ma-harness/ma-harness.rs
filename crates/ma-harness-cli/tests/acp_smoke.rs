@@ -5,9 +5,8 @@
 //! 跑: `cargo test --package ma-harness-cli --test acp_smoke -- --nocapture`
 //! 需要 `mah` binary 已经 build 好 (cargo build 之后)
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 fn find_mah_exe() -> std::path::PathBuf {
     // 1. CARGO_BIN_EXE_<name> (cargo 提供的)
@@ -50,6 +49,72 @@ fn run_acp(input: &str) -> (String, String, i32) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     (stdout, stderr, output.status.code().unwrap_or(-1))
+}
+
+/// P12-6 v2: 业务方跑交互式 ACP session (state 跨多次 call 共享)
+///
+/// 业务方用 Popen 持续 process, 业务方发多 message, server 状态保留 (e.g. newSession → loadSession)
+fn run_acp_interactive<F>(script: F) -> (String, i32)
+where
+    F: FnOnce(&mut ChildProcess) + Send + 'static,
+{
+    let mah = find_mah_exe();
+    let mut child = Command::new(&mah)
+        .arg("acp")
+        .arg("serve")
+        .arg("--model")
+        .arg("stub")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mah acp serve");
+
+    let mut proc = ChildProcess {
+        stdin: child.stdin.take().expect("stdin"),
+        stdout: child.stdout.take().expect("stdout"),
+        stderr: child.stderr.take().expect("stderr"),
+    };
+    script(&mut proc);
+    // 关闭 stdin, server 看到 EOF 退出
+    drop(proc.stdin);
+
+    let mut stdout_collected = String::new();
+    proc.stdout.read_to_string(&mut stdout_collected).expect("read stdout");
+    let _ = proc.stderr; // 暂不收集 stderr
+
+    let status = child.wait().expect("wait");
+    (stdout_collected, status.code().unwrap_or(-1))
+}
+
+struct ChildProcess {
+    stdin: std::process::ChildStdin,
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+}
+
+impl ChildProcess {
+    fn write_line(&mut self, line: &str) {
+        self.stdin.write_all(line.as_bytes()).expect("write");
+        self.stdin.write_all(b"\n").expect("write newline");
+        self.stdin.flush().expect("flush");
+    }
+    fn read_line(&mut self) -> Option<String> {
+        let mut buf = [0u8; 1];
+        let mut line = Vec::new();
+        loop {
+            match self.stdout.read(&mut buf) {
+                Ok(0) => return None, // EOF
+                Ok(_) => {
+                    if buf[0] == b'\n' {
+                        return Some(String::from_utf8_lossy(&line).to_string());
+                    }
+                    line.push(buf[0]);
+                }
+                Err(e) => panic!("read err: {e}"),
+            }
+        }
+    }
 }
 
 #[test]
@@ -144,4 +209,96 @@ fn acp_invalid_json_returns_parse_error() {
     let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
     assert!(resp["error"].is_object(), "expected error object");
     assert_eq!(resp["error"]["code"], -32700); // Parse error
+}
+
+// === P12-6 v2: loadSession / cancel / image content tests ===
+
+#[test]
+fn acp_initialize_v2_capabilities() {
+    // P12-6 v2: loadSession=true, image=true
+    let input = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}
+"#;
+    let (stdout, _stderr, _code) = run_acp(input);
+    let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
+    assert_eq!(resp["result"]["agentCapabilities"]["loadSession"], true);
+    assert_eq!(resp["result"]["agentCapabilities"]["promptCapabilities"]["image"], true);
+}
+
+#[test]
+fn acp_load_session_returns_metadata() {
+    // P12-6 v2: 用 interactive runner (业务方 state 共享)
+    let (stdout, _code) = run_acp_interactive(|proc| {
+        // 1. newSession
+        proc.write_line(r#"{"jsonrpc":"2.0","id":1,"method":"newSession","params":{"cwd":"/tmp/test"}}"#);
+        let r1_line = proc.read_line().expect("read r1");
+        let r1: serde_json::Value = serde_json::from_str(&r1_line).expect("parse r1");
+        let actual_id = r1["result"]["sessionId"]
+            .as_str()
+            .expect("sessionId from newSession")
+            .to_string();
+
+        // 2. loadSession with actual id
+        let load_req = format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"loadSession","params":{{"sessionId":"{actual_id}"}}}}"#
+        );
+        proc.write_line(&load_req);
+        let r2_line = proc.read_line().expect("read r2");
+        let r2: serde_json::Value = serde_json::from_str(&r2_line).expect("parse r2");
+        assert_eq!(r2["id"], 2);
+        assert_eq!(r2["result"]["sessionId"], actual_id);
+        assert_eq!(r2["result"]["cwd"], "/tmp/test");
+        assert_eq!(r2["result"]["messageCount"], 0);
+    });
+    // stdout 包含 r1 (但 read_line 内部已消费)
+    let _ = stdout;
+}
+
+#[test]
+fn acp_load_session_not_found() {
+    let input = r#"{"jsonrpc":"2.0","id":1,"method":"loadSession","params":{"sessionId":"00000000-0000-0000-0000-000000000000"}}
+"#;
+    let (stdout, _stderr, _code) = run_acp(input);
+    let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
+    assert!(resp["error"].is_object());
+    assert_eq!(resp["error"]["code"], -32603);
+}
+
+#[test]
+fn acp_cancel_returns_cancelled_flag() {
+    // 1. newSession, 2. cancel
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let input = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"newSession","params":{{}}}}
+{{"jsonrpc":"2.0","id":2,"method":"cancel","params":{{"sessionId":"{new_id}"}}}}
+"#
+    );
+    let (stdout, _stderr, _code) = run_acp(&input);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2);
+    let r2: serde_json::Value = serde_json::from_str(lines[1]).expect("parse line 1");
+    assert_eq!(r2["id"], 2);
+    assert_eq!(r2["result"]["cancelled"], true);
+    assert_eq!(r2["result"]["sessionId"], new_id);
+}
+
+#[test]
+fn acp_prompt_with_image_block() {
+    // P12-6 v2: prompt 接受 text + image content blocks
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let input = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"newSession","params":{{}}}}
+{{"jsonrpc":"2.0","id":2,"method":"prompt","params":{{"sessionId":"{new_id}","prompt":[{{"type":"text","text":"describe"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}}}]}}}}
+"#
+    );
+    let (stdout, _stderr, _code) = run_acp(&input);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    // 期望 3 行: newSession response + session/update notif + prompt response
+    assert!(lines.len() >= 3, "got {} lines: {:?}", lines.len(), lines);
+    let r3: serde_json::Value = serde_json::from_str(lines[2]).expect("parse line 2");
+    assert_eq!(r3["id"], 2);
+    // stub 返 [+1 image(s)] 标记
+    let r_notif: serde_json::Value = serde_json::from_str(lines[1]).expect("parse line 1");
+    assert_eq!(r_notif["method"], "session/update");
+    let text = r_notif["params"]["update"]["content"]["text"].as_str().expect("text");
+    assert!(text.contains("+1 image"), "expected 'image' marker in: {text}");
 }

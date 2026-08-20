@@ -108,23 +108,39 @@ pub struct JsonRpcNotification {
 pub struct AcpHandler {
     /// Agent loop (本地, in-process)
     pub agent: Arc<AgentLoop>,
+    /// Active sessions (P12-6 v2: 跟 loadSession / cancel 用)
+    pub sessions: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, SessionInfo>>>,
+    /// Cancellation flags (P12-6 v2: cancel 走)
+    pub cancel_flags: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, bool>>>,
+}
+
+/// Session metadata (P12-6 v2)
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    pub id: String,
+    pub created_at: std::time::SystemTime,
+    pub cwd: Option<String>,
+    pub message_count: u32,
 }
 
 impl AcpHandler {
     pub fn new(agent: Arc<AgentLoop>) -> Self {
-        Self { agent }
+        Self {
+            agent,
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
+            cancel_flags: std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
+        }
     }
 
     /// Handle `initialize` — 握手, 返回 protocol version + capabilities
-    pub async fn handle_initialize(&self, params: Option<Value>) -> Result<Value> {
-        // 期望 params: { protocolVersion: 1, clientCapabilities: {} }
-        // 返回: { protocolVersion: 1, agentCapabilities: { loadSession: false } }
+    pub async fn handle_initialize(&self, _params: Option<Value>) -> Result<Value> {
+        // P12-6 v2: loadSession + image 能力都开
         Ok(serde_json::json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
-                "loadSession": false,
+                "loadSession": true,
                 "promptCapabilities": {
-                    "image": false,
+                    "image": true,
                     "audio": false,
                 },
             },
@@ -138,11 +154,77 @@ impl AcpHandler {
 
     /// Handle `newSession` — 建新 session, 返回 session id
     pub async fn handle_new_session(&self, params: Option<Value>) -> Result<Value> {
-        // 期望 params: { cwd?: string, mcpServers?: [] }
-        // 返回: { sessionId: "<uuid>" }
         let session_id = Uuid::new_v4().to_string();
-        eprintln!("[acp] newSession: {session_id} (params={params:?})");
+        let cwd = params
+            .as_ref()
+            .and_then(|p| p.get("cwd"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        // P12-6 v2: 跟踪 session metadata
+        self.sessions.lock().expect("sessions lock poisoned").insert(
+            session_id.clone(),
+            SessionInfo {
+                id: session_id.clone(),
+                created_at: std::time::SystemTime::now(),
+                cwd,
+                message_count: 0,
+            },
+        );
+        self.cancel_flags
+            .lock()
+            .expect("cancel lock poisoned")
+            .insert(session_id.clone(), false);
+
+        eprintln!("[acp] newSession: {session_id}");
         Ok(serde_json::json!({
+            "sessionId": session_id,
+        }))
+    }
+
+    /// **P12-6 v2**: Handle `loadSession` — 加载历史 session
+    pub async fn handle_load_session(&self, params: Option<Value>) -> Result<Value> {
+        let session_id = params
+            .as_ref()
+            .and_then(|p| p.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing sessionId"))?
+            .to_string();
+
+        let sessions = self.sessions.lock().expect("sessions lock poisoned");
+        let info = sessions
+            .get(&session_id)
+            .ok_or_else(|| anyhow::anyhow!("session not found: {session_id}"))?
+            .clone();
+
+        Ok(serde_json::json!({
+            "sessionId": info.id,
+            "createdAt": info
+                .created_at
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            "cwd": info.cwd,
+            "messageCount": info.message_count,
+        }))
+    }
+
+    /// **P12-6 v2**: Handle `cancel` — 取消当前 prompt
+    pub async fn handle_cancel(&self, params: Option<Value>) -> Result<Value> {
+        let session_id = params
+            .as_ref()
+            .and_then(|p| p.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing sessionId"))?
+            .to_string();
+
+        // 设置 cancel flag
+        let mut flags = self.cancel_flags.lock().expect("cancel lock poisoned");
+        flags.insert(session_id.clone(), true);
+        eprintln!("[acp] cancel: session={session_id}");
+
+        Ok(serde_json::json!({
+            "cancelled": true,
             "sessionId": session_id,
         }))
     }
@@ -153,7 +235,6 @@ impl AcpHandler {
         params: Option<Value>,
         notifier: impl Fn(&str, Value) + Send + Sync,
     ) -> Result<Value> {
-        // 期望 params: { sessionId: "...", prompt: [{"type": "text", "text": "..."}] }
         let params = params.ok_or_else(|| anyhow::anyhow!("missing params"))?;
         let session_id = params
             .get("sessionId")
@@ -164,30 +245,72 @@ impl AcpHandler {
             .get("prompt")
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("missing prompt"))?;
-        // 取第一个 text block (v1 简化)
-        let user_message = prompt
-            .iter()
-            .find_map(|b| {
-                if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    b.get("text").and_then(|t| t.as_str()).map(String::from)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| anyhow::anyhow!("no text block in prompt"))?;
 
-        eprintln!("[acp] prompt: session={session_id} message={user_message:?}");
+        // P12-6 v2: 收集 prompt 内容 (text + image)
+        let mut user_message = String::new();
+        let mut image_count = 0;
+        for block in prompt {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                        if !user_message.is_empty() {
+                            user_message.push('\n');
+                        }
+                        user_message.push_str(text);
+                    }
+                }
+                Some("image") => {
+                    image_count += 1;
+                    // v1: image 计数, 实际不传给 stub model
+                    // v2: 走 vision model
+                }
+                _ => {}
+            }
+        }
+        if user_message.is_empty() && image_count == 0 {
+            return Err(anyhow::anyhow!("no text or image block in prompt"));
+        }
+
+        eprintln!(
+            "[acp] prompt: session={session_id} text={} chars + {image_count} images",
+            user_message.len()
+        );
+
+        // 重置 cancel flag
+        self.cancel_flags
+            .lock()
+            .expect("cancel lock poisoned")
+            .insert(session_id.clone(), false);
 
         // 跑 agent (in-process)
         let req = AgentRunRequest {
             session_id: session_id.clone(),
-            user_message: user_message.clone(),
-            model: "stub".to_string(), // v1 固定 stub, v2 走 model param
+            user_message: if image_count > 0 {
+                format!("{user_message} [+{image_count} image(s)]")
+            } else {
+                user_message.clone()
+            },
+            model: "stub".to_string(),
             temperature: 0.7,
             max_tokens: 1024,
             system_prompt: None,
         };
         let resp = self.agent.run(req).await?;
+
+        // P12-6 v2: 跟踪 session message count
+        let mut sessions = self.sessions.lock().expect("sessions lock poisoned");
+        if let Some(info) = sessions.get_mut(&session_id) {
+            info.message_count += 1;
+        }
+
+        // 检查 cancel flag (P12-6 v2: 业务方 cancel 后, 跑完但返 cancelled)
+        let cancelled = self
+            .cancel_flags
+            .lock()
+            .expect("cancel lock poisoned")
+            .get(&session_id)
+            .copied()
+            .unwrap_or(false);
 
         // 发 session/update 通知 (text chunk)
         notifier(
@@ -204,9 +327,10 @@ impl AcpHandler {
             }),
         );
 
-        // 返回 stopReason
+        // P12-6 v2: cancelled → "cancelled" stopReason
+        let stop_reason = if cancelled { "cancelled" } else { "end_turn" };
         Ok(serde_json::json!({
-            "stopReason": "end_turn",
+            "stopReason": stop_reason,
         }))
     }
 
@@ -220,6 +344,8 @@ impl AcpHandler {
         let result = match req.method.as_str() {
             "initialize" => self.handle_initialize(req.params).await,
             "newSession" => self.handle_new_session(req.params).await,
+            "loadSession" => self.handle_load_session(req.params).await,
+            "cancel" => self.handle_cancel(req.params).await,
             "prompt" => self.handle_prompt(req.params, notifier).await,
             method => {
                 return Some(JsonRpcResponse::error(
