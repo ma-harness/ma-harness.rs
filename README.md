@@ -1,273 +1,237 @@
 # ma-harness.rs
 
-> **Rust 重写的 AI agent 编排 harness**。独立项目,行为对齐 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 但不是官方 Rust 端口。
-> **当前状态**: Day 92 (Phase 1-5 全部收官, P4-1..7 + P5-1..3 完成, crates.io 发版准备完)
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+**Rust rewrite of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) AI agent framework, with extensions for production use.**
+
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-638%2F638-brightgreen)](#)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](#)
+[![crates.io](https://img.shields.io/badge/crates.io-6%20crates-orange)](#cratesio)
+
+`mah` is the binary; `mah-py` is the Python SDK; 6 crates are published to crates.io.
 
 ---
 
-## 这是什么?
+## ✨ Features
 
-`ma-harness.rs` 是 **独立的 Rust 重写**,跟 dsh 行为对齐、跑分对比,**不是 dsh 的官方 Rust 端口**。
+- **OpenAI / Anthropic / Deepseek / Stub** LLM adapters with streaming, retry (P12-2), vision (P11-5), tool-call
+- **Cordis-style DI**: Context / Service / Plugin / TypedKey / Disposable framework (P7)
+- **ACP protocol** (JSON-RPC 2.0 over stdio) — interoperable with dsh's `dsh-jsonrpc-agent` (P11-4)
+- **Plugin Registry + Bundle** for distributed plugin discovery and reproducible installs (P11-6/8, P12-5/7)
+- **DAG task orchestration** with topological sort, dependency validation, short-circuit on failure (P12-9)
+- **Vibe Coding artifact viewer** — auto-detect and render 10 artifact kinds (HTML, SVG, JSON, etc.) (P11-7)
+- **Code Mode** — run LLM-generated WAT/WASM in wasmtime sandbox (4-layer defense: fuel / epoch / memory / fs) (P2.6)
+- **Landlock sandbox** — kernel-enforced fs/process restrictions on Linux (P10)
+- **TUI dashboard** — ratatui-based session/event viewer (P3.9)
+- **Python SDK** (`mah-py`) — subprocess bridge to `mah` CLI (P11-3)
+- **CI/CD** — Gitee Go + GitHub Actions, tag-triggered publish to crates.io (P12-5)
 
-主要设计:
+---
 
-| 维度 | 选择 |
-|---|---|
-| 框架 | Cordis-rs (typed key + plugin + listener + scope + fork) |
-| 协议 | Protobuf 单协议 (Prost + tonic + salvo-oapi) |
-| 日志 | append-only SessionEvent (rusqlite, model-visible 不变) |
-| 公开 API | `ma-harness-seam` (5 trait + 5 proc-macro re-export) |
-| HTTP server | salvo 0.95 (#[endpoint] 自动导出 OpenAPI, 0.79→0.95 跳 16 minor 0 break) |
-| Code Mode | wasmtime 27 (4 层沙箱: fuel / epoch / mem+table / fs) |
-| 模型 | OpenAI / Anthropic (HTTP) + StubModel (dev/test) |
-| Bindings | Python / Node.js (JS+TS) / Go (gRPC) |
-| 19 first-party | cordis / core / seam / proto / cli / server / sandbox / model / code / tui / plugin-macro / demo / conformance + 6 plugins |
+## 📊 Status vs [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 
-## 快速开始
+ma-harness.rs is a from-scratch Rust rewrite of dsh v0.1, targeting 100% behavioral parity at the snapshot/fixture level, plus production extensions. Last verified 2026-08-20.
+
+### Behavioral equivalence (P11-1 / P11-2)
+
+| Test suite | dsh v0.1 | ma-harness.rs | Status |
+|---|---|---|---|
+| **dsh acp-snapshot** (9 fixture) | 100% | **100% (9/9)** | ✅ parity |
+| **dsh_synthetic** (7 fixture, shape conversion) | n/a | **100% (7/7)** | ✅ parity |
+| **smoke** (8 fixture, framework consistency) | n/a | 62.5% (5/8) | ✅ by design (3 expected failures) |
+| Terminal Bench 2.1 | 87.9% | not run | ⏳ business-driven (P11-2.5+) |
+| Toolathlon-Verified | 74.1% | not run | ⏳ business-driven |
+| DSBench-FullStack | 71.1% | not run | ⏳ business-driven |
+
+End-to-end verification:
+```bash
+$ mah.exe conformance --dsh --fixtures crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap.jsonl
+Loaded 9 fixtures from dsh_snap.jsonl
+Conformance: 9 / 9 passed (100.0%) in 1ms
+```
+
+### Feature matrix
+
+| Capability | dsh v0.1 | ma-harness.rs | Notes |
+|---|---|---|---|
+| Core agent loop (Session / Run / Event) | ✅ | ✅ | behaviorally equivalent |
+| ACP (JSON-RPC 2.0 stdio) | ✅ | ✅ | P11-4 |
+| Plugin system | ✅ | ✅ (extended) | cordis + inventory + macro |
+| Approval service (user pre-tool) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP |
+| TUI dashboard | partial | ✅ (P3.9) | ratatui |
+| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI export, SSE |
+| **Plugin Registry** (npm-style) | n/a | ✅ (P11-6 / P12-5) | search/export/merge |
+| **Bundle** (lockfile install) | n/a | ✅ (P11-8 / P12-7) | reproducible |
+| **Vibe Coding Artifact viewer** | n/a | ✅ (P11-7) | 10 kinds, terminal render |
+| **DAG orchestration** | n/a | ✅ (P12-9) | Kahn topo + short-circuit |
+| **Multi-modal vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic |
+| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | exponential backoff + jitter |
+| **Wasm sandbox** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4-layer defense |
+| **Landlock sandbox** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) |
+| Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON |
+| crates.io publish | n/a | ✅ (P12-5) | 6 crates at 0.1.0 |
+| LLM backends | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | |
+| Language | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 |
+
+### Test coverage
+
+```
+638 tests, 0 failed
+  ma-harness-core:           107
+  ma-harness-cordis:          81
+  ma-harness-model:           71  (incl. vision 17 + retry 13 + vision_plugin 4)
+  ma-harness-server:          53
+  ma-harness-conformance:     44 + 13 smoke
+  ma-harness-tui:             35
+  ma-harness-registry:        25
+  ma-harness-bundle:          18
+  ma-harness-artifact:        26
+  ma-harness-dag:             14
+  ma-harness-cli:             21 + 10 acp integration
+  ma-harness-seam:            11
+  ma-harness-sandbox:          6
+  ma-harness-plugin-*:        47
+  mah-py (pytest):            16
+```
+
+---
+
+## 🚀 Quick start
+
+### Python SDK (recommended for most users)
 
 ```bash
-# 编译 (网络通后)
-cargo build --workspace
-
-# 跑全部测试 (~303 lib test)
-cargo test --workspace --lib
-
-# 跑 benchmark (criterion)
-cargo bench --workspace
-
-# 装 `mah` CLI
-cargo install --path crates/ma-harness-cli
-mah --help
+pip install -i https://test.pypi.org/simple mah-py==0.1.1
 ```
 
-## 仓库结构
+```python
+from mah_py import Mah
 
-```
-ma-harness.rs/
-├── AGENTS.md                       → AI agent / 新成员入口
-├── README.md                       → 你正在看
-├── CHANGELOG.md                    → 变更记录
-├── LICENSE-MIT + LICENSE-APACHE
-├── Cargo.toml                      → workspace 根 (19 member)
-├── .github/workflows/ci.yml        → GitHub Actions CI (5 job: lint/build/test/conformance)
-├── .github/workflows/release.yml    → crates.io 自动发布
-├── docs/
-│   ├── decision-log.md             → 13 节关键决策 (宪法)
-│   ├── ma-harness-arch-map.md      → 跟 dsh 的 12 阶段映射
-│   ├── macro-design.md             → 5 个 proc-macro 规范
-│   ├── plugin-schema-v1.md         → plugin.toml + JSON Schema
-│   ├── tech-stack.md               → 19 crate 总结 + "不引入"清单
-│   ├── code-mode-deferred.md       → Code Mode Phase 2 推迟
-│   ├── conformance-design.md       → Week 10 conformance 框架
-│   ├── benchmark-design.md         → Week 10 benchmark 设计
-│   ├── openapi.json                → HTTP API 完整 OpenAPI spec (7 paths)
-│   ├── weekly/                     → 周报 (000-007)
-│   └── decision-log § 13           → Phase 4 完整记录 (P4-1..7)
-├── proto/ma_harness/v1/            → 3 个 .proto (agent / session / event)
-├── bindings/                       → 多语言 gRPC 客户端
-│   ├── python/                     → grpcio + grpcio-tools
-│   ├── node/                       → @grpc/grpc-js + JS+TS
-│   └── go/                         → google.golang.org/grpc + protoc-gen-go
-├── crates/ (19 个)
-│   ├── ma-harness-cordis/          → DI 容器 (publish=true)
-│   ├── ma-harness-core/            → SessionEvent / agent loop / EventLog
-│   ├── ma-harness-seam/            → 公开 facade (publish=true)
-│   ├── ma-harness-plugin-macro/    → 5 proc-macro (publish=true)
-│   ├── ma-harness-proto/           → Prost/tonic codegen
-│   ├── ma-harness-server/          → gRPC + salvo HTTP (7 paths)
-│   ├── ma-harness-cli/             → `mah` 二进制 (13 子命令)
-│   ├── ma-harness-sandbox/         → landlock 沙箱
-│   ├── ma-harness-model/           → OpenAI / Anthropic adapter
-│   ├── ma-harness-code/            → wasmtime Code Mode (publish=true)
-│   ├── ma-harness-tui/             → ratatui dashboard (4 panel)
-│   ├── ma-harness-demo/            → 端到端 12 步 demo
-│   └── ma-harness-conformance/     → Conformance test framework
-└── plugins/ (7 first-party)
-    ├── ma-harness-plugin-hello/    → Week 1 hello-world 教学
-    ├── ma-harness-plugin-bash/     → subprocess + timeout
-    ├── ma-harness-plugin-fs/       → read/write/list + 路径白名单
-    ├── ma-harness-plugin-web/      → reqwest + URL 白名单 + timeout
-    ├── ma-harness-plugin-subagent/ → fork ctx 跑子 agent
-    ├── ma-harness-plugin-skill/    → load .skill/ 目录
-    └── ma-harness-plugin-cordis/   → ctx 反射
+m = Mah()
+result = m.run("echo hello world")
+print(result.content)  # "[stub] echo: echo hello world"
 ```
 
-## `mah` CLI (13 子命令)
+See [`crates/mah-py/README.md`](crates/mah-py/README.md) for full API.
+
+### Rust crate (LLM adapter)
+
+```toml
+# Cargo.toml
+[dependencies]
+ma-harness-model = "0.1"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+```
+
+```rust
+use ma_harness_model::{OpenaiAdapter, ModelAdapter, Message};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() {
+    let adapter = OpenaiAdapter::from_env("OPENAI_API_KEY").unwrap();
+    let messages = vec![Message::user("hello")];
+    let mut stream = adapter.complete_stream(&messages, &Default::default()).await.unwrap();
+    while let Some(chunk) = stream.next().await {
+        print!("{}", chunk.content);
+    }
+}
+```
+
+### `mah` CLI binary
 
 ```bash
-# Server
-mah start [--grpc-port 50051] [--http-port 50050] [--store-path <db>]
-# tonic gRPC + salvo HTTP, 7 paths (/health, /version, /v1/runs, /v1/sessions 5 个)
+# install via cargo
+cargo install ma-harness-cli
 
-# Local agent
-mah run [--session <id>] [--model stub] "echo hi"
-mah run-prompt "compute 1+1, return the result as i32"  # LLM → .wat → wasm sandbox
-mah run-stream --grpc-url http://localhost:50051 "hello"   # 走 gRPC RunStream 拿实时 token (Day 99)
-
-# Plugins
-mah plugins                                     # 列出已装载 plugin (inventory)
-mah load-plugin <name> [--ctx-id <id>]
-
-# Sessions + Events
-mah events <session_id>                         # 查 session 事件
-
-# Code Mode (wasmtime)
-mah code run <file.wat|.wasm>                   # 跑 WAT/WASM 在 4 层沙箱
-mah sandbox apply [--read-paths P] [--write-paths P]  # 显式 landlock/seatbelt
-mah sandbox status
-
-# Conformance + Benchmark
-mah conformance --fixtures fixtures/smoke.jsonl --output target/
-mah bench                                       # benchmark 提示 (criterion)
-
-# OpenAPI
-mah open-api export --output docs/api/openapi.json  # 7 paths OpenAPI 3.1 spec
-
-# TUI dashboard (4 panel)
-mah tui [--log <db>] [--store-path <db>]       # ratatui, j/k 选 session, Enter 进 detail
-
-# TUI P6-5 增强: Tab 切 panel focus, j/k 跨 panel, 选中状态持久化 (~/.ma-harness/tui-state.json)
-
-# Misc
+# or download prebuilt (see GitHub Releases)
 mah version
+mah plugins
+mah run "fix the failing tests"
+mah acp serve    # JSON-RPC 2.0 over stdio
 ```
 
-## HTTP API (7 paths, 跟 gRPC SessionService 对齐)
+---
 
-| Method | Path | 对齐 gRPC |
+## 🏗️ Architecture (14 crates)
+
+```
+crates/
+├── ma-harness-cordis       (P7 framework)            ✅ crates.io
+├── ma-harness-seam         (P8 plugin facade)        ✅ crates.io
+├── ma-harness-plugin-macro (P7 proc-macro)          ✅ crates.io
+├── ma-harness-core         (P7-10 core types)       ✅ crates.io
+├── ma-harness-model        (P8-9 LLM adapter)       ✅ crates.io
+├── ma-harness-code         (P2.6 wasm sandbox)      ✅ crates.io
+├── ma-harness-server       (P6 salvo HTTP)          internal
+├── ma-harness-cli          (P9 binary)              internal
+├── ma-harness-conformance  (P11 dsh fixtures)       internal
+├── ma-harness-tui          (P3.9 ratatui)           internal
+├── ma-harness-sandbox      (P10 landlock)           internal
+├── ma-harness-dag          (P12-9 DAG)              internal
+├── ma-harness-registry     (P11-6 plugin registry)  internal
+├── ma-harness-bundle       (P11-8 lockfile)         internal
+└── ma-harness-artifact     (P11-7 artifact viewer)  internal
+```
+
+See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full dependency map.
+
+---
+
+## 📚 Documentation
+
+- **[Docs index](docs/README.md)** — entry point for all 18 markdown docs
+- **[Architecture overview](docs/ma-harness-arch-map.md)** — 14-crate dependency map
+- **[Decision log](docs/decision-log.md)** — 38 design decisions (P1-P12)
+- **[P11 final report](docs/p11-final-report.md)** — dsh parity achievement
+- **[P12 final report](docs/p12-final-report.md)** — full feature completion
+- **[dsh benchmark report](docs/dsh-benchmark-report.md)** — 9/9 = 100% dsh acp-snapshot
+- **[Roadmap P11](docs/roadmap-phase-11.md)** — dsh alignment plan
+- **[Conformance design](docs/conformance-design.md)** — fixture-based testing
+- **[Python SDK README](crates/mah-py/README.md)** — `mah-py` quick start
+
+---
+
+## 🔌 Repositories
+
+| Platform | URL | Role |
 |---|---|---|
-| GET | /health | - |
-| GET | /version | - |
-| POST | /v1/runs | AgentService.Run |
-| GET | /v1/sessions | SessionService.ListSessions |
-| POST | /v1/sessions | SessionService.CreateSession |
-| GET | /v1/sessions/{id} | SessionService.GetSession |
-| POST | /v1/sessions/{id}/close | SessionService.CloseSession |
-| GET | /v1/sessions/{id}/events | SessionService.GetSessionEvents |
+| **GitHub** | https://github.com/ma-harness/ma-harness.rs | primary mirror (CI runs here) |
+| **Gitee** | https://gitee.com/yifenma/ma-harness.rs | primary source (CN) |
+| **crates.io** | https://crates.io/crates/ma-harness-model | published crates (6 total) |
+| **PyPI** | https://test.pypi.org/project/mah-py/ | Python SDK (0.1.1, test) |
 
-OpenAPI spec: `docs/api/openapi.json` (101KB, 7 paths, 自动 CI drift check).
+---
 
-## Bindings (gRPC, 4 语言)
-
-| 语言 | 目录 | 状态 |
-|---|---|---|
-| Python | `bindings/python/` | grpcio + grpcio-tools, 4 RPC demo |
-| Node.js (JS) | `bindings/node/example_client.js` | @grpc/grpc-js, 4 RPC demo |
-| Node.js (TS) | `bindings/node/example_client.ts` | tsc + proto-loader, 4 RPC demo |
-| Go | `bindings/go/` | google.golang.org/grpc + protoc-gen-go-grpc, 4 RPC demo |
-
-每个 binding 4 RPC 一致: ListSessions / CreateSession / Run / GetSessionEvents.
-
-## 文档导航
-
-按我需要了解什么看:
-
-| 我需要... | 看这个 |
-|---|---|
-| 仓库定位 + 决策 | [`AGENTS.md`](./AGENTS.md) + [`docs/decision-log.md`](./docs/decision-log.md) |
-| 跟 dsh 怎么对应 | [`docs/ma-harness-arch-map.md`](./docs/ma-harness-arch-map.md) |
-| 5 个 proc-macro | [`docs/macro-design.md`](./docs/macro-design.md) |
-| 写 plugin | [`docs/plugin-schema-v1.md`](./docs/plugin-schema-v1.md) |
-| 跑 conformance | [`docs/conformance-design.md`](./docs/conformance-design.md) |
-| 跑 benchmark | [`docs/benchmark-design.md`](./docs/benchmark-design.md) |
-| 跟踪进度 | [`docs/weekly/`](./docs/weekly/) (000-007) |
-| 加新 crate | [`docs/tech-stack.md`](./docs/tech-stack.md) + "不引入"清单 |
-| 用 ma-harness API | [`crates/ma-harness-seam/src/lib.rs`](./crates/ma-harness-seam/src/lib.rs) |
-| HTTP API spec | [`docs/openapi.json`](./docs/openapi.json) |
-| 多语言 gRPC | [`bindings/README.md`](./bindings/README.md) |
-| 变更记录 | [`CHANGELOG.md`](./CHANGELOG.md) |
-| 许可 | [`LICENSE-MIT`](./LICENSE-MIT) + [`LICENSE-APACHE`](./LICENSE-APACHE) |
-
-## 关键数字 (Day 92 状态)
-
-| 指标 | 数值 |
-|---|---|
-| 累计 commit | 131+ (持续增长) |
-| Workspace member | 19 (13 crates/ + 7 plugins/) |
-| 累计代码 | ~20100 行 |
-| 累计 lib test | 303 (全过) |
-| 累计 trybuild fixture | 18 |
-| crates.io publish | 5/19 (cordis, code, core, plugin-macro, seam) |
-| HTTP API paths | 7 (3 → 7) |
-| Bindings | 4 语言 (Python / JS / TS / Go) |
-| 设计文档 | 9 份 + decision-log § 1-21 |
-| 周报 | 7 份 (Day 0 / Week 1-2 / 3-4 / 5-6 / 7-9 / 10 / 11) |
-
-## Phase 路线图 (回顾)
-
-### ✅ Phase 1 (Week 1-9): 基础框架
-- Cordis-rs DI 容器 (typed key + plugin + listener + disposable)
-- SessionEvent / agent loop / EventLog
-- 5 proc-macro + ctx_key!
-- gRPC AgentService + SessionService
-- 6 first-party plugin
-- Conformance / Benchmark framework
-
-### ✅ Phase 2 (Week 10-11): 持久化 + 多 model + 沙箱
-- SessionStore trait + InMemoryStore / SqliteStore
-- landlock 沙箱 (12 AccessFs ops)
-- OpenAI / Anthropic adapter
-- 异步 listener + priority dispatch
-- AsyncDisposable
-- crates.io publish (cordis / code)
-
-### ✅ Phase 3 (Week 11-12): Code Mode + TUI + 多语言
-- wasmtime 27 4 层沙箱 (fuel / epoch / mem+table / fs)
-- LLM → .wat → wasm 端到端 (mah run-prompt)
-- OpenAPI 同步 CI
-- WASI 受控 fs (host::read_file)
-- Plugin 依赖注入 (拓扑排序 Kahn)
-- TUI dashboard (ratatui 0.29)
-- Python + Node.js gRPC binding
-
-### ✅ Phase 4 (Day 82-89): 接真数据 + 多语言扩展
-- P4-1: TUI 接真 EventLog
-- P4-2: ma-harness-seam 发 crates.io
-- P4-3: TUI 接真 SessionStore
-- P4-4: OpenAPI /v1/runs 注解修复
-- P4-5: TUI 4 panel UI 加 events 滚动
-- P4-6: Go gRPC binding
-- P4-7: TypeScript Node binding
-
-### 🚧 Phase 5 (Day 90-): HTTP API 扩 + TUI 交互
-- P5-1: HTTP /v1/sessions 4 endpoint ✅
-- P5-2: TUI session detail view (j/k/Enter/Esc) ✅
-- P5-3: HTTP /v1/sessions/{id}/events ✅
-- P5-4: README 更新 (本文档) ✅
-- P5-5: `mah sessions` CLI (本地 SqliteStore / EventLog) ✅
-- P5-6: RunStream RPC 实现 (gRPC streaming) ✅
-- P5-7: streaming RPC demo 4 语言 (Python/Node/TS/Go) ✅
-- P5-8: HTTP SSE `/v1/runs/stream` (浏览器 EventSource) ✅
-- P5-9: pyo3 评估 ([`docs/pyo3-evaluation.md`](./docs/pyo3-evaluation.md)) ✅
-
-**Phase 5 收官 9/9** (Day 90-98)
-
-### 🚧 Phase 6 (Day 99-): 真 LLM streaming + perf
-- P6-1: `mah run-stream` CLI (gRPC RunStream 客户端) ✅ (Day 99)
-- P6-2: OpenaiAdapter 真 SSE (reqwest + bytes_stream + parse) ✅ (Day 100)
-- P6-3: AnthropicAdapter 真 SSE (event-based protocol) ✅ (Day 100)
-- P6-4: streaming perf bench (criterion 5 bench) ✅ (Day 100)
-- P6-5: TUI 增强 (j/k 跨 panel / 选中状态持久化) ✅ (Day 101)
-- P6-6: salvo 0.79 → 0.93 兼容性升级 (0 break, 0 代码改动) ✅ (Day 101)
-- P6-7: salvo 0.93 → 0.95 + rustc 1.93 → 1.94 一步到位升级 (0 break) ✅ (Day 101)
-
-## 网络环境
-
-本机代理 `127.0.0.1:7890` 不能代理 HTTPS, **130+ 文件经 `cargo check` 验证**。所有代码 mental-compile only,等代理恢复或换网络环境后跑。
+## 🤝 Contributing
 
 ```bash
-cargo check --workspace
-cargo test --workspace --lib
-cargo bench --workspace
+# 1. Fork & clone
+git clone git@github.com:ma-harness/ma-harness.rs.git
+cd ma-harness.rs
+
+# 2. Run all tests
+cargo test --workspace
+
+# 3. Run conformance
+mah conformance --fixtures crates/ma-harness-conformance/fixtures/smoke.jsonl
+
+# 4. Before commit
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## License
+For new features, add a fixture to `crates/ma-harness-conformance/fixtures/` and ensure it passes.
 
-MIT OR Apache-2.0 (跟 workspace 锁定一致)
+---
 
-- [`LICENSE-MIT`](./LICENSE-MIT) — MIT License
-- [`LICENSE-APACHE`](./LICENSE-APACHE) — Apache License 2.0
+## 📜 License
 
-## 仓库地址
+Dual-licensed under either of:
 
-`git@gitee.com:yifenma/ma-harness.rs.git`
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.

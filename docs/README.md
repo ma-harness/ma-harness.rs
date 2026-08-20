@@ -4,6 +4,8 @@
 > **P12-3 v1**: Markdown 文档已经齐全, 本 README 提供"按角色 / 按主题"两个维度的导航.
 > **v2**: 接 mdbook / mkdocs 静态站 (业务方驱动)
 
+📖 **根 README**: [English](../README.md) | [简体中文](../README.zh-CN.md) — 跟 dsh 对比 / 完成度 / 快速开始 / 功能矩阵
+
 ---
 
 ## 按角色 (Reader's Path)
