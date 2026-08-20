@@ -282,7 +282,7 @@ cargo test -p ma_harness_conformance
 cargo run -p ma_harness_conformance --bin run-conformance -- --fixtures fixtures/ --output target/
 ```
 
-## 11. P11+ updates (Week 10 之后)
+## 11. P11+ updates (after Week 10)
 
 - **P11-1.5**: `convert_input` derivation now emits full event chain (RunStart + UserInput + ModelResponse); 2 failing unit tests + 1 smoke test fixed; dsh_synthetic 28.6% → 100%.
 - **P11-2**: dsh 9 acp-snapshot fixtures (real dsh repo, not converted synth) → 9/9 = 100% via Python conversion script (`dsh_snap_convert.py`). Adds the `--dsh` flag to `mah conformance`.
