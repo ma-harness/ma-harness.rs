@@ -56,7 +56,7 @@
   "name": "my-plugin",
   "version": "0.1.0",
   "description": "My awesome plugin",
-  "author": "alice@example.com",
+  "author": "user@example.com",
   "source": {
     "type": "local",
     "path": "./plugins/my-plugin"
@@ -77,7 +77,7 @@
         "name": "my-plugin",
         "version": "0.1.0",
         "description": "My plugin",
-        "author": "alice@example.com",
+        "author": "user@example.com",
         "source": { "type": "local", "path": "./my-plugin" },
         "tags": ["utility"],
         "created_at": "2026-08-20T08:00:00Z",

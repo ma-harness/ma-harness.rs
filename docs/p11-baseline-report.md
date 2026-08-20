@@ -98,19 +98,19 @@
 
 ```bash
 # Build mah CLI
-$env:CARGO_TARGET_DIR='D:\rust_target'
+$env:CARGO_TARGET_DIR='${CARGO_TARGET_DIR:-target}'
 cargo build -p ma-harness-cli --bin mah
 
 # 跑 smoke
-& 'D:\rust_target\debug\mah.exe' conformance `
+& '${CARGO_TARGET_DIR:-target}\debug\mah.exe' conformance `
   --fixtures 'crates\ma-harness-conformance\fixtures\smoke.jsonl' `
-  --output 'D:\tmp\p11-smoke'
+  --output '${TMPDIR:-/tmp}/p11-smoke'
 
 # 跑 dsh_synthetic (走 dsh 转换层)
-& 'D:\rust_target\debug\mah.exe' conformance `
+& '${CARGO_TARGET_DIR:-target}\debug\mah.exe' conformance `
   --fixtures 'crates\ma-harness-conformance\fixtures\dsh_synthetic.jsonl' `
   --dsh `
-  --output 'D:\tmp\p11-dsh-syn'
+  --output '${TMPDIR:-/tmp}/p11-dsh-syn'
 ```
 
 报告输出:
@@ -121,8 +121,8 @@ cargo build -p ma-harness-cli --bin mah
 
 | Fixture | 命令 | 结果 | 报告路径 |
 |---|---|---|---|
-| smoke.jsonl | `mah conformance --fixtures smoke.jsonl --output D:\tmp\p11-smoke-mah` | **5/8 = 62.5%** (3 by design) | `D:\tmp\p11-smoke-mah\conformance-report.md` |
-| dsh_synthetic.jsonl | `mah conformance --fixtures dsh_synthetic.jsonl --dsh --output D:\tmp\p11-dsh-syn-mah` | **7/7 = 100%** ✅ (1ms) | `D:\tmp\p11-dsh-syn-mah\conformance-report.md` |
+| smoke.jsonl | `mah conformance --fixtures smoke.jsonl --output ${TMPDIR:-/tmp}/p11-smoke-mah` | **5/8 = 62.5%** (3 by design) | `${TMPDIR:-/tmp}/p11-smoke-mah\conformance-report.md` |
+| dsh_synthetic.jsonl | `mah conformance --fixtures dsh_synthetic.jsonl --dsh --output ${TMPDIR:-/tmp}/p11-dsh-syn-mah` | **7/7 = 100%** ✅ (1ms) | `${TMPDIR:-/tmp}/p11-dsh-syn-mah\conformance-report.md` |
 
 **结论**: `mah` binary 真跑确认 100% dsh_synthetic 通过率, 跟 cargo test 一致. 转换层 + framework 端到端 OK.
 

@@ -1337,7 +1337,7 @@ rustup default 1.94
 ### 决策
 
 1. **P11-2 跑 dsh 内部 acp-snapshot** (不是 Terminal Bench 2.1 / Toolathlon)
-   - dsh 仓库 (本地 `D:\workspace\learn\deepseek-ai\deepseek-harness`) 含 9 个 acp-snapshot fixture
+   - dsh 仓库 (本地 `${DSH_REPO} (本地 dsh 仓库, 通过 $DSH_FIXTURE_ROOT 环境变量指定)`) 含 9 个 acp-snapshot fixture
    - Terminal Bench 2.1 / Toolathlon 是外部 LLM benchmark, **不在 dsh 仓库**, P11-2 暂不做
 2. **写一次性 Python 转换脚本** `dsh_snap_convert.py`:
    - dsh `session.jsonl` 事件 → ma-harness FixtureEvent
@@ -1401,7 +1401,7 @@ rustup default 1.94
 - **replay identity check**: input.events == expected_output.events (type-only)
   - 理由: dsh 真实 payload 复杂 (含 UUID, path, etc), replay 后必然变
   - 验证目标: ma-harness 能正确 replay 同样 type 序列
-- **dsh 仓库本地路径**: `D:\workspace\learn\deepseek-ai\deepseek-harness`
+- **dsh 仓库本地路径**: `${DSH_REPO} (本地 dsh 仓库, 通过 $DSH_FIXTURE_ROOT 环境变量指定)`
   - 业务方 clone 后改 Python 脚本 `DSH_FIXTURE_ROOT` 即可
 
 ### 后续 (P11-2.5+)

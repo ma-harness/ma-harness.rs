@@ -32,7 +32,7 @@ name: bash
 version: 0.1.0
 description: 执行 shell 命令
 authors:
-  - yifenma <yifenma@example.com>
+  - yifenma <user@example.com>
 license: MIT
 entry: lib::BashPlugin
 seam:

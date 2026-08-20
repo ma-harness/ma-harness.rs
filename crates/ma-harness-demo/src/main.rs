@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use ma_harness_cordis::Context;
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
+// ma-harness-demo 假设从 workspace 根目录跑 (`cargo run -p ma-harness-demo`), 用相对路径
 use ma_harness_plugin_bash::{BashPlugin, BashService, MAX_RUNTIME_MS};
 use ma_harness_plugin_cordis::{CordisPlugin, CordisService};
 use ma_harness_plugin_fs::{FsPlugin, FsService, READ_ALLOW_LIST};
@@ -56,7 +57,7 @@ async fn main() -> Result<()> {
     // ------------------------------------------------------------------
     println!("\n[2] 业务方覆盖默认 typed key");
     ctx.set(MAX_RUNTIME_MS, 10_000u32);  // bash 默认 10s
-    ctx.set(READ_ALLOW_LIST, vec!["D:\\workspace\\learn\\rust\\ma-harness.rs".to_string()]);
+    ctx.set(READ_ALLOW_LIST, vec![".".to_string()]);  // 允许读当前 workspace 根目录 (cargo run 从根跑)
     ctx.set(EGRESS_ALLOW_LIST, vec!["https://api.github.com".to_string()]);
     ctx.set(MAX_DEPTH, 2u32);  // subagent 最多 2 层递归
     ctx.set(SKILLS_DIR, "./skills".to_string());
@@ -143,7 +144,7 @@ async fn main() -> Result<()> {
     // ------------------------------------------------------------------
     println!("\n[9] FsService 读 README.md (在白名单内)");
     let fs_svc = ctx.service::<FsService>().expect("FsService 注入");
-    let readme = std::path::PathBuf::from("D:\\workspace\\learn\\rust\\ma-harness.rs\\README.md");
+    let readme = std::path::PathBuf::from("README.md");  // 相对 workspace 根
     if readme.exists() {
         let content = fs_svc.read_file(&ctx, &readme).await?;
         let first_line = content.lines().next().unwrap_or("");

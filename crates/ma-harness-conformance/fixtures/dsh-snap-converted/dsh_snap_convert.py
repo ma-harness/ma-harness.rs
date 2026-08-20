@@ -20,11 +20,18 @@ Mapping to ma-harness dsh_format (one fixture per dsh folder):
 - expected_output.messages: empty (dsh doesn't have assistant messages in expected)
 """
 import json
+import os
 import sys
 from pathlib import Path
 
-DSH_FIXTURE_ROOT = Path(r"D:\workspace\learn\deepseek-ai\deepseek-harness\packages\test-support\acp-snapshot\tests\fixtures")
-OUTPUT_JSONL = Path(r"D:\tmp\dsh_snap_converted.jsonl")
+DSH_FIXTURE_ROOT = Path(os.environ.get(
+    "DSH_FIXTURE_ROOT",
+    str(Path.home() / "deepseek-harness/packages/test-support/acp-snapshot/tests/fixtures")
+))
+OUTPUT_JSONL = Path(os.environ.get(
+    "DSH_OUTPUT_JSONL",
+    str(Path(__file__).parent / "dsh_snap.jsonl")
+))
 
 
 def dsh_event_type_to_ma(dsh_type: str) -> str:

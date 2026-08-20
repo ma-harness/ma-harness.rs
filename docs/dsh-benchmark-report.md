@@ -20,7 +20,7 @@
 
 ## 1. dsh acp-snapshot 来源
 
-- **本地 dsh 仓库**: `D:\workspace\learn\deepseek-ai\deepseek-harness` (v0.1, 2026-08-20)
+- **本地 dsh 仓库**: `${DSH_REPO} (本地 dsh 仓库, 通过 $DSH_FIXTURE_ROOT 环境变量指定)` (v0.1, 2026-08-20)
 - **fixture 根**: `packages/test-support/acp-snapshot/tests/fixtures/`
   - `suite/` (6 fixture): authored-error, blocked-log, no-model, pin-turn, plain-turn, shared-pin
   - `record-suite/` (3 fixture): rec-child, rec-pin, rec-skip
@@ -35,7 +35,7 @@
 
 ## 2. 转换 (P11-2.1 / P11-2.2)
 
-写 `D:\tmp\dsh_snap_convert.py` 一次性脚本:
+写 `${TMPDIR:-/tmp}/dsh_snap_convert.py` 一次性脚本:
 - dsh `session.jsonl` 事件 → ma-harness FixtureEvent (`type` + `payload`)
 - event type 映射:
   - `session` → `SessionStart`
@@ -47,26 +47,26 @@
   - `hook/result` → `ApprovalDecision`
 - `expected_output.events` 用同样 `type` + `data: {}` 包装 (replay identity check)
 
-**输出**: `D:\tmp\dsh_snap_converted.jsonl` (9 fixture)
+**输出**: `${TMPDIR:-/tmp}/dsh_snap_converted.jsonl` (9 fixture)
 
 ---
 
 ## 3. 跑分 (P11-2.3)
 
 ```bash
-& 'D:\rust_target\debug\mah.exe' conformance `
-  --fixtures 'D:\tmp\dsh_snap_converted.jsonl' `
+& '${CARGO_TARGET_DIR:-target}\debug\mah.exe' conformance `
+  --fixtures '${TMPDIR:-/tmp}/dsh_snap_converted.jsonl' `
   --dsh `
-  --output 'D:\tmp\p11-dsh-snap'
+  --output '${TMPDIR:-/tmp}/p11-dsh-snap'
 ```
 
 **结果**:
 ```
-Loaded 9 fixtures from D:\tmp\dsh_snap_converted.jsonl
+Loaded 9 fixtures from ${TMPDIR:-/tmp}/dsh_snap_converted.jsonl
 Conformance: 9 / 9 passed (100.0%) in 1ms
 ```
 
-**报告**: `D:\tmp\p11-dsh-snap\conformance-report.md` + `.json`
+**报告**: `${TMPDIR:-/tmp}/p11-dsh-snap\conformance-report.md` + `.json`
 
 ---
 
@@ -135,20 +135,20 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 ```bash
 # 1. 拿 dsh 仓库
 git clone https://gitee.com/yifenma/deepseek-harness.git
-# (实际仓库路径可能不同, P11-2 用的本地路径 D:\workspace\learn\deepseek-ai\deepseek-harness)
+# (实际仓库路径可能不同, P11-2 用的本地路径 ${DSH_REPO} (本地 dsh 仓库, 通过 $DSH_FIXTURE_ROOT 环境变量指定))
 
 # 2. 跑 dsh_snap_convert.py (一次性脚本)
-python d:\tmp\dsh_snap_convert.py
-# 输出: D:\tmp\dsh_snap_converted.jsonl
+python ${TMPDIR:-/tmp}/dsh_snap_convert.py
+# 输出: ${TMPDIR:-/tmp}/dsh_snap_converted.jsonl
 
 # 3. 跑 mah conformance
-& 'D:\rust_target\debug\mah.exe' conformance `
-  --fixtures 'D:\tmp\dsh_snap_converted.jsonl' `
+& '${CARGO_TARGET_DIR:-target}\debug\mah.exe' conformance `
+  --fixtures '${TMPDIR:-/tmp}/dsh_snap_converted.jsonl' `
   --dsh `
-  --output 'D:\tmp\p11-dsh-snap'
+  --output '${TMPDIR:-/tmp}/p11-dsh-snap'
 
 # 4. 看报告
-cat D:\tmp\p11-dsh-snap\conformance-report.md
+cat ${TMPDIR:-/tmp}/p11-dsh-snap\conformance-report.md
 ```
 
 ---
