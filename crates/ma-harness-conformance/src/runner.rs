@@ -211,7 +211,10 @@ impl ConformanceRunner {
     // ---------- 私有 ----------
 
     /// 构建 ctx (目前是简化版, plugin 装载留给 Phase 2)
-    fn build_ctx(&self, _fixture: &Fixture) -> Result<Arc<ma_harness_cordis::Context>, RunnerError> {
+    fn build_ctx(
+        &self,
+        _fixture: &Fixture,
+    ) -> Result<Arc<ma_harness_cordis::Context>, RunnerError> {
         // Phase 1: 不真装载 plugin, 留 fixture.input.plugins 字段给未来
         // Phase 2: 用 plugin_dir + fixture.input.plugins 真装载
         Ok(Arc::new(ma_harness_cordis::Context::new()))
@@ -230,9 +233,8 @@ impl ConformanceRunner {
         &self,
         fixture: &Fixture,
     ) -> Result<Vec<FixtureEvent>, RunnerError> {
-        let log = EventLog::open_in_memory().map_err(|e| {
-            RunnerError::EventLog(format!("open_in_memory failed: {e}"))
-        })?;
+        let log = EventLog::open_in_memory()
+            .map_err(|e| RunnerError::EventLog(format!("open_in_memory failed: {e}")))?;
 
         for input_event in &fixture.input.events {
             let session_event = fixture_to_session(&fixture.input.session_id, input_event)
@@ -250,7 +252,11 @@ impl ConformanceRunner {
             })
             .map_err(|e| RunnerError::EventLog(format!("query failed: {e}")))?;
 
-        let actual: Vec<FixtureEvent> = page.events.iter().map(|s| session_to_fixture(&s.event)).collect();
+        let actual: Vec<FixtureEvent> = page
+            .events
+            .iter()
+            .map(|s| session_to_fixture(&s.event))
+            .collect();
 
         Ok(actual)
     }
@@ -310,7 +316,12 @@ mod tests {
         let runner = ConformanceRunner::new();
         let f = sample_fixture();
         let r = runner.run_fixture(&f);
-        assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+        assert!(
+            r.is_pass(),
+            "error={:?} diffs={:?}",
+            r.error,
+            r.compare.diffs
+        );
         assert_eq!(r.actual_events.len(), 1);
         assert_eq!(r.fixture_name, "sample");
     }
@@ -403,7 +414,12 @@ mod tests {
         let runner = ConformanceRunner::new();
         let f = multi_event_fixture();
         let r = runner.run_fixture(&f);
-        assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+        assert!(
+            r.is_pass(),
+            "error={:?} diffs={:?}",
+            r.error,
+            r.compare.diffs
+        );
         // 4 个事件按 input 顺序
         assert_eq!(r.actual_events.len(), 4);
         assert_eq!(r.actual_events[0].event_type, "RunStart");

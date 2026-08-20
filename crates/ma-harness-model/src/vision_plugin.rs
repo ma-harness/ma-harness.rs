@@ -141,22 +141,12 @@ impl VisionTool {
 
         let description = match backend {
             VisionBackend::Openai => {
-                crate::vision_tool::describe_with_openai(
-                    &self.api_key,
-                    &model,
-                    &prompt,
-                    &images,
-                )
-                .await
+                crate::vision_tool::describe_with_openai(&self.api_key, &model, &prompt, &images)
+                    .await
             }
             VisionBackend::Anthropic => {
-                crate::vision_tool::describe_with_anthropic(
-                    &self.api_key,
-                    &model,
-                    &prompt,
-                    &images,
-                )
-                .await
+                crate::vision_tool::describe_with_anthropic(&self.api_key, &model, &prompt, &images)
+                    .await
             }
         }
         .map_err(|e| anyhow::anyhow!("vision API failed: {e}"))?;
@@ -218,8 +208,7 @@ mod tests {
 
     #[test]
     fn vision_tool_with_model_override() {
-        let tool = VisionTool::new("sk-test", VisionBackend::Openai)
-            .with_model("gpt-4-turbo");
+        let tool = VisionTool::new("sk-test", VisionBackend::Openai).with_model("gpt-4-turbo");
         assert_eq!(tool.model_override, Some("gpt-4-turbo".to_string()));
     }
 

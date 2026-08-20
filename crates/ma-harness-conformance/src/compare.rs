@@ -60,16 +60,28 @@ impl Diff {
             Self::ExtraEvent { index, actual_type } => {
                 format!("[#{index}] extra event: {actual_type}")
             }
-            Self::MissingEvent { index, expected_type } => {
+            Self::MissingEvent {
+                index,
+                expected_type,
+            } => {
                 format!("[#{index}] missing event: {expected_type}")
             }
-            Self::TypeMismatch { index, expected_type, actual_type } => {
+            Self::TypeMismatch {
+                index,
+                expected_type,
+                actual_type,
+            } => {
                 format!("[#{index}] type mismatch: expected={expected_type}, actual={actual_type}")
             }
             Self::MissingField { index, key } => {
                 format!("[#{index}] missing field: {key}")
             }
-            Self::FieldMismatch { index, key, expected, actual } => {
+            Self::FieldMismatch {
+                index,
+                key,
+                expected,
+                actual,
+            } => {
                 format!("[#{index}] field {key}: expected={expected}, actual={actual}")
             }
         }
@@ -199,7 +211,10 @@ mod tests {
         }
     }
 
-    fn exp(ty: &str, payload_match: std::collections::BTreeMap<String, serde_json::Value>) -> ExpectedEvent {
+    fn exp(
+        ty: &str,
+        payload_match: std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> ExpectedEvent {
         ExpectedEvent {
             event_type: ty.to_string(),
             payload_match,

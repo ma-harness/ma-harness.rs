@@ -233,15 +233,14 @@ mod tests {
         let approver = Arc::new(TuiApprover::new());
         let req = make_request("tc-v2-1");
         let svc2 = approver.clone();
-        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> =
-            tokio::spawn(async move {
-                ma_harness_cordis::ApprovalService::request_approval(
-                    svc2.channel.as_ref(),
-                    &Context::new(),
-                    &req,
-                )
-                .await
-            });
+        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> = tokio::spawn(async move {
+            ma_harness_cordis::ApprovalService::request_approval(
+                svc2.channel.as_ref(),
+                &Context::new(),
+                &req,
+            )
+            .await
+        });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(approver.channel.pending_count(), 1);
 
@@ -257,15 +256,14 @@ mod tests {
         let approver = Arc::new(TuiApprover::new());
         let req = make_request("tc-v2-2");
         let svc2 = approver.clone();
-        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> =
-            tokio::spawn(async move {
-                ma_harness_cordis::ApprovalService::request_approval(
-                    svc2.channel.as_ref(),
-                    &Context::new(),
-                    &req,
-                )
-                .await
-            });
+        let task: tokio::task::JoinHandle<Result<ApprovalDecision, _>> = tokio::spawn(async move {
+            ma_harness_cordis::ApprovalService::request_approval(
+                svc2.channel.as_ref(),
+                &Context::new(),
+                &req,
+            )
+            .await
+        });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let denied = approver.deny("tc-v2-2", "user said no");
         assert!(denied);
@@ -301,4 +299,3 @@ mod tests {
         assert!(!approver.deny("ghost", "x"));
     }
 }
-

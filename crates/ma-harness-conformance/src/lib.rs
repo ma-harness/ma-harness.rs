@@ -59,19 +59,27 @@
 #![allow(missing_docs)] // 2026-08-18: 内部 crate, 暂不强制 doc (Phase 2 release 前补)
 #![warn(unused_must_use)]
 
-pub mod fixture;
-pub mod runner;
 pub mod compare;
-pub mod report;
 pub mod convert;
 pub mod dsh_format;
+pub mod fixture;
+pub mod report;
+pub mod runner;
 
-pub use fixture::{Fixture, FixtureCategory, FixtureInput, FixtureOutput, FixtureEvent, FixtureLoader, FixtureError};
+pub use fixture::{
+    Fixture, FixtureCategory, FixtureInput, FixtureOutput, FixtureEvent, FixtureLoader,
+    FixtureError,
+};
 pub use runner::{ConformanceRunner, ConformanceResult, RunnerError, RunnerStats};
 pub use compare::{CompareEngine, Diff, CompareResult, CompareError};
 pub use report::{ConformanceReport, ReportFormat, ReportSummary, ReportWriter, ReportError};
-pub use convert::{event_type_from_str, event_type_to_str, fixture_to_session, session_to_fixture, ConvertError};
-pub use dsh_format::{DshFixture, DshInput, DshMessage, DshEvent, DshExpectedOutput, dsh_to_fixture, parse_dsh_jsonl, DshError};
+pub use convert::{
+    event_type_from_str, event_type_to_str, fixture_to_session, session_to_fixture, ConvertError,
+};
+pub use dsh_format::{
+    DshFixture, DshInput, DshMessage, DshEvent, DshExpectedOutput, dsh_to_fixture, parse_dsh_jsonl,
+    DshError,
+};
 
 // 重新导出 ma-harness 公开类型, 业务方不用自己引
 pub use ma_harness_cordis;

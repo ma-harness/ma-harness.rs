@@ -234,10 +234,20 @@ mod tests {
             check_snake_case_or_panic("foo_bar_BAZ");
         });
         let err = result.unwrap_err();
-        let msg = err.downcast_ref::<String>().map(String::as_str)
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
             .or_else(|| err.downcast_ref::<&'static str>().copied())
             .unwrap_or("");
-        assert!(msg.contains("位置 8"), "should report bad char position, got: {}", msg);
-        assert!(msg.contains("ctx_key!"), "should hint at proc-macro, got: {}", msg);
+        assert!(
+            msg.contains("位置 8"),
+            "should report bad char position, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("ctx_key!"),
+            "should hint at proc-macro, got: {}",
+            msg
+        );
     }
 }

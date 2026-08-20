@@ -61,10 +61,7 @@ impl ImageAttachment {
         let media_type = guess_media_type(path)
             .unwrap_or("application/octet-stream")
             .to_string();
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from);
+        let filename = path.file_name().and_then(|n| n.to_str()).map(String::from);
         Ok(Self {
             media_type,
             data,
@@ -112,10 +109,7 @@ fn guess_media_type(path: &std::path::Path) -> Option<&'static str> {
 /// let body = OpenaiAdapter::new("sk-...").with_model("gpt-4o")
 ///     .build_vision_request_body("describe", &[ImageAttachment::from_path(path)?]);
 /// ```
-pub fn build_openai_vision_content(
-    text: &str,
-    images: &[ImageAttachment],
-) -> serde_json::Value {
+pub fn build_openai_vision_content(text: &str, images: &[ImageAttachment]) -> serde_json::Value {
     let mut content = vec![serde_json::json!({"type": "text", "text": text})];
     for img in images {
         let data_url = format!("data:{};base64,{}", img.media_type, img.base64());
@@ -128,10 +122,7 @@ pub fn build_openai_vision_content(
 }
 
 /// Anthropic vision helper — 构造 vision content array
-pub fn build_anthropic_vision_content(
-    text: &str,
-    images: &[ImageAttachment],
-) -> serde_json::Value {
+pub fn build_anthropic_vision_content(text: &str, images: &[ImageAttachment]) -> serde_json::Value {
     let mut content = vec![serde_json::json!({"type": "text", "text": text})];
     for img in images {
         content.push(serde_json::json!({
@@ -153,11 +144,11 @@ mod tests {
     fn png_bytes() -> Vec<u8> {
         // 1x1 transparent PNG
         vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
-            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-            0x42, 0x60, 0x82,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ]
     }
 
@@ -225,8 +216,18 @@ mod tests {
         let content = build_openai_vision_content("compare", &[img1, img2]);
         let arr = content.as_array().unwrap();
         assert_eq!(arr.len(), 3); // text + 2 images
-        assert!(arr[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
-        assert!(arr[2]["image_url"]["url"].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
+        assert!(
+            arr[1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert!(
+            arr[2]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
     }
 
     #[test]

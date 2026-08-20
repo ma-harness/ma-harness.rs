@@ -56,10 +56,13 @@ async fn main() -> Result<()> {
     // 2. 业务方覆盖默认 typed key (演示 "活的 ctx")
     // ------------------------------------------------------------------
     println!("\n[2] 业务方覆盖默认 typed key");
-    ctx.set(MAX_RUNTIME_MS, 10_000u32);  // bash 默认 10s
-    ctx.set(READ_ALLOW_LIST, vec![".".to_string()]);  // 允许读当前 workspace 根目录 (cargo run 从根跑)
-    ctx.set(EGRESS_ALLOW_LIST, vec!["https://api.github.com".to_string()]);
-    ctx.set(MAX_DEPTH, 2u32);  // subagent 最多 2 层递归
+    ctx.set(MAX_RUNTIME_MS, 10_000u32); // bash 默认 10s
+    ctx.set(READ_ALLOW_LIST, vec![".".to_string()]); // 允许读当前 workspace 根目录 (cargo run 从根跑)
+    ctx.set(
+        EGRESS_ALLOW_LIST,
+        vec!["https://api.github.com".to_string()],
+    );
+    ctx.set(MAX_DEPTH, 2u32); // subagent 最多 2 层递归
     ctx.set(SKILLS_DIR, "./skills".to_string());
     ctx.set(GREETING_TEMPLATE, "Hi {who}, welcome!".to_string());
 
@@ -82,8 +85,10 @@ async fn main() -> Result<()> {
     println!("    session: {}", resp.session_id);
     println!("    run_id: {}", resp.run_id);
     println!("    content: {}", resp.model_response.content);
-    println!("    tokens: prompt={} completion={}",
-        resp.total_prompt_tokens, resp.total_completion_tokens);
+    println!(
+        "    tokens: prompt={} completion={}",
+        resp.total_prompt_tokens, resp.total_completion_tokens
+    );
 
     // ------------------------------------------------------------------
     // 4. 查 EventLog, 输出所有 model-visible 事件
@@ -92,10 +97,16 @@ async fn main() -> Result<()> {
     let page = log.get_model_visible("demo-session")?;
     println!("    找到 {} 个 model-visible 事件:", page.events.len());
     for e in &page.events {
-        println!("    - seq={:>3} type={:<20} severity={:<5}",
-            e.seq, e.event.event_type, e.event.severity);
+        println!(
+            "    - seq={:>3} type={:<20} severity={:<5}",
+            e.seq, e.event.event_type, e.event.severity
+        );
     }
-    assert_eq!(page.events.len(), 4, "应该 4 个 model-visible 事件 (RunStart/ModelRequest/ModelResponse/RunEnd)");
+    assert_eq!(
+        page.events.len(),
+        4,
+        "应该 4 个 model-visible 事件 (RunStart/ModelRequest/ModelResponse/RunEnd)"
+    );
 
     // ------------------------------------------------------------------
     // 5. 演示 BashService 跑 shell 命令
@@ -133,7 +144,9 @@ async fn main() -> Result<()> {
     // 8. 演示 SubagentService fork ctx
     // ------------------------------------------------------------------
     println!("\n[8] SubagentService fork ctx 跑子 agent");
-    let sub = ctx.service::<SubagentService>().expect("SubagentService 注入");
+    let sub = ctx
+        .service::<SubagentService>()
+        .expect("SubagentService 注入");
     let sub_result = sub.spawn_agent(&ctx, "sub hello").await?;
     println!("    sub_session_id: {}", sub_result.sub_session_id);
     println!("    sub_content: {}", sub_result.content);
@@ -144,7 +157,7 @@ async fn main() -> Result<()> {
     // ------------------------------------------------------------------
     println!("\n[9] FsService 读 README.md (在白名单内)");
     let fs_svc = ctx.service::<FsService>().expect("FsService 注入");
-    let readme = std::path::PathBuf::from("README.md");  // 相对 workspace 根
+    let readme = std::path::PathBuf::from("README.md"); // 相对 workspace 根
     if readme.exists() {
         let content = fs_svc.read_file(&ctx, &readme).await?;
         let first_line = content.lines().next().unwrap_or("");

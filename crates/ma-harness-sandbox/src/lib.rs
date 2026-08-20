@@ -229,18 +229,27 @@ impl Enforcer for LinuxLandlockEnforcer {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
                     path: path.clone(),
-                    source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{e:?}"),
+                    )),
                 })?;
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(fd, Access::from(AccessFs::ReadFile)))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
-                        source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))),
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("{e:?}"),
+                        )),
                     })?
                     .add_rule(PathBeneath::new(fd, Access::from(AccessFs::ReadDir)))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
-                        source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))),
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("{e:?}"),
+                        )),
                     })?;
             }
         }
@@ -250,13 +259,19 @@ impl Enforcer for LinuxLandlockEnforcer {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
                     path: path.clone(),
-                    source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{e:?}"),
+                    )),
                 })?;
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(fd, Access::from(AccessFs::WriteFile)))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
-                        source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}"))),
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("{e:?}"),
+                        )),
                     })?;
             }
         }

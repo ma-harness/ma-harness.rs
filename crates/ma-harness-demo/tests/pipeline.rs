@@ -170,7 +170,10 @@ fn ctx_dispose_marks_disposed() {
 fn ctx_fork_shares_services() {
     let parent = make_ctx();
     // 业务方 override + 设 EGRESS_ALLOW_LIST 给子 ctx
-    parent.set(EGRESS_ALLOW_LIST, vec!["https://parent-allowed.example.com".to_string()]);
+    parent.set(
+        EGRESS_ALLOW_LIST,
+        vec!["https://parent-allowed.example.com".to_string()],
+    );
 
     let child = parent.fork();
     // service 通过 Arc 共享

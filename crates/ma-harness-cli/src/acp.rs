@@ -128,7 +128,9 @@ impl AcpHandler {
         Self {
             agent,
             sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
-            cancel_flags: std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
+            cancel_flags: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::BTreeMap::new(),
+            )),
         }
     }
 
@@ -162,15 +164,18 @@ impl AcpHandler {
             .map(String::from);
 
         // P12-6 v2: 跟踪 session metadata
-        self.sessions.lock().expect("sessions lock poisoned").insert(
-            session_id.clone(),
-            SessionInfo {
-                id: session_id.clone(),
-                created_at: std::time::SystemTime::now(),
-                cwd,
-                message_count: 0,
-            },
-        );
+        self.sessions
+            .lock()
+            .expect("sessions lock poisoned")
+            .insert(
+                session_id.clone(),
+                SessionInfo {
+                    id: session_id.clone(),
+                    created_at: std::time::SystemTime::now(),
+                    cwd,
+                    message_count: 0,
+                },
+            );
         self.cancel_flags
             .lock()
             .expect("cancel lock poisoned")
@@ -488,7 +493,8 @@ mod tests {
 
     #[test]
     fn jsonrpc_request_parse() {
-        let raw = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}"#;
+        let raw =
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}"#;
         let req: JsonRpcRequest = serde_json::from_str(raw).unwrap();
         assert_eq!(req.method, "initialize");
         assert_eq!(req.id, Some(serde_json::json!(1)));

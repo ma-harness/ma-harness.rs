@@ -1,4 +1,4 @@
-﻿//! Context — DI 容器 + typed key storage + plugin registry
+//! Context — DI 容器 + typed key storage + plugin registry
 //!
 //! 整个 ma-harness 运行时核心. 所有 service / tool / listener 都从 ctx 取数据.
 //!
@@ -156,7 +156,7 @@ impl Context {
     // Service inject / fetch
     // ========================================================================
 
-        /// 注入一个 service (用户自己 `MyService::install(&ctx)?` 拿到实例, 调这个塞)
+    /// 注入一个 service (用户自己 `MyService::install(&ctx)?` 拿到实例, 调这个塞)
     ///
     /// 2026-08-18 (Day 53) 修复: 加 `S: Any` bound, 让 Arc<S> 能 coerce 到 Arc<dyn Any + Send + Sync>
     pub fn inject<S: Service + Any>(&self, service: Arc<S>) {
@@ -199,7 +199,8 @@ impl Context {
 
     /// 取一个 service, 找不到时返回错误
     pub fn service_or<S: Service>(&self, name: &'static str) -> Result<Arc<S>, CordisError> {
-        self.service::<S>().ok_or(CordisError::ServiceNotFound(name))
+        self.service::<S>()
+            .ok_or(CordisError::ServiceNotFound(name))
     }
 
     // ========================================================================
@@ -261,16 +262,18 @@ impl Context {
     /// 引用共享给子 ctx. Phase 2 加 `Context::fork()` 用此实现.
     pub fn extend_from(&self, other: &Context) {
         // 一次性 collect (持 other 锁), 然后释放, 再 insert (持 self 锁)
-        let to_insert: Vec<(std::any::TypeId, std::sync::Arc<dyn std::any::Any + Send + Sync>)> =
-            other
-                .services
-                .iter()
-                .map(|entry| {
-                    let type_id: std::any::TypeId = *entry.key();
-                    let arc: std::sync::Arc<dyn std::any::Any + Send + Sync> = entry.value().clone();
-                    (type_id, arc)
-                })
-                .collect();
+        let to_insert: Vec<(
+            std::any::TypeId,
+            std::sync::Arc<dyn std::any::Any + Send + Sync>,
+        )> = other
+            .services
+            .iter()
+            .map(|entry| {
+                let type_id: std::any::TypeId = *entry.key();
+                let arc: std::sync::Arc<dyn std::any::Any + Send + Sync> = entry.value().clone();
+                (type_id, arc)
+            })
+            .collect();
         // iter() 结束, other.services 锁释放
 
         for (type_id, arc) in to_insert {
@@ -485,7 +488,8 @@ impl Context {
     /// 列出订阅 E 的 async listener 数量 (调试)
     #[allow(dead_code)]
     pub fn async_listener_count<E: ListenerEvent>(&self) -> usize {
-        self.async_listeners.count_for_type_id(std::any::TypeId::of::<E>())
+        self.async_listeners
+            .count_for_type_id(std::any::TypeId::of::<E>())
     }
 
     // ========================================================================
@@ -844,14 +848,23 @@ mod tests {
         assert!(parent.service::<GreetingService>().is_some());
 
         let child = Context::new();
-        assert!(child.service::<GreetingService>().is_none(), "子 ctx 初始没 service");
+        assert!(
+            child.service::<GreetingService>().is_none(),
+            "子 ctx 初始没 service"
+        );
         child.extend_from(&parent);
-        assert!(child.service::<GreetingService>().is_some(), "extend 后子 ctx 应继承 service");
+        assert!(
+            child.service::<GreetingService>().is_some(),
+            "extend 后子 ctx 应继承 service"
+        );
 
         // Arc 引用同一份, 不是 clone
         let parent_arc = parent.service::<GreetingService>().unwrap();
         let child_arc = child.service::<GreetingService>().unwrap();
-        assert!(Arc::ptr_eq(&parent_arc, &child_arc), "extend 应共享 Arc, 不 clone");
+        assert!(
+            Arc::ptr_eq(&parent_arc, &child_arc),
+            "extend 应共享 Arc, 不 clone"
+        );
     }
 
     #[test]
@@ -893,7 +906,10 @@ mod tests {
 
         // extend 后, child 的 service 应被 parent 覆盖
         let c_arc_after = child.service::<GreetingService>().unwrap();
-        assert!(Arc::ptr_eq(&p_arc, &c_arc_after), "extend 应覆盖 child 已有 service");
+        assert!(
+            Arc::ptr_eq(&p_arc, &c_arc_after),
+            "extend 应覆盖 child 已有 service"
+        );
     }
 
     #[test]
@@ -1004,7 +1020,11 @@ mod tests {
         });
         // 2 个 listener 都跑了 (deferred queue flush 处理嵌套 emit)
         assert_eq!(a_called.load(Ordering::SeqCst), 1, "TestEvent listener");
-        assert_eq!(b_called.load(Ordering::SeqCst), 1, "OtherTestEvent listener (嵌套 emit)");
+        assert_eq!(
+            b_called.load(Ordering::SeqCst),
+            1,
+            "OtherTestEvent listener (嵌套 emit)"
+        );
     }
 
     #[test]
@@ -1139,7 +1159,11 @@ mod tests {
         })
         .await;
 
-        assert_eq!(called.load(Ordering::SeqCst), 1, "async listener 应被 await 跑完");
+        assert_eq!(
+            called.load(Ordering::SeqCst),
+            1,
+            "async listener 应被 await 跑完"
+        );
     }
 
     #[tokio::test]
@@ -1177,14 +1201,22 @@ mod tests {
             msg: "sync".to_string(),
         });
         assert_eq!(sync_called.load(Ordering::SeqCst), 1);
-        assert_eq!(async_called.load(Ordering::SeqCst), 0, "sync emit 不触发 async");
+        assert_eq!(
+            async_called.load(Ordering::SeqCst),
+            0,
+            "sync emit 不触发 async"
+        );
 
         // async emit: 只跑 async listener
         ctx.emit_async(TestEvent {
             msg: "async".to_string(),
         })
         .await;
-        assert_eq!(sync_called.load(Ordering::SeqCst), 1, "async emit 不触发 sync");
+        assert_eq!(
+            sync_called.load(Ordering::SeqCst),
+            1,
+            "async emit 不触发 sync"
+        );
         assert_eq!(async_called.load(Ordering::SeqCst), 1);
     }
 
@@ -1274,7 +1306,10 @@ mod tests {
         parent.inject_from::<GreetingService>().unwrap();
 
         let child = parent.fork();
-        assert!(child.service::<GreetingService>().is_some(), "fork 应继承 service");
+        assert!(
+            child.service::<GreetingService>().is_some(),
+            "fork 应继承 service"
+        );
     }
 
     #[test]

@@ -133,10 +133,8 @@ data: [DONE]\n\n";
                     )
                     .mount(&mock_server)
                     .await;
-                let adapter = OpenaiAdapter::new("sk-test").with_endpoint(format!(
-                    "{}/v1/chat/completions",
-                    mock_server.uri()
-                ));
+                let adapter = OpenaiAdapter::new("sk-test")
+                    .with_endpoint(format!("{}/v1/chat/completions", mock_server.uri()));
                 let mut stream = adapter.complete_stream(req);
                 let mut total_len = 0usize;
                 while let Some(token) = stream.next().await {

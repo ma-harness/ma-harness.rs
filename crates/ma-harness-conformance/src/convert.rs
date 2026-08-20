@@ -68,7 +68,11 @@ pub fn fixture_to_session(
     let mut event = SessionEvent::new(session_id, event_type);
 
     // severity 推断: payload 含 "severity" 字段就用, 否则 Info
-    if let Some(sev) = fixture_event.payload.get("severity").and_then(|v| v.as_str()) {
+    if let Some(sev) = fixture_event
+        .payload
+        .get("severity")
+        .and_then(|v| v.as_str())
+    {
         event = match sev {
             "Debug" => event.with_severity(Severity::Debug),
             "Info" => event.with_severity(Severity::Info),
@@ -85,12 +89,20 @@ pub fn fixture_to_session(
     }
 
     // plugin_name 从 payload 推导
-    if let Some(pn) = fixture_event.payload.get("plugin_name").and_then(|v| v.as_str()) {
+    if let Some(pn) = fixture_event
+        .payload
+        .get("plugin_name")
+        .and_then(|v| v.as_str())
+    {
         event = event.with_plugin(pn);
     }
 
     // error_message 从 payload 推导
-    if let Some(err) = fixture_event.payload.get("error_message").and_then(|v| v.as_str()) {
+    if let Some(err) = fixture_event
+        .payload
+        .get("error_message")
+        .and_then(|v| v.as_str())
+    {
         event = event.with_error(err);
     }
 
@@ -139,9 +151,20 @@ mod tests {
     #[test]
     fn event_type_roundtrip() {
         let names = [
-            "SessionStart", "SessionEnd", "RunStart", "RunEnd", "ModelRequest", "ModelResponse",
-            "ModelError", "ToolCall", "ToolResult", "ToolError", "UserInput", "UserCancel",
-            "SandboxViolation", "SandboxConfig",
+            "SessionStart",
+            "SessionEnd",
+            "RunStart",
+            "RunEnd",
+            "ModelRequest",
+            "ModelResponse",
+            "ModelError",
+            "ToolCall",
+            "ToolResult",
+            "ToolError",
+            "UserInput",
+            "UserCancel",
+            "SandboxViolation",
+            "SandboxConfig",
         ];
         for name in names {
             let t = event_type_from_str(name).unwrap_or_else(|| panic!("missing: {name}"));

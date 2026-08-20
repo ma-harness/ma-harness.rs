@@ -115,12 +115,9 @@ fn dsh_tool_generates_schema() {
 #[tokio::test]
 async fn dsh_tool_invoke_works() {
     let ctx = Context::new();
-    let result = add_invoke(
-        serde_json::json!({"a": 2, "b": 3}),
-        &ctx,
-    )
-    .await
-    .unwrap();
+    let result = add_invoke(serde_json::json!({"a": 2, "b": 3}), &ctx)
+        .await
+        .unwrap();
     assert_eq!(result, serde_json::json!(5));
 }
 

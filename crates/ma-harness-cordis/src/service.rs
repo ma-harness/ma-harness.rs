@@ -1,4 +1,4 @@
-﻿//! Service trait
+//! Service trait
 //!
 //! 所有可注入到 Context 的服务都实现这个 trait.
 //! 用户通常通过 `#[dsh_service]` 宏自动 impl, 见 docs/macro-design.md §2.
@@ -49,7 +49,7 @@ mod tests {
     use super::*;
     use std::any::Any;
 
-use crate::Context;
+    use crate::Context;
     use std::fmt;
 
     struct MyService {

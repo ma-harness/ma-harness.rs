@@ -44,7 +44,9 @@
 //! - [ ] 校准本文件的转换规则
 //! - [ ] 如果 dsh 用了 yaml 或别的格式, 加对应 loader
 
-use crate::fixture::{ExpectedEvent, Fixture, FixtureCategory, FixtureEvent, FixtureInput, FixtureOutput};
+use crate::fixture::{
+    ExpectedEvent, Fixture, FixtureCategory, FixtureEvent, FixtureInput, FixtureOutput,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -157,7 +159,8 @@ fn parse_category(s: Option<&str>) -> FixtureCategory {
 ///    - tool message → `ToolResult`
 /// 3. tools 字段非空 + user message 触发 model 调用 → 自动派生 `ToolCall` (P11-1.5 v1 简化: 不派生, 让 fixture 显式给)
 fn convert_input(input: DshInput) -> FixtureInput {
-    let mut events = input.events
+    let mut events = input
+        .events
         .into_iter()
         .map(|e| FixtureEvent {
             event_type: e.event_type,
@@ -241,7 +244,10 @@ fn convert_expected(expected: DshExpectedOutput) -> FixtureOutput {
     let mut all_events = events;
     for msg in expected.messages.iter().filter(|m| m.role == "assistant") {
         let mut payload_match = BTreeMap::new();
-        payload_match.insert("content".to_string(), serde_json::Value::String(msg.content.clone()));
+        payload_match.insert(
+            "content".to_string(),
+            serde_json::Value::String(msg.content.clone()),
+        );
         all_events.push(ExpectedEvent {
             event_type: "ModelResponse".to_string(),
             payload_match,
@@ -373,7 +379,7 @@ mod cache_tests {
         // 第二次: cache hit (mtime 没变)
         let f2 = cache.from_jsonl_cached(&path).unwrap();
         assert_eq!(f2.len(), 1);
-        assert_eq!(cache.len(), 1);  // 还是 1 个 entry
+        assert_eq!(cache.len(), 1); // 还是 1 个 entry
     }
 
     #[test]
@@ -458,7 +464,10 @@ mod tests {
         assert_eq!(ma.input.plugins, vec!["bash"]);
         assert_eq!(ma.output.events.len(), 1);
         assert_eq!(ma.output.events[0].event_type, "ToolResult");
-        assert_eq!(ma.output.events[0].payload_match.get("result").unwrap(), "hi\n");
+        assert_eq!(
+            ma.output.events[0].payload_match.get("result").unwrap(),
+            "hi\n"
+        );
     }
 
     #[test]
@@ -548,7 +557,10 @@ mod tests {
         let ma = dsh_to_fixture(f);
         assert_eq!(ma.output.events.len(), 1);
         assert_eq!(ma.output.events[0].event_type, "ModelResponse");
-        assert_eq!(ma.output.events[0].payload_match.get("content").unwrap(), "I can help");
+        assert_eq!(
+            ma.output.events[0].payload_match.get("content").unwrap(),
+            "I can help"
+        );
     }
 
     #[test]
@@ -599,7 +611,10 @@ mod tests {
         let ma = dsh_to_fixture(f);
         // Log 是非特殊 event type, key 走 fallback "data"
         assert_eq!(ma.output.events[0].event_type, "Log");
-        assert_eq!(ma.output.events[0].payload_match.get("data").unwrap(), "raw_string_response");
+        assert_eq!(
+            ma.output.events[0].payload_match.get("data").unwrap(),
+            "raw_string_response"
+        );
     }
 
     #[test]
@@ -618,6 +633,9 @@ mod tests {
         let ma = dsh_to_fixture(f);
         // ModelResponse → "content" key (特殊 event type)
         assert_eq!(ma.output.events[0].event_type, "ModelResponse");
-        assert_eq!(ma.output.events[0].payload_match.get("content").unwrap(), "raw_string_response");
+        assert_eq!(
+            ma.output.events[0].payload_match.get("content").unwrap(),
+            "raw_string_response"
+        );
     }
 }

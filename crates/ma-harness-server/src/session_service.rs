@@ -32,12 +32,16 @@ impl SessionServiceImpl {
 
     /// 列出所有 session (等价 gRPC `list`)
     pub fn list_sessions(&self) -> Result<Vec<ProtoSession>, String> {
-        self.store.list().map_err(|e| format!("session store list: {e}"))
+        self.store
+            .list()
+            .map_err(|e| format!("session store list: {e}"))
     }
 
     /// 拿单个 session (等价 gRPC `get`)
     pub fn get_session(&self, id: &str) -> Result<Option<ProtoSession>, String> {
-        self.store.get(id).map_err(|e| format!("session store get: {e}"))
+        self.store
+            .get(id)
+            .map_err(|e| format!("session store get: {e}"))
     }
 
     /// 创建 session (等价 gRPC `create`)
@@ -167,7 +171,9 @@ mod tests {
     }
 
     fn service_with_sqlite() -> SessionServiceImpl {
-        SessionServiceImpl::new(Arc::new(crate::session_store::SqliteStore::open_in_memory().unwrap()))
+        SessionServiceImpl::new(Arc::new(
+            crate::session_store::SqliteStore::open_in_memory().unwrap(),
+        ))
     }
 
     #[tokio::test]

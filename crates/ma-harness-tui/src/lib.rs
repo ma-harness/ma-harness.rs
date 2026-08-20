@@ -188,7 +188,7 @@ impl TuiApp {
             events: Arc::new(Mutex::new(Vec::new())),
             plugins: Arc::new(Mutex::new(Vec::new())),
             event_log,
-            session_store: None,  // P4-3 单独 API: TuiApp::new_with_log_and_store
+            session_store: None, // P4-3 单独 API: TuiApp::new_with_log_and_store
             started_at: Instant::now(),
             ticks: 0,
             mode: Arc::new(Mutex::new(AppMode::List)),
@@ -203,7 +203,10 @@ impl TuiApp {
         // P6-5 B: 加载持久化状态 (last_session_id, last_focus)
         if let Some(path) = &app.state_path {
             if let Err(e) = app.load_persisted_state(path) {
-                eprintln!("TUI: WARN failed to load state from {}: {e}", path.display());
+                eprintln!(
+                    "TUI: WARN failed to load state from {}: {e}",
+                    path.display()
+                );
             }
         }
         app.refresh()?;
@@ -249,7 +252,10 @@ impl TuiApp {
         // P6-5 B: 加载持久化状态
         if let Some(path) = &app.state_path {
             if let Err(e) = app.load_persisted_state(path) {
-                eprintln!("TUI: WARN failed to load state from {}: {e}", path.display());
+                eprintln!(
+                    "TUI: WARN failed to load state from {}: {e}",
+                    path.display()
+                );
             }
         }
         app.refresh()?;
@@ -309,7 +315,7 @@ impl TuiApp {
     /// 错误 (文件不存在 / JSON 错) 都不抛, 走空 state (容错优先)
     fn load_persisted_state(&self, path: &Path) -> Result<()> {
         if !path.exists() {
-            return Ok(());  // 首次跑, 没文件, 走默认
+            return Ok(()); // 首次跑, 没文件, 走默认
         }
         let content = std::fs::read_to_string(path)?;
         let state: PersistedState = serde_json::from_str(&content).unwrap_or_default();
@@ -357,7 +363,7 @@ impl TuiApp {
     fn apply_persisted_selection(&self) {
         let last = match self.persisted_last_session_id.lock().clone() {
             Some(s) => s,
-            None => return,  // 没持久化, 默认 0
+            None => return, // 没持久化, 默认 0
         };
         let sessions = self.sessions.lock();
         if let Some(idx) = sessions.iter().position(|s| s.id == last) {
@@ -559,20 +565,22 @@ impl TuiApp {
             crossterm::event::KeyCode::Char('q') => return Ok(false),
             crossterm::event::KeyCode::Esc => return Ok(false),
             crossterm::event::KeyCode::Char('c')
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 return Ok(false);
             }
             crossterm::event::KeyCode::Tab => {
                 // P6-5 A: focus 切换 (forward)
                 let _next = self.focus.lock().next();
-            *self.focus.lock() = _next;
+                *self.focus.lock() = _next;
                 self.persist_state();
             }
             crossterm::event::KeyCode::BackTab => {
                 // P6-5 A: focus 切换 (backward)
                 let _prev = self.focus.lock().prev();
-            *self.focus.lock() = _prev;
+                *self.focus.lock() = _prev;
                 self.persist_state();
             }
             crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
@@ -611,7 +619,9 @@ impl TuiApp {
                 *self.mode.lock() = AppMode::List;
             }
             crossterm::event::KeyCode::Char('c')
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 *self.mode.lock() = AppMode::List;
             }
@@ -646,7 +656,11 @@ impl TuiApp {
     fn handle_approval_key(&self, key: crossterm::event::KeyEvent) -> Result<()> {
         let mode = self.mode.lock().clone();
         let (tool_call_id, _tool_name) = match mode {
-            AppMode::Approval { tool_call_id, tool_name, .. } => (tool_call_id, tool_name),
+            AppMode::Approval {
+                tool_call_id,
+                tool_name,
+                ..
+            } => (tool_call_id, tool_name),
             _ => return Ok(()),
         };
         match key.code {
@@ -744,9 +758,11 @@ impl TuiApp {
         match mode {
             AppMode::List => self.ui_list(frame),
             AppMode::Detail { session_id } => self.ui_detail(frame, &session_id),
-            AppMode::Approval { tool_call_id, tool_name, context } => {
-                self.ui_approval(frame, &tool_call_id, &tool_name, &context)
-            }
+            AppMode::Approval {
+                tool_call_id,
+                tool_name,
+                context,
+            } => self.ui_approval(frame, &tool_call_id, &tool_name, &context),
         }
     }
 
@@ -786,16 +802,19 @@ impl TuiApp {
             ])
             .split(modal_area);
 
-        let title = Paragraph::new("⚠ Approval required")
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let title = Paragraph::new("⚠ Approval required").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(title, chunks[0]);
 
         let id_line = Paragraph::new(format!("Tool call: {}", tool_call_id))
             .style(Style::default().fg(Color::Cyan));
         frame.render_widget(id_line, chunks[1]);
 
-        let name_line = Paragraph::new(format!("Tool: {}", tool_name))
-            .style(Style::default().fg(Color::White));
+        let name_line =
+            Paragraph::new(format!("Tool: {}", tool_name)).style(Style::default().fg(Color::White));
         frame.render_widget(name_line, chunks[2]);
 
         let ctx_line = Paragraph::new(format!("Context: {}", context))
@@ -803,13 +822,13 @@ impl TuiApp {
             .wrap(Wrap { trim: true });
         frame.render_widget(ctx_line, chunks[3]);
 
-        frame.render_widget(
-            Paragraph::new(""),
-            chunks[4],
-        );
+        frame.render_widget(Paragraph::new(""), chunks[4]);
 
-        let hint = Paragraph::new("[Y] approve    [N] deny    [Esc] cancel")
-            .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
+        let hint = Paragraph::new("[Y] approve    [N] deny    [Esc] cancel").style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        );
         frame.render_widget(hint, chunks[5]);
 
         // 边框
@@ -873,7 +892,9 @@ impl TuiApp {
             .map(|(i, s)| {
                 let marker = if i == selected { "▶" } else { " " };
                 let style = if i == selected {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -882,7 +903,11 @@ impl TuiApp {
                     Span::raw(" "),
                     Span::styled(
                         format!("{:16}", s.id),
-                        if i == selected { style } else { Style::default().fg(Color::Yellow) },
+                        if i == selected {
+                            style
+                        } else {
+                            Style::default().fg(Color::Yellow)
+                        },
                     ),
                     Span::raw(" "),
                     Span::styled(&s.state, Style::default().fg(Color::Green)),
@@ -902,7 +927,11 @@ impl TuiApp {
             Block::default()
                 .borders(Borders::ALL)
                 .title(sessions_title)
-                .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .border_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
         } else {
             Block::default().borders(Borders::ALL).title(sessions_title)
         };
@@ -921,12 +950,11 @@ impl TuiApp {
                 ]))
             })
             .collect();
-        let plugins_list = List::new(plugin_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Plugins ({})", plugins.len())),
-            );
+        let plugins_list = List::new(plugin_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Plugins ({})", plugins.len())),
+        );
         frame.render_widget(plugins_list, row1_chunks[1]);
         drop(plugins);
 
@@ -956,7 +984,10 @@ impl TuiApp {
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{}", e.seq), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(format!("[{}]", e.timestamp), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("[{}]", e.timestamp),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         format!("{:8}", e.severity.to_lowercase()),
@@ -989,7 +1020,11 @@ impl TuiApp {
             Block::default()
                 .borders(Borders::ALL)
                 .title(events_title)
-                .border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .border_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
         } else {
             Block::default().borders(Borders::ALL).title(events_title)
         };
@@ -1000,14 +1035,20 @@ impl TuiApp {
 
         // Status bar
         let status = Paragraph::new(Line::from(vec![
-            Span::styled(format!("ticks: {}", self.ticks), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("ticks: {}", self.ticks),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw("  "),
             Span::styled(
                 format!("uptime: {:.1}s", self.started_at.elapsed().as_secs_f32()),
                 Style::default().fg(Color::Green),
             ),
             Span::raw("  "),
-            Span::styled(format!("events: {}", event_count), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("events: {}", event_count),
+                Style::default().fg(Color::Yellow),
+            ),
         ]))
         .block(Block::default().borders(Borders::ALL).title("status"));
         frame.render_widget(status, main_chunks[3]);
@@ -1026,14 +1067,19 @@ impl TuiApp {
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),  // header
-                Constraint::Min(10),    // body (events for session)
-                Constraint::Length(3),  // footer
+                Constraint::Length(5), // header
+                Constraint::Min(10),   // body (events for session)
+                Constraint::Length(3), // footer
             ])
             .split(area);
 
         // Header: session metadata
-        let session_meta = self.sessions.lock().iter().find(|s| s.id == session_id).cloned();
+        let session_meta = self
+            .sessions
+            .lock()
+            .iter()
+            .find(|s| s.id == session_id)
+            .cloned();
         let header_text = if let Some(s) = session_meta {
             format!(
                 "Session: {}\n  state: {}\n  name/age: {}",
@@ -1044,7 +1090,11 @@ impl TuiApp {
         };
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).title("Session Detail"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Session Detail"),
+            );
         frame.render_widget(header, main_chunks[0]);
 
         // Body: events for this session (走 EventLog::get_model_visible)
@@ -1067,11 +1117,13 @@ impl TuiApp {
                             Span::raw(" "),
                             Span::styled(
                                 format!("{:8}", format!("{:?}", s.event.severity).to_lowercase()),
-                                Style::default().fg(match format!("{:?}", s.event.severity).as_str() {
-                                    "Error" => Color::Red,
-                                    "Warn" => Color::Magenta,
-                                    _ => Color::Cyan,
-                                }),
+                                Style::default().fg(
+                                    match format!("{:?}", s.event.severity).as_str() {
+                                        "Error" => Color::Red,
+                                        "Warn" => Color::Magenta,
+                                        _ => Color::Cyan,
+                                    },
+                                ),
                             ),
                             Span::raw(" "),
                             Span::styled(
@@ -1092,11 +1144,11 @@ impl TuiApp {
                 Style::default().fg(Color::DarkGray),
             )))]
         };
-        let body = List::new(body_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Events for {} (model_visible)", &session_id[..8.min(session_id.len())])),
-        );
+        let body =
+            List::new(body_items).block(Block::default().borders(Borders::ALL).title(format!(
+                "Events for {} (model_visible)",
+                &session_id[..8.min(session_id.len())]
+            )));
         frame.render_widget(body, main_chunks[1]);
 
         // Footer: "press q to back"
@@ -1176,8 +1228,16 @@ mod tests {
         let sessions = app.sessions.lock();
         // 2 个 session 出现 (顺序按 count DESC, 都 = 2 events, 都进)
         let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
-        assert!(ids.contains(&"s1".to_string()), "s1 应在 sessions: {:?}", ids);
-        assert!(ids.contains(&"s2".to_string()), "s2 应在 sessions: {:?}", ids);
+        assert!(
+            ids.contains(&"s1".to_string()),
+            "s1 应在 sessions: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"s2".to_string()),
+            "s2 应在 sessions: {:?}",
+            ids
+        );
         // state 应该是 "active" (count > 0)
         for s in sessions.iter() {
             if s.id == "s1" || s.id == "s2" {
@@ -1188,7 +1248,11 @@ mod tests {
 
         // 3. events 应有 4 条 (2 session_start + 2 tool_call)
         let events = app.events.lock();
-        assert!(events.len() >= 2, "events 应有 >= 2 条, got {}", events.len());
+        assert!(
+            events.len() >= 2,
+            "events 应有 >= 2 条, got {}",
+            events.len()
+        );
         // 验证 event_type 是 EventType Debug 输出
         let first = &events[0];
         assert!(
@@ -1250,8 +1314,16 @@ mod tests {
         // 3. 验 sessions 含 s-1, s-2
         let sessions = app.sessions.lock();
         let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
-        assert!(ids.contains(&"s-1".to_string()), "s-1 应在 sessions: {:?}", ids);
-        assert!(ids.contains(&"s-2".to_string()), "s-2 应在 sessions: {:?}", ids);
+        assert!(
+            ids.contains(&"s-1".to_string()),
+            "s-1 应在 sessions: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"s-2".to_string()),
+            "s-2 应在 sessions: {:?}",
+            ids
+        );
 
         // 4. state 是 "Active" Debug 形式 (ProtoSessionState::Active)
         for s in sessions.iter() {
@@ -1377,7 +1449,10 @@ mod tests {
 
         let store_path = tmpdir.path().join("sessions.db");
         let store = SqliteStore::open(&store_path).unwrap();
-        for (i, (id, name)) in [("a-1", "alpha"), ("a-2", "beta"), ("a-3", "gamma")].iter().enumerate() {
+        for (i, (id, name)) in [("a-1", "alpha"), ("a-2", "beta"), ("a-3", "gamma")]
+            .iter()
+            .enumerate()
+        {
             let proto = ProtoSession {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -1400,7 +1475,12 @@ mod tests {
         let app = TuiApp::new_with_log_and_store(Some(&log_path), Some(store_arc)).unwrap();
         // 应有 3 个 session (a-1, a-2, a-3)
         let sessions = app.sessions.lock();
-        assert_eq!(sessions.len(), 3, "应有 3 个 session, got {}", sessions.len());
+        assert_eq!(
+            sessions.len(),
+            3,
+            "应有 3 个 session, got {}",
+            sessions.len()
+        );
         drop(sessions);
 
         // j 从 0 → 1
@@ -1480,7 +1560,11 @@ mod tests {
         app.enter_detail();
         // 不应切到 detail (因为只有 1 个 placeholder, selected=0 是 "default")
         let mode = app.mode.lock();
-        assert_eq!(*mode, AppMode::List, "只有 placeholder 时 Enter 不应切 mode");
+        assert_eq!(
+            *mode,
+            AppMode::List,
+            "只有 placeholder 时 Enter 不应切 mode"
+        );
     }
 
     /// Detail 模式按 q/Esc/Backspace 退回 List
@@ -1577,12 +1661,20 @@ mod tests {
         // Tab → Events
         let _next = app.focus.lock().next();
         *app.focus.lock() = _next;
-        assert_eq!(*app.focus.lock(), Panel::Events, "Tab 1 次: Sessions → Events");
+        assert_eq!(
+            *app.focus.lock(),
+            Panel::Events,
+            "Tab 1 次: Sessions → Events"
+        );
 
         // Tab → Sessions (cycle)
         let _next = app.focus.lock().next();
         *app.focus.lock() = _next;
-        assert_eq!(*app.focus.lock(), Panel::Sessions, "Tab 2 次: Events → Sessions");
+        assert_eq!(
+            *app.focus.lock(),
+            Panel::Sessions,
+            "Tab 2 次: Events → Sessions"
+        );
     }
 
     /// BackTab 反向: Sessions → Events (用 prev)
@@ -1593,7 +1685,11 @@ mod tests {
         // BackTab → Events (走 prev)
         let _prev = app.focus.lock().prev();
         *app.focus.lock() = _prev;
-        assert_eq!(*app.focus.lock(), Panel::Events, "BackTab: Sessions → Events");
+        assert_eq!(
+            *app.focus.lock(),
+            Panel::Events,
+            "BackTab: Sessions → Events"
+        );
     }
 
     /// j/k 按 focus 路由: Sessions focus → move_selection, Events focus → scroll_events
@@ -1640,18 +1736,30 @@ mod tests {
 
         // Sessions focus: j 移动 selected_session 0 → 1
         app.move_selection(1i64);
-        assert_eq!(*app.selected_session.lock(), 1, "Sessions focus: j 移 selected 0→1");
+        assert_eq!(
+            *app.selected_session.lock(),
+            1,
+            "Sessions focus: j 移 selected 0→1"
+        );
 
         // 切到 Events focus
         *app.focus.lock() = Panel::Events;
 
         // Events focus: j 移动 events_scroll 0 → 1
         app.scroll_events(1i64);
-        assert_eq!(*app.events_scroll.lock(), 1, "Events focus: j 移 scroll 0→1");
+        assert_eq!(
+            *app.events_scroll.lock(),
+            1,
+            "Events focus: j 移 scroll 0→1"
+        );
 
         // k 上移回 0
         app.scroll_events(-1i64);
-        assert_eq!(*app.events_scroll.lock(), 0, "Events focus: k 移 scroll 1→0");
+        assert_eq!(
+            *app.events_scroll.lock(),
+            0,
+            "Events focus: k 移 scroll 1→0"
+        );
     }
 
     /// Events scroll clamp 到 [0, len-1]
@@ -1796,19 +1904,24 @@ mod tests {
         }
 
         // 2. 用 state_path 启动 → 应自动加载, focus=Events, selected_session 对位到 persisted-2
-        let app2 = TuiApp::new_with_log_and_store_and_state_path(
-            None,
-            Some(store_arc),
-            Some(state_path),
-        )
-        .unwrap();
+        let app2 =
+            TuiApp::new_with_log_and_store_and_state_path(None, Some(store_arc), Some(state_path))
+                .unwrap();
 
         // focus 应是 Events (持久化的)
-        assert_eq!(*app2.focus.lock(), Panel::Events, "reload 后 focus 应是 Events");
+        assert_eq!(
+            *app2.focus.lock(),
+            Panel::Events,
+            "reload 后 focus 应是 Events"
+        );
 
         // last_session_id 应是 persisted-2
         let last = app2.persisted_last_session_id.lock().clone();
-        assert_eq!(last.as_deref(), Some("presisted-2"), "last_session_id 应是 persisted-2");
+        assert_eq!(
+            last.as_deref(),
+            Some("presisted-2"),
+            "last_session_id 应是 persisted-2"
+        );
 
         // selected_session 应指向 persisted-2
         // 验证方式: 持久化 last_session_id 还在, selected_session 指向一个真实存在的 session
@@ -1820,14 +1933,19 @@ mod tests {
         let actual_selected = *app2.selected_session.lock();
         let actual_id = sessions.get(actual_selected).map(|s| s.id.as_str());
         assert_eq!(
-            actual_id, Some("presisted-2"),
+            actual_id,
+            Some("presisted-2"),
             "selected_session 应指向 persisted-2, got idx={} id={:?}",
-            actual_selected, actual_id
+            actual_selected,
+            actual_id
         );
-        assert_eq!(actual_selected, expected_idx, "selected index 应是 persisted-2 的 index");
+        assert_eq!(
+            actual_selected, expected_idx,
+            "selected index 应是 persisted-2 的 index"
+        );
     }
 
-        /// 持久化的 session 不再存在 → 自动清掉 (不保持 stale id)
+    /// 持久化的 session 不再存在 → 自动清掉 (不保持 stale id)
     #[test]
     fn tui_persisted_session_not_found_clears() {
         use ma_harness_server::{SessionStore, SqliteStore};
@@ -1864,12 +1982,9 @@ mod tests {
         }
 
         // 启动 → 应自动清掉 persisted_last_session_id (old-session 不在)
-        let app = TuiApp::new_with_log_and_store_and_state_path(
-            None,
-            Some(store_arc),
-            Some(state_path),
-        )
-        .unwrap();
+        let app =
+            TuiApp::new_with_log_and_store_and_state_path(None, Some(store_arc), Some(state_path))
+                .unwrap();
         assert!(
             app.persisted_last_session_id.lock().is_none(),
             "持久化 session 不存在时应清掉, got {:?}",
@@ -1884,12 +1999,9 @@ mod tests {
     fn tui_tab_saves_state() {
         let tmpdir = tempfile::tempdir().unwrap();
         let state_path = tmpdir.path().join("state.json");
-        let app = TuiApp::new_with_log_and_store_and_state_path(
-            None,
-            None,
-            Some(state_path.clone()),
-        )
-        .unwrap();
+        let app =
+            TuiApp::new_with_log_and_store_and_state_path(None, None, Some(state_path.clone()))
+                .unwrap();
         // 初始 = Sessions
         assert_eq!(*app.focus.lock(), Panel::Sessions);
 
@@ -1908,7 +2020,11 @@ mod tests {
         assert!(state_path.exists(), "Tab 后应自动 save state file");
         // 文件应含 "Events"
         let content = std::fs::read_to_string(&state_path).unwrap();
-        assert!(content.contains("Events"), "save 后文件应含 'Events', got: {}", content);
+        assert!(
+            content.contains("Events"),
+            "save 后文件应含 'Events', got: {}",
+            content
+        );
     }
 
     /// 损坏的 JSON 文件不 panic, 走空 state

@@ -139,12 +139,18 @@ impl DagRun {
 
     /// 业务方完成的 task 数
     pub fn completed_count(&self) -> usize {
-        self.tasks.values().filter(|t| t.status == TaskStatus::Completed).count()
+        self.tasks
+            .values()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count()
     }
 
     /// 业务方失败的 task 数
     pub fn failed_count(&self) -> usize {
-        self.tasks.values().filter(|t| t.status == TaskStatus::Failed).count()
+        self.tasks
+            .values()
+            .filter(|t| t.status == TaskStatus::Failed)
+            .count()
     }
 
     /// 业务方总数
@@ -154,12 +160,19 @@ impl DagRun {
 
     /// 业务方是否全完 (Completed / Failed / Skipped)
     pub fn is_complete(&self) -> bool {
-        self.tasks.values().all(|t| matches!(t.status, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Skipped))
+        self.tasks.values().all(|t| {
+            matches!(
+                t.status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Skipped
+            )
+        })
     }
 
     /// 业务方是否成功
     pub fn is_success(&self) -> bool {
-        self.tasks.values().all(|t| t.status == TaskStatus::Completed)
+        self.tasks
+            .values()
+            .all(|t| t.status == TaskStatus::Completed)
     }
 }
 
@@ -274,7 +287,12 @@ impl DagScheduler {
         run.tasks
             .values()
             .filter(|t| t.status == TaskStatus::Pending)
-            .filter(|t| t.task.depends_on.iter().all(|d| completed.contains(d.as_str())))
+            .filter(|t| {
+                t.task
+                    .depends_on
+                    .iter()
+                    .all(|d| completed.contains(d.as_str()))
+            })
             .map(|t| t.name.clone())
             .collect()
     }
@@ -560,7 +578,8 @@ tasks:
         let json = serde_json::to_string_pretty(&run).unwrap();
         std::fs::write(&path, json).unwrap();
 
-        let loaded: DagRun = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let loaded: DagRun =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(run, loaded);
     }
 }

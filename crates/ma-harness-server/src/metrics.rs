@@ -123,10 +123,7 @@ impl Metrics {
         let mut s = String::new();
         s.push_str("# HELP ma_harness_uptime_seconds Process uptime in seconds\n");
         s.push_str("# TYPE ma_harness_uptime_seconds gauge\n");
-        s.push_str(&format!(
-            "ma_harness_uptime_seconds {}\n",
-            uptime_seconds()
-        ));
+        s.push_str(&format!("ma_harness_uptime_seconds {}\n", uptime_seconds()));
 
         // 简化 v1: 用 macro 减少重复
         macro_rules! counter {

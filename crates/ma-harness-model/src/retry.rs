@@ -103,15 +103,15 @@ pub fn backoff_for(policy: &RetryPolicy, attempt: u32) -> Duration {
 pub fn is_retryable(err: &crate::AdapterError) -> bool {
     use crate::AdapterError::*;
     match err {
-        Http(_) => true,           // 网络错误, 重试
+        Http(_) => true, // 网络错误, 重试
         Api { status, .. } => {
             // 5xx 服务端错误 + 408 request timeout 重试, 4xx (除 408) 不重试
             *status >= 500 || *status == 408
         }
-        Auth { .. } => false,      // 401/403 不重试 (业务方需修 API key)
-        RateLimit { .. } => true,  // 429 重试
-        Parse(_) => false,         // 解析错误, 重试也不会变
-        MissingField(_) => false,  // 缺字段, 重试也不会变
+        Auth { .. } => false,     // 401/403 不重试 (业务方需修 API key)
+        RateLimit { .. } => true, // 429 重试
+        Parse(_) => false,        // 解析错误, 重试也不会变
+        MissingField(_) => false, // 缺字段, 重试也不会变
     }
 }
 
@@ -302,12 +302,8 @@ mod tests {
     #[tokio::test]
     async fn retry_succeeds_on_first_try() {
         let policy = RetryPolicy::default();
-        let result: Result<i32, RetryError<&str>> = retry_with_backoff(
-            &policy,
-            || async { Ok::<i32, &str>(42) },
-            |_| true,
-        )
-        .await;
+        let result: Result<i32, RetryError<&str>> =
+            retry_with_backoff(&policy, || async { Ok::<i32, &str>(42) }, |_| true).await;
         assert_eq!(result.unwrap(), 42);
     }
 
@@ -320,11 +316,7 @@ mod tests {
             &policy,
             || async {
                 let n = c2.fetch_add(1, Ordering::SeqCst);
-                if n < 2 {
-                    Err("transient")
-                } else {
-                    Ok(99)
-                }
+                if n < 2 { Err("transient") } else { Ok(99) }
             },
             |_| true,
         )
@@ -342,7 +334,10 @@ mod tests {
             |_| true,
         )
         .await;
-        assert!(matches!(result, Err(RetryError::Exhausted { attempts: 2, .. })));
+        assert!(matches!(
+            result,
+            Err(RetryError::Exhausted { attempts: 2, .. })
+        ));
     }
 
     #[tokio::test]
@@ -356,7 +351,7 @@ mod tests {
                 c2.fetch_add(1, Ordering::SeqCst);
                 Err::<i32, &str>("fatal")
             },
-            |e| *e != "fatal",  // 业务方决定哪些不可重试
+            |e| *e != "fatal", // 业务方决定哪些不可重试
         )
         .await;
         assert!(matches!(result, Err(RetryError::NonRetryable(_))));
@@ -413,22 +408,35 @@ mod tests {
     fn is_retryable_classification() {
         use crate::AdapterError;
         // Auth (401) → 不重试
-        let auth = AdapterError::Auth { status: 401, body: "x".into() };
+        let auth = AdapterError::Auth {
+            status: 401,
+            body: "x".into(),
+        };
         assert!(!is_retryable(&auth));
         // 500 → 重试
-        let api_500 = AdapterError::Api { status: 500, body: "x".into() };
+        let api_500 = AdapterError::Api {
+            status: 500,
+            body: "x".into(),
+        };
         assert!(is_retryable(&api_500));
         // 400 → 不重试
-        let api_400 = AdapterError::Api { status: 400, body: "x".into() };
+        let api_400 = AdapterError::Api {
+            status: 400,
+            body: "x".into(),
+        };
         assert!(!is_retryable(&api_400));
         // 408 → 重试
-        let api_408 = AdapterError::Api { status: 408, body: "x".into() };
+        let api_408 = AdapterError::Api {
+            status: 408,
+            body: "x".into(),
+        };
         assert!(is_retryable(&api_408));
         // 429 → 重试
         let rl = AdapterError::RateLimit { body: "x".into() };
         assert!(is_retryable(&rl));
         // Parse → 不重试
-        let parse = AdapterError::Parse(serde_json::from_str::<serde_json::Value>("invalid").unwrap_err());
+        let parse =
+            AdapterError::Parse(serde_json::from_str::<serde_json::Value>("invalid").unwrap_err());
         assert!(!is_retryable(&parse));
     }
 }

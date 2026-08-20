@@ -67,12 +67,10 @@ use thiserror::Error;
 pub mod multimodal;
 pub mod vision_plugin;
 pub mod vision_tool;
-pub use multimodal::{
-    build_anthropic_vision_content, build_openai_vision_content, ImageAttachment,
-};
+pub use multimodal::{build_anthropic_vision_content, build_openai_vision_content, ImageAttachment};
 pub use vision_tool::{
-    describe_image, describe_with_anthropic, describe_with_openai, VisionBackend, VisionDescribeArgs,
-    VisionError, VisionResult, VISION_TOOL_DESCRIPTION, VISION_TOOL_NAME,
+    describe_image, describe_with_anthropic, describe_with_openai, VisionBackend,
+    VisionDescribeArgs, VisionError, VisionResult, VISION_TOOL_DESCRIPTION, VISION_TOOL_NAME,
 };
 pub use vision_plugin::VisionTool;
 
@@ -330,9 +328,7 @@ impl ModelAdapter for OpenaiAdapter {
             .await?;
 
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             let body = resp.text().await.unwrap_or_default();
             return Err(AdapterError::Auth {
                 status: status.as_u16(),
@@ -554,10 +550,7 @@ impl AnthropicAdapter {
             Err(_) => return None,
         };
         // text 在 delta.text
-        let text = value
-            .get("delta")?
-            .get("text")?
-            .as_str()?;
+        let text = value.get("delta")?.get("text")?.as_str()?;
         Some(text.to_string())
     }
 
@@ -643,9 +636,7 @@ impl ModelAdapter for AnthropicAdapter {
             .await?;
 
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             let body = resp.text().await.unwrap_or_default();
             return Err(AdapterError::Auth {
                 status: status.as_u16(),
@@ -901,13 +892,9 @@ impl AdapterRegistry {
             "https://bedrock-runtime.{}.amazonaws.com/openai/v1/chat/completions",
             region.as_ref()
         );
-        let adapter = OpenaiAdapter::new(format!(
-            "{}:{}",
-            access_key.into(),
-            secret_key.into()
-        ))
-        .with_endpoint(endpoint)
-        .with_model(model);
+        let adapter = OpenaiAdapter::new(format!("{}:{}", access_key.into(), secret_key.into()))
+            .with_endpoint(endpoint)
+            .with_model(model);
         self.register("bedrock:", adapter)
     }
 
@@ -1215,8 +1202,12 @@ mod tests {
 
     #[test]
     fn registry_with_azure_openai_registers_correct_endpoint() {
-        let reg = AdapterRegistry::new()
-            .with_azure_openai("myresource", "mydeployment", "2024-02-01", "sk-azure-test");
+        let reg = AdapterRegistry::new().with_azure_openai(
+            "myresource",
+            "mydeployment",
+            "2024-02-01",
+            "sk-azure-test",
+        );
         let adapter = reg.find("azure:").expect("azure registered");
         assert_eq!(adapter.name(), "openai");
         let prefixes = reg.prefixes();
@@ -1259,8 +1250,8 @@ mod tests {
     #[test]
     fn registry_finds_azure_deployment() {
         // 业务方用 "azure:mydeployment" 走 prefix match
-        let reg = AdapterRegistry::new()
-            .with_azure_openai("res", "mydeployment", "2024-02-01", "sk");
+        let reg =
+            AdapterRegistry::new().with_azure_openai("res", "mydeployment", "2024-02-01", "sk");
         let adapter = reg.find("azure:mydeployment");
         assert!(adapter.is_some());
     }
@@ -1309,8 +1300,7 @@ mod tests {
 
     #[test]
     fn registry_finds_vertex_model() {
-        let reg =
-            AdapterRegistry::new().with_vertex("p", "us-central1", "tok", "gemini-1.5-pro");
+        let reg = AdapterRegistry::new().with_vertex("p", "us-central1", "tok", "gemini-1.5-pro");
         let adapter = reg.find("vertex:gemini-1.5-pro");
         assert!(adapter.is_some());
     }
@@ -1521,11 +1511,20 @@ data: [DONE]\n\n";
     fn anthropic_parse_sse_event_non_content_block_delta_returns_none() {
         // message_start 不发 text
         let data = r#"data: {"type":"message_start","message":{"id":"msg_01","role":"assistant"}}"#;
-        assert_eq!(AnthropicAdapter::parse_sse_event("message_start", data), None);
+        assert_eq!(
+            AnthropicAdapter::parse_sse_event("message_start", data),
+            None
+        );
         // content_block_stop 不发 text
-        assert_eq!(AnthropicAdapter::parse_sse_event("content_block_stop", data), None);
+        assert_eq!(
+            AnthropicAdapter::parse_sse_event("content_block_stop", data),
+            None
+        );
         // message_delta 不发 text
-        assert_eq!(AnthropicAdapter::parse_sse_event("message_delta", data), None);
+        assert_eq!(
+            AnthropicAdapter::parse_sse_event("message_delta", data),
+            None
+        );
     }
 
     /// parse_sse_event: malformed JSON → None
@@ -1583,7 +1582,11 @@ data: {\"type\":\"message_stop\"}\n\n";
         }
 
         // 只 content_block_delta 走 yield → 2 token
-        assert_eq!(collected.len(), 2, "应 yield 2 token (只 content_block_delta), got {collected:?}");
+        assert_eq!(
+            collected.len(),
+            2,
+            "应 yield 2 token (只 content_block_delta), got {collected:?}"
+        );
         assert_eq!(collected[0], "Hello");
         assert_eq!(collected[1], " world");
         assert_eq!(collected.join(""), "Hello world");
@@ -1593,12 +1596,11 @@ data: {\"type\":\"message_stop\"}\n\n";
 
     fn png_bytes() -> Vec<u8> {
         vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D,
-            0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00,
-            0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-            0x42, 0x60, 0x82,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ]
     }
 
@@ -1612,7 +1614,10 @@ data: {\"type\":\"message_stop\"}\n\n";
         assert_eq!(body["model"], "gpt-4o");
         // messages[0].content 应是 array (text + image)
         let content = &body["messages"][0]["content"];
-        assert!(content.is_array(), "content should be array, got: {content}");
+        assert!(
+            content.is_array(),
+            "content should be array, got: {content}"
+        );
         let arr = content.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["type"], "text");
@@ -1624,7 +1629,8 @@ data: {\"type\":\"message_stop\"}\n\n";
 
     #[test]
     fn anthropic_vision_request_body_format() {
-        let img = crate::multimodal::ImageAttachment::from_bytes("image/jpeg", vec![0xFF, 0xD8, 0xFF]);
+        let img =
+            crate::multimodal::ImageAttachment::from_bytes("image/jpeg", vec![0xFF, 0xD8, 0xFF]);
         let adapter = AnthropicAdapter::new("sk-ant-test").with_model("claude-3-5-sonnet-20241022");
         let body = adapter.build_vision_request_body("what is this?", &[img]);
 

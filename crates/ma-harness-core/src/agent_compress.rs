@@ -73,9 +73,7 @@ pub fn estimate_tokens(text: &str) -> u32 {
 pub fn estimate_messages_tokens(messages: &[ModelMessage]) -> u32 {
     messages
         .iter()
-        .map(|m| {
-            estimate_tokens(&m.role) + estimate_tokens(&m.content)
-        })
+        .map(|m| estimate_tokens(&m.role) + estimate_tokens(&m.content))
         .sum()
 }
 
@@ -140,10 +138,7 @@ fn extract_assistant_content(event: &SessionEvent) -> String {
 /// 应用压缩策略到 messages (P8-1)
 ///
 /// 返压缩后的 messages (也可能返原 slice if policy = Never).
-pub fn compress(
-    messages: Vec<ModelMessage>,
-    policy: CompressionPolicy,
-) -> Vec<ModelMessage> {
+pub fn compress(messages: Vec<ModelMessage>, policy: CompressionPolicy) -> Vec<ModelMessage> {
     match policy {
         CompressionPolicy::Never => messages,
         CompressionPolicy::SlidingWindow { keep_last_n } => {
@@ -199,8 +194,14 @@ mod tests {
     #[test]
     fn estimate_messages_total() {
         let msgs = vec![
-            ModelMessage { role: "user".into(), content: "hello".into() },
-            ModelMessage { role: "assistant".into(), content: "world".into() },
+            ModelMessage {
+                role: "user".into(),
+                content: "hello".into(),
+            },
+            ModelMessage {
+                role: "assistant".into(),
+                content: "world".into(),
+            },
         ];
         let t = estimate_messages_tokens(&msgs);
         assert!(t > 0);
@@ -209,7 +210,10 @@ mod tests {
     #[test]
     fn compression_never_keeps_all() {
         let msgs: Vec<ModelMessage> = (0..10)
-            .map(|i| ModelMessage { role: "user".into(), content: format!("m{}", i) })
+            .map(|i| ModelMessage {
+                role: "user".into(),
+                content: format!("m{}", i),
+            })
             .collect();
         let result = compress(msgs.clone(), CompressionPolicy::Never);
         assert_eq!(result.len(), 10);
@@ -218,7 +222,10 @@ mod tests {
     #[test]
     fn compression_sliding_window_drops_oldest() {
         let msgs: Vec<ModelMessage> = (0..10)
-            .map(|i| ModelMessage { role: "user".into(), content: format!("m{}", i) })
+            .map(|i| ModelMessage {
+                role: "user".into(),
+                content: format!("m{}", i),
+            })
             .collect();
         let result = compress(msgs, CompressionPolicy::SlidingWindow { keep_last_n: 3 });
         assert_eq!(result.len(), 3);
@@ -229,16 +236,25 @@ mod tests {
     #[test]
     fn compression_sliding_window_keeps_all_when_under() {
         let msgs: Vec<ModelMessage> = (0..3)
-            .map(|i| ModelMessage { role: "user".into(), content: format!("m{}", i) })
+            .map(|i| ModelMessage {
+                role: "user".into(),
+                content: format!("m{}", i),
+            })
             .collect();
-        let result = compress(msgs.clone(), CompressionPolicy::SlidingWindow { keep_last_n: 5 });
+        let result = compress(
+            msgs.clone(),
+            CompressionPolicy::SlidingWindow { keep_last_n: 5 },
+        );
         assert_eq!(result.len(), 3);
     }
 
     #[test]
     fn compression_summarize_fallback_to_sliding_5() {
         let msgs: Vec<ModelMessage> = (0..10)
-            .map(|i| ModelMessage { role: "user".into(), content: format!("m{}", i) })
+            .map(|i| ModelMessage {
+                role: "user".into(),
+                content: format!("m{}", i),
+            })
             .collect();
         let result = compress(msgs, CompressionPolicy::Summarize);
         assert_eq!(result.len(), 5);
@@ -247,7 +263,10 @@ mod tests {
     #[test]
     fn should_compress_threshold() {
         let msgs: Vec<ModelMessage> = (0..100)
-            .map(|i| ModelMessage { role: "user".into(), content: format!("message {} with some content to make it longer", i) })
+            .map(|i| ModelMessage {
+                role: "user".into(),
+                content: format!("message {} with some content to make it longer", i),
+            })
             .collect();
         assert!(should_compress(&msgs, 100));
         assert!(!should_compress(&msgs, 100_000));

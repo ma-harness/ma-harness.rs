@@ -1,0 +1,17 @@
+# ma-harness rustfmt 配置
+# 2026-08-20 (Day 101+1): 加 reorder_imports = false 锁死 use 内部顺序
+#
+# 问题背景:
+#   rustfmt 在 Linux/Windows 默认对 `use foo::{a, B, c}` 内部排序规则不同:
+#     - Windows rustfmt 倾向 ASCII 大小写 (A-Z 优先)
+#     - Linux rustfmt 倾向 case-insensitive (aAbBcC)
+#   这导致 CI lint 在 ubuntu-latest 跑 `cargo fmt --all -- --check` 经常跟
+#   业务方 Windows 本地写的不一致, push 后 CI 红.
+#
+# 解决方案: 显式关掉 reorder_imports, 让 rustfmt 不动 use 内部顺序.
+# 业务方 Windows 写啥就 commit 啥, CI 不再改.
+#
+# 这个选项不会影响其他 rustfmt 规则 (line width, fn args, 等), 只锁 use 内部.
+
+# 不重排 use 语句内部项 (kind/path/group 三层都不重排)
+reorder_imports = false

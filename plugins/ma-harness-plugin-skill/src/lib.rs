@@ -38,7 +38,9 @@ pub struct SkillService;
 
 impl SkillService {
     pub async fn load_skill(&self, ctx: &Context, name: &str) -> Result<Skill, SkillError> {
-        let dir = ctx.get(SKILLS_DIR).unwrap_or_else(|| "./skills".to_string());
+        let dir = ctx
+            .get(SKILLS_DIR)
+            .unwrap_or_else(|| "./skills".to_string());
         let path = PathBuf::from(&dir).join(format!("{}.yaml", name));
         if !path.exists() {
             return Err(SkillError::NotFound(name.to_string()));
@@ -49,7 +51,9 @@ impl SkillService {
     }
 
     pub async fn list_skills(&self, ctx: &Context) -> Result<Vec<String>, SkillError> {
-        let dir = ctx.get(SKILLS_DIR).unwrap_or_else(|| "./skills".to_string());
+        let dir = ctx
+            .get(SKILLS_DIR)
+            .unwrap_or_else(|| "./skills".to_string());
         let path = Path::new(&dir);
         if !path.exists() {
             return Ok(Vec::new());

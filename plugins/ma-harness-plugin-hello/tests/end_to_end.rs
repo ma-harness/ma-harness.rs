@@ -14,7 +14,9 @@ fn external_crate_uses_hello_plugin() {
     ctx.plugin(HelloPlugin).unwrap();
 
     // 拿 service
-    let svc = ctx.service::<HelloService>().expect("HelloService should be injected");
+    let svc = ctx
+        .service::<HelloService>()
+        .expect("HelloService should be injected");
     assert_eq!(svc.name(), "hello");
 
     // 默认 template

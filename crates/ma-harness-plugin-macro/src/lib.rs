@@ -1,4 +1,4 @@
-﻿//! # 命名约定
+//! # 命名约定
 //!
 //! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-plugin-macro`
 //! **Crate ident** (`use` 路径): `ma_harness_plugin_macro`
@@ -325,15 +325,19 @@ pub fn dsh_tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // 参数 schema 字段 (Phase 1: 全当 string)
     // 2026-08-18: 用 collect() 避免后面重复使用 iterator 时 moved 错
-    let param_schema_fields: Vec<_> = param_names.iter().zip(param_types.iter()).map(|(name, _ty)| {
-        quote! {
-            serde_json::json!({
-                "name": stringify!(#name),
-                "type": "string",
-                "description": "",
-            })
-        }
-    }).collect();
+    let param_schema_fields: Vec<_> = param_names
+        .iter()
+        .zip(param_types.iter())
+        .map(|(name, _ty)| {
+            quote! {
+                serde_json::json!({
+                    "name": stringify!(#name),
+                    "type": "string",
+                    "description": "",
+                })
+            }
+        })
+        .collect();
 
     let _params_json_value = quote! {
         serde_json::Value::Array(vec![#(#param_schema_fields),*])
@@ -510,11 +514,17 @@ impl Parse for DshDualAttrs {
 }
 
 fn parse_dual_attrs(attr: TokenStream) -> DshDualAttrs {
-    syn::parse2(attr.into()).unwrap_or_else(|_| DshDualAttrs { pairs: std::collections::HashMap::new() })
+    syn::parse2(attr.into()).unwrap_or_else(|_| DshDualAttrs {
+        pairs: std::collections::HashMap::new(),
+    })
 }
 
 fn take_lit_or(attrs: &DshDualAttrs, key: &str, default: &str) -> String {
-    attrs.pairs.get(key).map(|s| s.value()).unwrap_or_else(|| default.to_string())
+    attrs
+        .pairs
+        .get(key)
+        .map(|s| s.value())
+        .unwrap_or_else(|| default.to_string())
 }
 
 // ============================================================================
@@ -560,8 +570,12 @@ pub fn dsh_service_dual(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ctx_str = take_lit_or(&attrs, "ctx", "::ma_harness_cordis::Context");
     let err_str = take_lit_or(&attrs, "error", "::ma_harness_cordis::BoxedError");
     let ctor_str = take_lit_or(&attrs, "ctor", "Self::create");
-    let ctx_ty: TokenStream2 = ctx_str.parse().unwrap_or(quote!(::ma_harness_cordis::Context));
-    let err_ty: TokenStream2 = err_str.parse().unwrap_or(quote!(::ma_harness_cordis::BoxedError));
+    let ctx_ty: TokenStream2 = ctx_str
+        .parse()
+        .unwrap_or(quote!(::ma_harness_cordis::Context));
+    let err_ty: TokenStream2 = err_str
+        .parse()
+        .unwrap_or(quote!(::ma_harness_cordis::BoxedError));
     let ctor: TokenStream2 = ctor_str.parse().unwrap_or(quote!(Self::create));
 
     let struct_name = &input.ident;

@@ -130,13 +130,12 @@ impl FixtureLoader {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let fixture: Fixture = serde_json::from_str(trimmed).map_err(|e| {
-                FixtureError::Parse {
+            let fixture: Fixture =
+                serde_json::from_str(trimmed).map_err(|e| FixtureError::Parse {
                     line: line_no,
                     source: e,
                     raw: trimmed.to_string(),
-                }
-            })?;
+                })?;
             fixtures.push(fixture);
         }
         Ok(fixtures)
@@ -187,7 +186,10 @@ mod tests {
     fn fixture_category_as_str() {
         assert_eq!(FixtureCategory::ToolCall.as_str(), "tool_call");
         assert_eq!(FixtureCategory::AgentRun.as_str(), "agent_run");
-        assert_eq!(FixtureCategory::SessionLifecycle.as_str(), "session_lifecycle");
+        assert_eq!(
+            FixtureCategory::SessionLifecycle.as_str(),
+            "session_lifecycle"
+        );
         assert_eq!(FixtureCategory::EventOrdering.as_str(), "event_ordering");
         assert_eq!(FixtureCategory::ErrorPath.as_str(), "error_path");
     }

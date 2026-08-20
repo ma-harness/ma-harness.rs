@@ -115,12 +115,7 @@ impl ToolRegistry {
     ///
     /// 行为跟 P7-3 前一致 (backward-compat). 业务方想用完整 7-stage pipeline 调
     /// [`crate::tool_pipeline::invoke_with_pipeline`] 自己传 `PipelineConfig`.
-    pub async fn invoke(
-        &self,
-        name: &str,
-        args: Value,
-        ctx: Context,
-    ) -> anyhow::Result<Value> {
+    pub async fn invoke(&self, name: &str, args: Value, ctx: Context) -> anyhow::Result<Value> {
         let entry = {
             let inner = self.inner.read();
             inner
@@ -139,8 +134,6 @@ impl ToolRegistry {
         )
         .await
     }
-
-
 
     /// 列出所有 tool 的 schema
     pub fn list_schemas(&self) -> Vec<ToolSchema> {
@@ -162,10 +155,7 @@ mod tests {
     use super::*;
     use futures::future::BoxFuture;
 
-    fn stub_invoke(
-        _args: Value,
-        _ctx: &Context,
-    ) -> BoxFuture<'static, anyhow::Result<Value>> {
+    fn stub_invoke(_args: Value, _ctx: &Context) -> BoxFuture<'static, anyhow::Result<Value>> {
         Box::pin(async move { Ok(Value::String("ok".to_string())) })
     }
 

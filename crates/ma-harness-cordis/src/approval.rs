@@ -160,7 +160,11 @@ impl ApprovalRegistry {
     }
 
     /// 走完整审批 (业务方手动调)
-    pub async fn check(&self, ctx: &Context, req: &ApprovalRequest) -> Result<ApprovalDecision, BoxedError> {
+    pub async fn check(
+        &self,
+        ctx: &Context,
+        req: &ApprovalRequest,
+    ) -> Result<ApprovalDecision, BoxedError> {
         if !self.needs_approval(req) {
             return Ok(ApprovalDecision::AutoApprove);
         }
@@ -218,9 +222,7 @@ impl ChannelApprovalService {
     /// 新建空 service
     pub fn new() -> Self {
         Self {
-            pending: std::sync::Arc::new(parking_lot::Mutex::new(
-                std::collections::HashMap::new(),
-            )),
+            pending: std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -405,9 +407,7 @@ mod tests {
         // 业务方异步: spawn request, 100ms 后 submit
         let svc2 = svc.clone();
         let req = make_request("req-1");
-        let task = tokio::spawn(async move {
-            svc2.request_approval(&ctx, &req).await
-        });
+        let task = tokio::spawn(async move { svc2.request_approval(&ctx, &req).await });
 
         // 等 service 装上 pending
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -435,9 +435,7 @@ mod tests {
         let ctx = Context::new();
         let svc2 = svc.clone();
         let req = make_request("req-2");
-        let task = tokio::spawn(async move {
-            svc2.request_approval(&ctx, &req).await
-        });
+        let task = tokio::spawn(async move { svc2.request_approval(&ctx, &req).await });
         tokio::time::sleep(Duration::from_millis(50)).await;
         let cancelled = svc.cancel("req-2");
         assert!(cancelled);
@@ -456,9 +454,7 @@ mod tests {
         let ctx = Context::new();
         let svc2 = svc.clone();
         let req = make_request("req-3");
-        let task = tokio::spawn(async move {
-            svc2.request_approval(&ctx, &req).await
-        });
+        let task = tokio::spawn(async move { svc2.request_approval(&ctx, &req).await });
         tokio::time::sleep(Duration::from_millis(50)).await;
         let removed = svc.remove_pending("req-3");
         assert!(removed);
@@ -476,9 +472,7 @@ mod tests {
         let t1 = tokio::spawn(async move { svc2.request_approval(&ctx, &req1).await });
         let svc3 = svc.clone();
         let req2 = make_request("req-b");
-        let t2 = tokio::spawn(async move {
-            svc3.request_approval(&Context::new(), &req2).await
-        });
+        let t2 = tokio::spawn(async move { svc3.request_approval(&Context::new(), &req2).await });
         tokio::time::sleep(Duration::from_millis(50)).await;
         let ids = svc.pending_ids();
         assert_eq!(ids.len(), 2);

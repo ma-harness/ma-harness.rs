@@ -8,8 +8,8 @@ use std::sync::Arc;
 use ma_harness_core::{AgentLoop, AgentRunRequest, AgentRunResponse, EventLog, ModelAdapter};
 use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentService, AgentRunResponse as ProtoAgentRunResponse,
-    AgentState as ProtoAgentState, CancelRequest, CancelResponse, FinishReason as ProtoFinishReason,
-    GetRunRequest,
+    AgentState as ProtoAgentState, CancelRequest, CancelResponse,
+    FinishReason as ProtoFinishReason, GetRunRequest,
 };
 use ma_harness_proto::convert::session_event_to_proto;
 use tonic::{Request, Response, Status};
@@ -22,12 +22,8 @@ fn run_response_to_proto(r: AgentRunResponse) -> ProtoAgentRunResponse {
         finish_reason: match r.model_response.finish_reason {
             ma_harness_core::FinishReason::Stop => ProtoFinishReason::Stop as i32,
             ma_harness_core::FinishReason::Length => ProtoFinishReason::Length as i32,
-            ma_harness_core::FinishReason::ToolCalls => {
-                ProtoFinishReason::ToolCalls as i32
-            }
-            ma_harness_core::FinishReason::ContentFilter => {
-                ProtoFinishReason::ContentFilter as i32
-            }
+            ma_harness_core::FinishReason::ToolCalls => ProtoFinishReason::ToolCalls as i32,
+            ma_harness_core::FinishReason::ContentFilter => ProtoFinishReason::ContentFilter as i32,
             ma_harness_core::FinishReason::Error => ProtoFinishReason::Error as i32,
         },
         messages: vec![], // Phase 1 不返 messages 列表
@@ -58,12 +54,17 @@ impl AgentServiceImpl {
     }
 }
 
-type RunStream = Pin<Box<dyn futures::Stream<Item = Result<ma_harness_proto::ma_harness::v1::AgentStreamEvent, Status>> + Send>>;
+type RunStream = Pin<
+    Box<
+        dyn futures::Stream<
+                Item = Result<ma_harness_proto::ma_harness::v1::AgentStreamEvent, Status>,
+            > + Send,
+    >,
+>;
 
 #[tonic::async_trait]
 impl AgentService for AgentServiceImpl {
     type RunStreamStream = RunStream;
-
 
     async fn run(
         &self,
@@ -115,7 +116,8 @@ impl AgentService for AgentServiceImpl {
 
         // 缓存 + 返
         let proto_resp = run_response_to_proto(result);
-        self.runs.insert(proto_resp.run_id.clone(), proto_resp.clone());
+        self.runs
+            .insert(proto_resp.run_id.clone(), proto_resp.clone());
         Ok(Response::new(proto_resp))
     }
 
@@ -139,12 +141,13 @@ impl AgentService for AgentServiceImpl {
             .input
             .as_ref()
             .and_then(|m| {
-                m.content.first().and_then(|cb| cb.content.as_ref()).and_then(|c| {
-                    match c {
+                m.content
+                    .first()
+                    .and_then(|cb| cb.content.as_ref())
+                    .and_then(|c| match c {
                         Content::Text(t) => Some(t.text.clone()),
                         _ => None,
-                    }
-                })
+                    })
             })
             .unwrap_or_default();
         let model_config = proto_req.model_config.as_ref();
@@ -202,7 +205,10 @@ impl AgentService for AgentServiceImpl {
         Ok(Response::new(pinned))
     }
 
-    async fn cancel(&self, _request: Request<CancelRequest>) -> Result<Response<CancelResponse>, Status> {
+    async fn cancel(
+        &self,
+        _request: Request<CancelRequest>,
+    ) -> Result<Response<CancelResponse>, Status> {
         Err(Status::unimplemented("Cancel 留 Phase 2"))
     }
 
@@ -259,10 +265,7 @@ mod tests {
             options: None,
         };
 
-        let result = svc
-            .run(Request::new(proto_req))
-            .await
-            .unwrap();
+        let result = svc.run(Request::new(proto_req)).await.unwrap();
         let resp = result.into_inner();
         assert!(!resp.run_id.is_empty());
         assert_eq!(resp.final_state, ProtoAgentState::Finished as i32);
@@ -304,7 +307,9 @@ mod tests {
         let run_id = resp.into_inner().run_id;
 
         // get_run 拿得到
-        let get_req = GetRunRequest { run_id: run_id.clone() };
+        let get_req = GetRunRequest {
+            run_id: run_id.clone(),
+        };
         let get_resp = svc.get_run(Request::new(get_req)).await.unwrap();
         assert_eq!(get_resp.into_inner().run_id, run_id);
     }
@@ -353,7 +358,7 @@ mod tests {
                 session_id: "stream-test".to_string(),
             }),
             model_config: Some(ModelConfig {
-                adapter: 0,  // ModelAdapter::Unspecified, 不影响
+                adapter: 0, // ModelAdapter::Unspecified, 不影响
                 model: "stub".to_string(),
                 temperature: 0.0,
                 max_tokens: 100,

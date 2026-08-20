@@ -154,23 +154,22 @@ impl LoadedPlugin {
 
         // 1. 拿 plugin_schemas_json symbol
         // SAFETY: plugin 是 cdylib, plugin_schemas_json 由 render 框架生成 extern "C"
-        let schemas_fn: libloading::Symbol<extern "C" fn() -> *const std::ffi::c_char> = unsafe {
-            self._library.get(b"plugin_schemas_json\0")
-        }
-        .map_err(|e| {
-            CreatorError::Load(format!(
-                "找 plugin_schemas_json 符号失败 (P10-1.8 v2 C-ABI JSON 模式): {e}"
-            ))
-        })?;
+        let schemas_fn: libloading::Symbol<extern "C" fn() -> *const std::ffi::c_char> =
+            unsafe { self._library.get(b"plugin_schemas_json\0") }.map_err(|e| {
+                CreatorError::Load(format!(
+                    "找 plugin_schemas_json 符号失败 (P10-1.8 v2 C-ABI JSON 模式): {e}"
+                ))
+            })?;
 
         // 2. 拿 plugin_invoke_json symbol
         // SAFETY: plugin 是 cdylib, plugin_invoke_json 由 render 框架生成 extern "C"
         let plugin_invoke_fn: libloading::Symbol<
-            extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> *const std::ffi::c_char,
+            extern "C" fn(
+                *const std::ffi::c_char,
+                *const std::ffi::c_char,
+            ) -> *const std::ffi::c_char,
         > = unsafe { self._library.get(b"plugin_invoke_json\0") }.map_err(|e| {
-            CreatorError::Load(format!(
-                "找 plugin_invoke_json 符号失败 (P10-1.8 v2): {e}"
-            ))
+            CreatorError::Load(format!("找 plugin_invoke_json 符号失败 (P10-1.8 v2): {e}"))
         })?;
 
         // 3. 拿 schemas JSON
@@ -188,8 +187,10 @@ impl LoadedPlugin {
         // 5. 对每个 schema, 造 host ToolInvokeFn (host-allocated, vtable 稳) + 注册
         // **关键**: libloading::Symbol 借 Library 生命周期, 不能 capture 进 'static Arc closure
         // 改 capture 函数指针 (extern "C" fn 是 Copy, 可以 move 进 closure)
-        let plugin_invoke_fn_ptr: extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char) -> *const std::ffi::c_char =
-            *plugin_invoke_fn;
+        let plugin_invoke_fn_ptr: extern "C" fn(
+            *const std::ffi::c_char,
+            *const std::ffi::c_char,
+        ) -> *const std::ffi::c_char = *plugin_invoke_fn;
         for schema in schema_list {
             let schema_name_for_invoke = schema.name.clone();
             // 业务方 invoke 路径: host 闭包 → plugin_invoke_json(name, args_json)
@@ -442,7 +443,9 @@ impl CreatorRegistry {
     /// 优先用 compile 记录的 `artifact_path` (P10-1.6 fix), 兜底用 `output_dir` 拼.
     /// 找不到 plugin 或没 Loaded 时返错.
     pub fn dylib_artifact_path(&self, name: &str) -> Result<PathBuf, CreatorError> {
-        let record = self.get(name).ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
+        let record = self
+            .get(name)
+            .ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
         if record.status != CompileStatus::Loaded {
             return Err(CreatorError::NotLoaded(name.to_string(), record.status));
         }
@@ -469,7 +472,9 @@ impl CreatorRegistry {
     /// 4. libloading 加载 `.so`/`.dll` 拿到 register 函数指针
     /// 5. 调 register(registry) 把 tool 注入 ToolRegistry
     pub fn planned_subprocess_commands(&self, name: &str) -> Result<Vec<String>, CreatorError> {
-        let record = self.get(name).ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
+        let record = self
+            .get(name)
+            .ok_or_else(|| CreatorError::NotFound(name.to_string()))?;
         let dir = self.output_dir.join(&record.spec.name);
         let src_dir = dir.join("src");
         let cargo_toml = format!(
@@ -480,18 +485,26 @@ impl CreatorRegistry {
         );
         let lib_rs = format!(
             "// auto-generated from PluginSpec {}\n{}\n\npub fn register() {{\n    // {} entry: {}\n}}\n",
-            record.spec.name,
-            record.spec.source_code,
-            record.spec.name,
-            record.spec.entry_fn,
+            record.spec.name, record.spec.source_code, record.spec.name, record.spec.entry_fn,
         );
         // P10-1.6: 用 creator_compile::dylib_filename 算跨平台文件名 (避免硬编码 .so)
         let dylib = crate::creator_compile::dylib_filename(&record.spec.name);
         let commands = vec![
             format!("mkdir -p {}", src_dir.display()),
-            format!("write {} ({} bytes)", dir.join("Cargo.toml").display(), cargo_toml.len()),
-            format!("write {} ({} bytes)", src_dir.join("lib.rs").display(), lib_rs.len()),
-            format!("cargo build --release --manifest-path={}/Cargo.toml", dir.display()),
+            format!(
+                "write {} ({} bytes)",
+                dir.join("Cargo.toml").display(),
+                cargo_toml.len()
+            ),
+            format!(
+                "write {} ({} bytes)",
+                src_dir.join("lib.rs").display(),
+                lib_rs.len()
+            ),
+            format!(
+                "cargo build --release --manifest-path={}/Cargo.toml",
+                dir.display()
+            ),
             format!("load_dylib: {}/target/release/{}", dir.display(), dylib),
         ];
         Ok(commands)
@@ -640,7 +653,11 @@ mod tests {
         }
         let loaded = result.unwrap();
         assert_eq!(loaded.name(), "real_compile_load_test");
-        assert!(loaded.path().exists(), "dylib 路径应存在: {}", loaded.path().display());
+        assert!(
+            loaded.path().exists(),
+            "dylib 路径应存在: {}",
+            loaded.path().display()
+        );
         // RAII: loaded 持 Library, 不会被 dlclose
     }
 

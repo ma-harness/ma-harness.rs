@@ -1,4 +1,4 @@
-﻿//! # 命名约定
+//! # 命名约定
 //!
 //! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-server`
 //! **Crate ident** (`use` 路径): `ma_harness_server`
@@ -47,8 +47,7 @@ pub mod session_store;
 pub use agent_service::AgentServiceImpl;
 pub use session_service::SessionServiceImpl;
 pub use session_store::{
-    default_store, DefaultSessionStore, InMemoryStore, SessionStore, SessionStoreError,
-    SqliteStore,
+    default_store, DefaultSessionStore, InMemoryStore, SessionStore, SessionStoreError, SqliteStore,
 };
 
 /// ServerBuilder — 拼装 server 所需的全部资源
@@ -129,10 +128,7 @@ mod tests {
             fn name(&self) -> &str {
                 "echo"
             }
-            async fn complete(
-                &self,
-                req: &ModelRequest,
-            ) -> anyhow::Result<ModelResponse> {
+            async fn complete(&self, req: &ModelRequest) -> anyhow::Result<ModelResponse> {
                 Ok(ModelResponse {
                     model: req.model.clone(),
                     content: "echo".to_string(),

@@ -40,17 +40,15 @@ static GLOBAL_SESSION_STORE: parking_lot::Mutex<Option<Arc<dyn SessionStore>>> =
 /// 全局 EventLog 容器 (Phase 5.3 / Day 92).
 ///
 /// 跟 GLOBAL_SESSION_STORE 同样模式: Mutex 允许 test 多次覆盖.
-static GLOBAL_EVENT_LOG: parking_lot::Mutex<Option<Arc<EventLog>>> =
-    parking_lot::Mutex::new(None);
+static GLOBAL_EVENT_LOG: parking_lot::Mutex<Option<Arc<EventLog>>> = parking_lot::Mutex::new(None);
 
 /// 2026-08-19 (Day 101 / P7-2.5): 全局 approval registry 容器
 ///
 /// 跟 GLOBAL_EVENT_LOG 同样模式: Mutex 允许 test 多次覆盖.
 /// 业务方调 set_global_approval() 装 approval service + policy.
 /// HTTP handlers (POST/GET /v1/approvals) 走这个全局.
-static GLOBAL_APPROVAL: parking_lot::Mutex<
-    Option<Arc<ma_harness_cordis::ApprovalRegistry>>,
-> = parking_lot::Mutex::new(None);
+static GLOBAL_APPROVAL: parking_lot::Mutex<Option<Arc<ma_harness_cordis::ApprovalRegistry>>> =
+    parking_lot::Mutex::new(None);
 
 /// 2026-08-19 (Day 101 / P7-3.6): 全局 ChannelApprovalService (v2 oneshot 桥接)
 ///
@@ -127,9 +125,7 @@ pub fn run_router(adapter: Arc<dyn ModelAdapter>) -> Router {
     Router::new()
         .push(Router::with_path("health").get(health))
         .push(Router::with_path("version").get(version))
-        .push(
-            Router::with_path("v1").push(Router::with_path("runs").post(create_run_handler)),
-        )
+        .push(Router::with_path("v1").push(Router::with_path("runs").post(create_run_handler)))
 }
 
 /// 构造含 /v1/runs + /v1/sessions 的 Router (Phase 5.1 / Day 90)
@@ -210,14 +206,13 @@ fn sessions_router_with_events() -> Router {
             Router::with_path("{id}").push(Router::with_path("close").post(close_session_handler)),
         )
         .push(
-            Router::with_path("{id}").push(
-                Router::with_path("events")
-                    .get(get_session_events_handler)
-                    .push(Router::with_path("stream").get(stream_session_events_handler)),
-            )
-            .push(
-                Router::with_path("token-stats").get(get_token_stats_handler),
-            ),
+            Router::with_path("{id}")
+                .push(
+                    Router::with_path("events")
+                        .get(get_session_events_handler)
+                        .push(Router::with_path("stream").get(stream_session_events_handler)),
+                )
+                .push(Router::with_path("token-stats").get(get_token_stats_handler)),
         )
 }
 
@@ -316,7 +311,10 @@ async fn submit_approval_handler(
     let decision = match req.decision.as_str() {
         "approved" | "approve" => ApprovalDecision::Approved,
         "denied" | "deny" => ApprovalDecision::Denied {
-            reason: req.reason.clone().unwrap_or_else(|| "user denied".to_string()),
+            reason: req
+                .reason
+                .clone()
+                .unwrap_or_else(|| "user denied".to_string()),
         },
         "auto_approve" | "auto" => ApprovalDecision::AutoApprove,
         other => {
@@ -449,9 +447,8 @@ async fn create_run_handler(
         .cloned()
         .unwrap_or_else(|| Arc::new(StubModelAdapter));
 
-    let log = EventLog::open_in_memory().map_err(|e| {
-        salvo::Error::other(format!("eventlog open: {e}"))
-    })?;
+    let log = EventLog::open_in_memory()
+        .map_err(|e| salvo::Error::other(format!("eventlog open: {e}")))?;
     let req = body.0;
     let session_id = req
         .session_id
@@ -465,9 +462,10 @@ async fn create_run_handler(
         max_tokens: req.max_tokens,
         system_prompt: req.system_prompt,
     };
-    let resp = agent.run(agent_req).await.map_err(|e| {
-        salvo::Error::other(format!("agent run: {e}"))
-    })?;
+    let resp = agent
+        .run(agent_req)
+        .await
+        .map_err(|e| salvo::Error::other(format!("agent run: {e}")))?;
     Ok(Json(CreateRunResponse {
         session_id: resp.session_id,
         run_id: resp.run_id,
@@ -678,7 +676,9 @@ async fn create_session_handler(
 
 /// GET /v1/sessions/{id} — 拿单个 session
 #[endpoint]
-async fn get_session_handler(id: PathParam<String>) -> Result<Json<ProtoSessionJson>, salvo::Error> {
+async fn get_session_handler(
+    id: PathParam<String>,
+) -> Result<Json<ProtoSessionJson>, salvo::Error> {
     let svc = session_service()?;
     let s = tokio::task::spawn_blocking(move || svc.get_session(&id.0))
         .await
@@ -690,7 +690,9 @@ async fn get_session_handler(id: PathParam<String>) -> Result<Json<ProtoSessionJ
 
 /// POST /v1/sessions/{id}/close — 关闭 session
 #[endpoint]
-async fn close_session_handler(id: PathParam<String>) -> Result<Json<ProtoSessionJson>, salvo::Error> {
+async fn close_session_handler(
+    id: PathParam<String>,
+) -> Result<Json<ProtoSessionJson>, salvo::Error> {
     let svc = session_service()?;
     let s = tokio::task::spawn_blocking(move || svc.close_session(&id.0))
         .await
@@ -860,7 +862,10 @@ async fn get_token_stats_handler(
         let entry = by_model.entry(model.clone()).or_default();
         if event.event_type == ma_harness_core::EventType::ModelRequest {
             request_count += 1;
-            let pt = payload.get("estimated_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let pt = payload
+                .get("estimated_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
             prompt_total += pt;
             entry.prompt_tokens += pt;
         } else {
@@ -1121,14 +1126,19 @@ mod tests {
         assert_eq!(created.name, "test-session-1");
         assert_eq!(created.enabled_plugins, vec!["hello".to_string()]);
         // state 应该是 Created (1)
-        assert_eq!(created.state, 1, "state 应是 Created (1), got {}", created.state);
+        assert_eq!(
+            created.state, 1,
+            "state 应是 Created (1), got {}",
+            created.state
+        );
         // id 是 uuid 形式
         assert!(!created.id.is_empty());
 
         // 2. get
-        let mut resp = TestClient::get(format!("http://localhost/v1/sessions/{}", created.id).as_str())
-            .send(&service)
-            .await;
+        let mut resp =
+            TestClient::get(format!("http://localhost/v1/sessions/{}", created.id).as_str())
+                .send(&service)
+                .await;
         assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
         let got: ProtoSessionJson = resp.take_json().await.unwrap();
         assert_eq!(got.id, created.id);
@@ -1168,13 +1178,18 @@ mod tests {
             .await;
         let created: ProtoSessionJson = resp.take_json().await.unwrap();
         // close
-        let mut resp = TestClient::post(format!("http://localhost/v1/sessions/{}/close", created.id).as_str())
-            .send(&service)
-            .await;
+        let mut resp =
+            TestClient::post(format!("http://localhost/v1/sessions/{}/close", created.id).as_str())
+                .send(&service)
+                .await;
         assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
         let closed: ProtoSessionJson = resp.take_json().await.unwrap();
         // state 应该是 Closed (4)
-        assert_eq!(closed.state, 4, "state 应是 Closed (4), got {}", closed.state);
+        assert_eq!(
+            closed.state, 4,
+            "state 应是 Closed (4), got {}",
+            closed.state
+        );
         assert!(closed.closed_at.is_some(), "closed_at 应填");
     }
 
@@ -1211,7 +1226,8 @@ mod tests {
             let _ = log.append(ev);
         }
         // 别的 session, 不应返回
-        let mut other = ma_harness_core::SessionEvent::new("other", ma_harness_core::EventType::SessionStart);
+        let mut other =
+            ma_harness_core::SessionEvent::new("other", ma_harness_core::EventType::SessionStart);
         other.payload_json = Some(r#"{"session":"other"}"#.to_string());
         let _ = log.append(other);
 
@@ -1293,7 +1309,11 @@ mod tests {
         let body_str = String::from_utf8_lossy(&body_bytes);
         // 应含 3 个 event 字段
         let event_count = body_str.matches("event:").count();
-        assert!(event_count >= 1, "SSE body 应有 event: 字段, got: {}", body_str);
+        assert!(
+            event_count >= 1,
+            "SSE body 应有 event: 字段, got: {}",
+            body_str
+        );
         // 也应含 token "alpha"
         assert!(body_str.contains("alpha"), "SSE 应含 token 'alpha'");
     }
@@ -1496,18 +1516,20 @@ mod tests {
 
         // 验 SSE 端点存在 + 返 200 + Content-Type: text/event-stream
         // (业务方实际拿 body 用 EventSource 长连, server 测试不阻塞读 body)
-        let resp = TestClient::get(
-            "http://localhost/v1/sessions/empty-session/events/stream?since_seq=0",
-        )
-        .send(&service)
-        .await;
+        let resp =
+            TestClient::get("http://localhost/v1/sessions/empty-session/events/stream?since_seq=0")
+                .send(&service)
+                .await;
         assert_eq!(resp.status_code, Some(salvo::http::StatusCode::OK));
         let ct = resp
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(ct.contains("event-stream"), "content-type 应含 event-stream, got: {ct}");
+        assert!(
+            ct.contains("event-stream"),
+            "content-type 应含 event-stream, got: {ct}"
+        );
     }
 
     // P10-7: Prometheus /v1/metrics 端点
@@ -1533,7 +1555,10 @@ mod tests {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(ct.contains("text/plain"), "content-type 应含 text/plain, got: {ct}");
+        assert!(
+            ct.contains("text/plain"),
+            "content-type 应含 text/plain, got: {ct}"
+        );
         let body = resp.take_string().await.unwrap_or_default();
         assert!(body.contains("# HELP ma_harness_uptime_seconds"));
         assert!(body.contains("ma_harness_sessions_total"));

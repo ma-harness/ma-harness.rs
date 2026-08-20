@@ -27,7 +27,8 @@ use thiserror::Error;
 // ============================================================================
 
 /// 出站 URL 白名?(前缀匹配, 业务?set)
-pub static EGRESS_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> = ctx_key!("egress_allow_list");
+pub static EGRESS_ALLOW_LIST: ma_harness_cordis::CtxKey<Vec<String>> =
+    ctx_key!("egress_allow_list");
 
 /// HTTP 请求超时 (ms)
 pub static TIMEOUT_MS: ma_harness_cordis::CtxKey<u32> = ctx_key!("timeout_ms");
@@ -109,12 +110,7 @@ impl WebService {
     pub async fn http_get(&self, ctx: &Context, url: &str) -> Result<HttpResponse, WebError> {
         self.check_allow_list(ctx, url)?;
         let timeout = self.get_timeout(ctx);
-        let resp = self
-            .client
-            .get(url)
-            .timeout(timeout)
-            .send()
-            .await?;
+        let resp = self.client.get(url).timeout(timeout).send().await?;
         let status = resp.status().as_u16();
         let content_type = resp
             .headers()
@@ -305,7 +301,10 @@ mod tests {
     #[tokio::test]
     async fn http_get_outside_allow_list_errors() {
         let ctx = Context::new();
-        ctx.set(EGRESS_ALLOW_LIST, vec!["https://allowed.example.com".to_string()]);
+        ctx.set(
+            EGRESS_ALLOW_LIST,
+            vec!["https://allowed.example.com".to_string()],
+        );
         let svc = WebService::new();
         let result = svc.http_get(&ctx, "https://evil.example.com").await;
         assert!(matches!(result, Err(WebError::NotInAllowList { .. })));

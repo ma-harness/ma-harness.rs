@@ -51,7 +51,7 @@ fn rt() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    .expect("build runtime")
+        .expect("build runtime")
 }
 
 fn bench_agent_loop_1_step(c: &mut Criterion) {

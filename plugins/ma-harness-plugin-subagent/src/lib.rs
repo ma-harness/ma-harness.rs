@@ -28,7 +28,8 @@ pub const DEFAULT_MAX_DEPTH: u32 = 3;
 pub static PARENT_SESSION_ID: ma_harness_cordis::CtxKey<String> = ctx_key!("parent_session_id");
 
 /// P7-4 (Day 101): Parent 是否共享 events 给 sub (system prompt 注入)
-pub static PARENT_EVENTS_INCLUDED: ma_harness_cordis::CtxKey<bool> = ctx_key!("parent_events_included");
+pub static PARENT_EVENTS_INCLUDED: ma_harness_cordis::CtxKey<bool> =
+    ctx_key!("parent_events_included");
 
 #[derive(Debug, Error)]
 pub enum SubagentError {

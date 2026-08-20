@@ -71,7 +71,12 @@ fn framework_runs_synthetic_passing_fixture() {
     let runner = ConformanceRunner::new();
     let f = make_passing_fixture("smoke_passing");
     let r = runner.run_fixture(&f);
-    assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+    assert!(
+        r.is_pass(),
+        "error={:?} diffs={:?}",
+        r.error,
+        r.compare.diffs
+    );
     assert_eq!(r.fixture_name, "smoke_passing");
     assert_eq!(r.compare.actual_count, 1);
     assert_eq!(r.compare.expected_count, 1);
@@ -105,10 +110,7 @@ fn framework_run_all_aggregates_stats() {
 #[test]
 fn framework_writes_markdown_report_to_tempfile() {
     let runner = ConformanceRunner::new();
-    let fixtures = vec![
-        make_passing_fixture("x"),
-        make_failing_fixture("y"),
-    ];
+    let fixtures = vec![make_passing_fixture("x"), make_failing_fixture("y")];
     let results = runner.run_all(&fixtures);
     let summary = runner.build_summary(&results);
     let report = ReportWriter::build(&results, summary);
@@ -191,14 +193,26 @@ fn framework_loads_synthetic_fixtures_from_jsonl() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let path = std::path::Path::new(&manifest_dir).join("fixtures/smoke.jsonl");
     let fixtures = FixtureLoader::from_jsonl(&path).expect("load smoke fixtures");
-    assert!(fixtures.len() >= 4, "expected >= 4 fixtures, got {}", fixtures.len());
+    assert!(
+        fixtures.len() >= 4,
+        "expected >= 4 fixtures, got {}",
+        fixtures.len()
+    );
 
     let runner = ConformanceRunner::new();
     let results = runner.run_all(&fixtures);
     let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
     // smoke.jsonl 故意有 1 个 fail (extra event), 其余 pass
-    assert!(stats.passed >= 3, "expected >= 3 pass, got {}", stats.passed);
-    assert!(stats.failed >= 1, "expected >= 1 fail, got {}", stats.failed);
+    assert!(
+        stats.passed >= 3,
+        "expected >= 3 pass, got {}",
+        stats.passed
+    );
+    assert!(
+        stats.failed >= 1,
+        "expected >= 1 fail, got {}",
+        stats.failed
+    );
     assert_eq!(stats.errored, 0);
 }
 
@@ -248,10 +262,19 @@ fn framework_event_log_preserves_order_across_4_events() {
 
     let runner = ConformanceRunner::new();
     let r = runner.run_fixture(&f);
-    assert!(r.is_pass(), "error={:?} diffs={:?}", r.error, r.compare.diffs);
+    assert!(
+        r.is_pass(),
+        "error={:?} diffs={:?}",
+        r.error,
+        r.compare.diffs
+    );
     assert_eq!(r.actual_events.len(), 4);
     // 顺序保持 (EventLog 1-based seq 单调递增, query 读回按 seq 排序)
-    let types: Vec<&str> = r.actual_events.iter().map(|e| e.event_type.as_str()).collect();
+    let types: Vec<&str> = r
+        .actual_events
+        .iter()
+        .map(|e| e.event_type.as_str())
+        .collect();
     assert_eq!(types, vec!["RunStart", "ToolCall", "ToolResult", "RunEnd"]);
 }
 
@@ -273,8 +296,20 @@ fn dsh_format_loads_synthetic_fixtures() {
     assert_eq!(fs[0].input.events[0].event_type, "RunStart");
     assert_eq!(fs[0].input.events[1].event_type, "UserInput");
     // output.events 含 expected events + assistant message 派生
-    assert!(fs[0].output.events.iter().any(|e| e.event_type == "RunStart"));
-    assert!(fs[0].output.events.iter().any(|e| e.event_type == "ModelResponse"));
+    assert!(
+        fs[0]
+            .output
+            .events
+            .iter()
+            .any(|e| e.event_type == "RunStart")
+    );
+    assert!(
+        fs[0]
+            .output
+            .events
+            .iter()
+            .any(|e| e.event_type == "ModelResponse")
+    );
     // tools alias → plugins
     assert_eq!(fs[1].input.plugins, vec!["bash"]);
 }
@@ -289,7 +324,10 @@ fn dsh_format_aliases_supported() {
     let fs = parse_dsh_jsonl(content).expect("parse");
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].input.plugins, vec!["bash", "fs"]);
-    assert_eq!(fs[0].output.events[0].payload_match.get("tool").unwrap(), "bash");
+    assert_eq!(
+        fs[0].output.events[0].payload_match.get("tool").unwrap(),
+        "bash"
+    );
 }
 
 #[test]
@@ -310,8 +348,20 @@ fn runner_runs_dsh_synthetic_fixtures() {
     // - expected_output.data 非对象走 "data" key fallback
     // - expected_output.messages assistant 派生 ModelResponse
     // - alias 兼容 (tools/expectedOutput/payload)
-    assert_eq!(stats.errored, 0, "runner errors: {:?}", results.iter().filter(|r| r.error.is_some()).collect::<Vec<_>>());
-    assert_eq!(stats.passed, 7, "expected 7 pass (P11-1.5 收官), got {} (failed={}, total={})", stats.passed, stats.failed, stats.total);
+    assert_eq!(
+        stats.errored,
+        0,
+        "runner errors: {:?}",
+        results
+            .iter()
+            .filter(|r| r.error.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        stats.passed, 7,
+        "expected 7 pass (P11-1.5 收官), got {} (failed={}, total={})",
+        stats.passed, stats.failed, stats.total
+    );
     assert_eq!(stats.failed, 0, "expected 0 fail, got {:?}", stats.failed);
 }
 
@@ -322,10 +372,16 @@ fn runner_runs_dsh_snap_converted_fixtures() {
     use ma_harness_conformance::dsh_format::parse_dsh_jsonl;
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let path = std::path::Path::new(&manifest_dir).join("fixtures/dsh-snap-converted/dsh_snap.jsonl");
+    let path =
+        std::path::Path::new(&manifest_dir).join("fixtures/dsh-snap-converted/dsh_snap.jsonl");
     let content = std::fs::read_to_string(&path).expect("read dsh snap converted");
     let fs = parse_dsh_jsonl(&content).expect("parse dsh snap converted");
-    assert_eq!(fs.len(), 9, "expected 9 dsh snap fixtures, got {}", fs.len());
+    assert_eq!(
+        fs.len(),
+        9,
+        "expected 9 dsh snap fixtures, got {}",
+        fs.len()
+    );
 
     let runner = ConformanceRunner::new();
     let results = runner.run_all(&fs);
@@ -334,7 +390,19 @@ fn runner_runs_dsh_snap_converted_fixtures() {
     // - suite/ 6: authored-error, blocked-log, no-model, pin-turn, plain-turn, shared-pin
     // - record-suite/ 3: rec-child, rec-pin, rec-skip
     // 转换脚本: crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap_convert.py
-    assert_eq!(stats.errored, 0, "runner errors: {:?}", results.iter().filter(|r| r.error.is_some()).collect::<Vec<_>>());
-    assert_eq!(stats.passed, 9, "expected 9 pass (P11-2 收官), got {} (failed={}, total={})", stats.passed, stats.failed, stats.total);
+    assert_eq!(
+        stats.errored,
+        0,
+        "runner errors: {:?}",
+        results
+            .iter()
+            .filter(|r| r.error.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        stats.passed, 9,
+        "expected 9 pass (P11-2 收官), got {} (failed={}, total={})",
+        stats.passed, stats.failed, stats.total
+    );
     assert_eq!(stats.failed, 0, "expected 0 fail, got {:?}", stats.failed);
 }

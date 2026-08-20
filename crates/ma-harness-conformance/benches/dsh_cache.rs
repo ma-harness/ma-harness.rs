@@ -34,12 +34,15 @@ fn bench_parse_with_cache(c: &mut Criterion) {
     std::fs::write(&path, generate_fixture_jsonl(100)).unwrap();
     let cache = DshFixtureCache::new();
 
-    c.bench_function("DshFixtureCache::from_jsonl_cached 100 fixtures (cache hit)", |b| {
-        b.iter(|| {
-            let fixtures = cache.from_jsonl_cached(black_box(&path)).unwrap();
-            black_box(fixtures);
-        });
-    });
+    c.bench_function(
+        "DshFixtureCache::from_jsonl_cached 100 fixtures (cache hit)",
+        |b| {
+            b.iter(|| {
+                let fixtures = cache.from_jsonl_cached(black_box(&path)).unwrap();
+                black_box(fixtures);
+            });
+        },
+    );
 }
 
 criterion_group!(benches, bench_parse_no_cache, bench_parse_with_cache);

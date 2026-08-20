@@ -189,9 +189,7 @@ impl SqliteStore {
     }
 
     /// 提取 Timestamp (prost_types::Timestamp) 转 (i64 secs, i32 nanos) for sqlite
-    fn ts_to_parts(
-        ts: &Option<prost_types::Timestamp>,
-    ) -> (Option<i64>, Option<i32>) {
+    fn ts_to_parts(ts: &Option<prost_types::Timestamp>) -> (Option<i64>, Option<i32>) {
         match ts {
             Some(t) => (Some(t.seconds), Some(t.nanos)),
             None => (None, None),
@@ -199,10 +197,7 @@ impl SqliteStore {
     }
 
     /// 写 row
-    fn write_session(
-        &self,
-        session: &ProtoSession,
-    ) -> Result<(), SessionStoreError> {
+    fn write_session(&self, session: &ProtoSession) -> Result<(), SessionStoreError> {
         let (cs, cn) = Self::ts_to_parts(&session.created_at);
         let (us, un) = Self::ts_to_parts(&session.updated_at);
         let (xs, xn) = Self::ts_to_parts(&session.closed_at);
@@ -260,7 +255,10 @@ impl SqliteStore {
 
         fn ts(secs: Option<i64>, nanos: Option<i32>) -> Option<prost_types::Timestamp> {
             match (secs, nanos) {
-                (Some(s), Some(n)) => Some(prost_types::Timestamp { seconds: s, nanos: n }),
+                (Some(s), Some(n)) => Some(prost_types::Timestamp {
+                    seconds: s,
+                    nanos: n,
+                }),
                 _ => None,
             }
         }
@@ -270,12 +268,17 @@ impl SqliteStore {
         // SessionMetadata 是 prost::Message, 从 JSON 解析回来.
         // metadata_json 是 Option<String>, metadata_from_json 返 Result<Option<SessionMetadata>, _>
         // -> 想要 Option<SessionMetadata>: 用 .and_then 串接.
-        let metadata = metadata_json
-            .and_then(|s| metadata_from_json(&s).ok().flatten());
+        let metadata = metadata_json.and_then(|s| metadata_from_json(&s).ok().flatten());
         let enabled_plugins = plugins_json
             .map(|s| serde_json::from_str(&s))
             .transpose()
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e)))?
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    11,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?
             .unwrap_or_default();
 
         Ok(ProtoSession {
@@ -383,7 +386,10 @@ mod tests {
         assert_eq!(got.id, "s1");
         assert_eq!(got.name, "first");
         assert_eq!(got.user_id, "user-1");
-        assert_eq!(got.enabled_plugins, vec!["hello".to_string(), "fs".to_string()]);
+        assert_eq!(
+            got.enabled_plugins,
+            vec!["hello".to_string(), "fs".to_string()]
+        );
     }
 
     #[test]

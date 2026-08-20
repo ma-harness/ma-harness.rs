@@ -433,12 +433,14 @@ fn run_with_timeout(
         .spawn()
         .map_err(|e| CreatorError::Compile(format!("spawn cargo 失败: {e}")))?;
 
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        CreatorError::Compile("拿 stdout 失败".to_string())
-    })?;
-    let mut stderr = child.stderr.take().ok_or_else(|| {
-        CreatorError::Compile("拿 stderr 失败".to_string())
-    })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| CreatorError::Compile("拿 stdout 失败".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| CreatorError::Compile("拿 stderr 失败".to_string()))?;
 
     // 跨线程读 stdout/stderr 防止 pipe buffer 阻塞
     let stdout_thread = std::thread::spawn(move || {
@@ -544,8 +546,10 @@ mod tests {
         let n = dylib_filename("foo.");
         assert!(!n.ends_with('.'), "应修剪末尾 .: got {n}");
         // 实际末尾变 _
-        assert!(n.ends_with('_') || n.ends_with(".dll") || n.ends_with(".so") || n.ends_with(".dylib"),
-            "末尾不应是 .: got {n}");
+        assert!(
+            n.ends_with('_') || n.ends_with(".dll") || n.ends_with(".so") || n.ends_with(".dylib"),
+            "末尾不应是 .: got {n}"
+        );
     }
 
     #[test]
@@ -560,7 +564,10 @@ mod tests {
         // 每个 element 都是独立 String
         assert_eq!(all.len(), 1000);
         // 没有重复 (每个名独立)
-        assert_eq!(all.iter().collect::<std::collections::HashSet<_>>().len(), 1000);
+        assert_eq!(
+            all.iter().collect::<std::collections::HashSet<_>>().len(),
+            1000
+        );
     }
 
     #[test]
@@ -594,9 +601,15 @@ mod tests {
         assert!(toml.contains("name = \"test_plugin\""));
         assert!(toml.contains("version = \"0.1.0\""));
         // P10-1.6: edition 改 2024
-        assert!(toml.contains(r#"edition = "2024""#), "edition 应是 2024: got {toml}");
+        assert!(
+            toml.contains(r#"edition = "2024""#),
+            "edition 应是 2024: got {toml}"
+        );
         // P10-1.8 v2: 自动加 serde_json
-        assert!(toml.contains("serde_json"), "应自动加 serde_json: got {toml}");
+        assert!(
+            toml.contains("serde_json"),
+            "应自动加 serde_json: got {toml}"
+        );
     }
 
     #[test]
@@ -639,15 +652,36 @@ pub fn plugin_invoke(name: &str, args: serde_json::Value) -> serde_json::Value {
         };
         let lib = render_lib_rs(&spec);
         // P10-1.8 v2: 框架 wrap C-ABI 入口
-        assert!(lib.contains("plugin_schemas_json"), "应有 plugin_schemas_json wrapper: got\n{lib}");
-        assert!(lib.contains("plugin_invoke_json"), "应有 plugin_invoke_json wrapper: got\n{lib}");
-        assert!(lib.contains(r#"extern "C" fn plugin_schemas_json()"#), "plugin_schemas_json 应该是 extern C: got\n{lib}");
-        assert!(lib.contains(r#"extern "C" fn plugin_invoke_json("#), "plugin_invoke_json 应该是 extern C: got\n{lib}");
+        assert!(
+            lib.contains("plugin_schemas_json"),
+            "应有 plugin_schemas_json wrapper: got\n{lib}"
+        );
+        assert!(
+            lib.contains("plugin_invoke_json"),
+            "应有 plugin_invoke_json wrapper: got\n{lib}"
+        );
+        assert!(
+            lib.contains(r#"extern "C" fn plugin_schemas_json()"#),
+            "plugin_schemas_json 应该是 extern C: got\n{lib}"
+        );
+        assert!(
+            lib.contains(r#"extern "C" fn plugin_invoke_json("#),
+            "plugin_invoke_json 应该是 extern C: got\n{lib}"
+        );
         // 业务方 source_code 全文应包含
-        assert!(lib.contains("plugin_schemas()"), "应包含业务方 plugin_schemas: got\n{lib}");
-        assert!(lib.contains("plugin_invoke("), "应包含业务方 plugin_invoke: got\n{lib}");
+        assert!(
+            lib.contains("plugin_schemas()"),
+            "应包含业务方 plugin_schemas: got\n{lib}"
+        );
+        assert!(
+            lib.contains("plugin_invoke("),
+            "应包含业务方 plugin_invoke: got\n{lib}"
+        );
         // 没 #[unsafe(no_mangle)] 直接 attribute (P10-1.7 兼容)
-        assert!(!lib.contains(r#"pub extern "C" fn register()"#), "P10-1.8 v2 不再有 register extern C (改 plugin_schemas_json + plugin_invoke_json): got\n{lib}");
+        assert!(
+            !lib.contains(r#"pub extern "C" fn register()"#),
+            "P10-1.8 v2 不再有 register extern C (改 plugin_schemas_json + plugin_invoke_json): got\n{lib}"
+        );
     }
 
     #[test]

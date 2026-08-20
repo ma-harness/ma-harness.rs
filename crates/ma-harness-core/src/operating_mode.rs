@@ -86,9 +86,15 @@ impl OperatingMode {
     pub fn system_prompt_hint(self) -> &'static str {
         match self {
             OperatingMode::Default => "",
-            OperatingMode::Minimal => "You are running in Minimal mode. No plugins are loaded; you can only respond with text.",
-            OperatingMode::Ptc => "You are running in PTC (Persistent Tool Calling) mode. You can call multiple tools in a single turn without intermediate confirmation.",
-            OperatingMode::Creator => "You are running in Creator mode. You may create new plugins / services / tools as needed.",
+            OperatingMode::Minimal => {
+                "You are running in Minimal mode. No plugins are loaded; you can only respond with text."
+            }
+            OperatingMode::Ptc => {
+                "You are running in PTC (Persistent Tool Calling) mode. You can call multiple tools in a single turn without intermediate confirmation."
+            }
+            OperatingMode::Creator => {
+                "You are running in Creator mode. You may create new plugins / services / tools as needed."
+            }
         }
     }
 }
@@ -171,7 +177,12 @@ mod tests {
 
     #[test]
     fn mode_from_to_i32_round_trip() {
-        for m in [OperatingMode::Default, OperatingMode::Minimal, OperatingMode::Ptc, OperatingMode::Creator] {
+        for m in [
+            OperatingMode::Default,
+            OperatingMode::Minimal,
+            OperatingMode::Ptc,
+            OperatingMode::Creator,
+        ] {
             assert_eq!(OperatingMode::from_i32(m.to_i32()), m);
         }
     }
@@ -255,9 +266,16 @@ mod tests {
 
     #[test]
     fn system_prompt_hint_per_mode() {
-        assert_eq!(OperatingMode::Minimal.system_prompt_hint(), "You are running in Minimal mode. No plugins are loaded; you can only respond with text.");
+        assert_eq!(
+            OperatingMode::Minimal.system_prompt_hint(),
+            "You are running in Minimal mode. No plugins are loaded; you can only respond with text."
+        );
         assert!(OperatingMode::Ptc.system_prompt_hint().contains("PTC"));
-        assert!(OperatingMode::Creator.system_prompt_hint().contains("Creator"));
+        assert!(
+            OperatingMode::Creator
+                .system_prompt_hint()
+                .contains("Creator")
+        );
         assert_eq!(OperatingMode::Default.system_prompt_hint(), "");
     }
 }

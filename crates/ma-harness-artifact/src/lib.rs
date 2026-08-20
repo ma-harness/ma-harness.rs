@@ -124,13 +124,13 @@ pub fn detect_artifact(path: impl AsRef<Path>, bytes: &[u8]) -> ArtifactKind {
         Some("yaml") | Some("yml") => return ArtifactKind::Yaml,
         Some("toml") => return ArtifactKind::Toml,
         Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp") | Some("bmp") => {
-            return ArtifactKind::Image
+            return ArtifactKind::Image;
         }
         Some("rs") | Some("py") | Some("js") | Some("ts") | Some("tsx") | Some("jsx")
         | Some("go") | Some("java") | Some("kt") | Some("swift") | Some("c") | Some("cpp")
         | Some("h") | Some("hpp") | Some("cs") | Some("rb") | Some("php") | Some("sh")
         | Some("bash") | Some("zsh") | Some("fish") | Some("sql") | Some("html") => {
-            return ArtifactKind::Code
+            return ArtifactKind::Code;
         }
         _ => {}
     }
@@ -279,11 +279,15 @@ pub fn render_terminal(kind: &ArtifactKind, bytes: &[u8]) -> String {
         }
         ArtifactKind::Image => {
             // PNG: 检查签名
-            if bytes.len() >= 8 && bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            if bytes.len() >= 8
+                && bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+            {
                 out.push_str("Format: PNG\n");
             } else if bytes.len() >= 3 && bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
                 out.push_str("Format: JPEG\n");
-            } else if bytes.len() >= 6 && bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            } else if bytes.len() >= 6 && bytes.starts_with(b"GIF87a")
+                || bytes.starts_with(b"GIF89a")
+            {
                 out.push_str("Format: GIF\n");
             } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
                 out.push_str("Format: WebP\n");
@@ -318,7 +322,10 @@ pub fn render_terminal(kind: &ArtifactKind, bytes: &[u8]) -> String {
         }
         ArtifactKind::Binary => {
             out.push_str("Binary content, no terminal preview.\n");
-            out.push_str(&format!("First 32 bytes (hex): {}\n", hex_preview(&bytes[..bytes.len().min(32)])));
+            out.push_str(&format!(
+                "First 32 bytes (hex): {}\n",
+                hex_preview(&bytes[..bytes.len().min(32)])
+            ));
         }
     }
     out
@@ -377,7 +384,9 @@ fn count_tags(text: &str) -> usize {
 
 /// 粗略数 SVG 元素 (rect / circle / path / g / etc.)
 fn count_svg_elements(text: &str) -> usize {
-    let elements = ["rect", "circle", "ellipse", "line", "path", "polyline", "polygon", "g", "text", "use"];
+    let elements = [
+        "rect", "circle", "ellipse", "line", "path", "polyline", "polygon", "g", "text", "use",
+    ];
     let mut total = 0;
     for elem in &elements {
         total += text.matches(&format!("<{}", elem)).count();
@@ -387,7 +396,11 @@ fn count_svg_elements(text: &str) -> usize {
 
 /// Hex preview for binary
 fn hex_preview(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -436,7 +449,10 @@ mod tests {
         let bytes = b"{this is not valid json";
         // 不是合法 JSON, 也不是 binary, 走 Text
         let k = detect_artifact("no-ext", bytes);
-        assert!(k == ArtifactKind::Text || k == ArtifactKind::Binary, "got: {k:?}");
+        assert!(
+            k == ArtifactKind::Text || k == ArtifactKind::Binary,
+            "got: {k:?}"
+        );
     }
 
     #[test]
@@ -459,7 +475,10 @@ mod tests {
     fn detect_image_by_extension() {
         let png_sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
         assert_eq!(detect_artifact("logo.png", &png_sig), ArtifactKind::Image);
-        assert_eq!(detect_artifact("photo.jpg", &[0xFF, 0xD8, 0xFF]), ArtifactKind::Image);
+        assert_eq!(
+            detect_artifact("photo.jpg", &[0xFF, 0xD8, 0xFF]),
+            ArtifactKind::Image
+        );
     }
 
     #[test]

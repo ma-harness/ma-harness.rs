@@ -17,7 +17,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ma_harness_conformance::{
-    fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat, ReportWriter,
+    fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat,
+    ReportWriter,
 };
 use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, SessionEvent, StubModelAdapter};
 // 2026-08-18 (Day 52): ma_harness_proto 恢复 (用本地 vendor/protoc), gRPC service 恢复
@@ -25,7 +26,7 @@ use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
 };
 use ma_harness_seam::{PluginLoader, PluginRegistry};
-use ma_harness_registry::Registry;  // P14 (2026-08-20): registry list/export CLI
+use ma_harness_registry::Registry; // P14 (2026-08-20): registry list/export CLI
 // Phase 2.2 (T2.2): 引用 hello plugin 触发 link, inventory::submit! 才有 effect
 #[allow(unused_imports)]
 use ma_harness_plugin_hello as _hello;
@@ -335,12 +336,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start { grpc_port, http_port, store_path } => {
-            start_server(grpc_port, http_port, store_path.as_deref()).await
-        }
-        Commands::Run { session, message, model } => {
-            run_local_agent(session, message, model).await
-        }
+        Commands::Start {
+            grpc_port,
+            http_port,
+            store_path,
+        } => start_server(grpc_port, http_port, store_path.as_deref()).await,
+        Commands::Run {
+            session,
+            message,
+            model,
+        } => run_local_agent(session, message, model).await,
         Commands::Plugins => list_plugins(),
         Commands::LoadPlugin { name, ctx_id } => load_plugin(&name, &ctx_id),
         Commands::Events { session } => list_events(&session),
@@ -349,9 +354,12 @@ async fn main() -> Result<()> {
             SessionsAction::Get { store_path, id } => sessions_get(&store_path, &id),
             SessionsAction::Events { log, session } => sessions_events(&log, &session),
         },
-        Commands::Conformance { fixtures, dsh, output, verbose } => {
-            run_conformance(&fixtures, dsh, &output, verbose)
-        }
+        Commands::Conformance {
+            fixtures,
+            dsh,
+            output,
+            verbose,
+        } => run_conformance(&fixtures, dsh, &output, verbose),
         Commands::Bench { crate_name } => print_bench_info(crate_name.as_deref()),
         Commands::Version => {
             println!("mah {}", env!("CARGO_PKG_VERSION"));
@@ -360,9 +368,11 @@ async fn main() -> Result<()> {
         Commands::Code { action } => match action {
             CodeAction::Run { file } => run_code(&file),
         },
-        Commands::RunPrompt { prompt, api_key, model } => {
-            run_prompt(&prompt, api_key.as_deref(), &model).await
-        }
+        Commands::RunPrompt {
+            prompt,
+            api_key,
+            model,
+        } => run_prompt(&prompt, api_key.as_deref(), &model).await,
         Commands::OpenApi { action } => match action {
             OpenApiAction::Export { output } => export_openapi(&output),
         },
@@ -376,15 +386,28 @@ async fn main() -> Result<()> {
             SandboxAction::Status => print_sandbox_status(),
         },
         Commands::Tui { log, store_path } => run_tui(log.as_deref(), store_path.as_deref()),
-        Commands::RunStream { prompt, grpc_url, session, model } => {
-            Box::pin(run_stream_cmd(&prompt, &grpc_url, session.as_deref(), &model)).await
+        Commands::RunStream {
+            prompt,
+            grpc_url,
+            session,
+            model,
+        } => {
+            Box::pin(run_stream_cmd(
+                &prompt,
+                &grpc_url,
+                session.as_deref(),
+                &model,
+            ))
+            .await
         }
         Commands::Acp { action } => match action {
             AcpAction::Serve { model } => Box::pin(acp::run_acp_server(&model)).await,
         },
         Commands::Registry { action } => match action {
             RegistryAction::List { registry } => registry_list(registry.as_deref()),
-            RegistryAction::Export { output, registry } => registry_export(&output, registry.as_deref()),
+            RegistryAction::Export { output, registry } => {
+                registry_export(&output, registry.as_deref())
+            }
         },
     }
 }
@@ -393,9 +416,16 @@ async fn main() -> Result<()> {
 ///
 /// `store_path` = Some(path) → SqliteStore 持久化 session
 /// `store_path` = None → InMemoryStore (Phase 1 默认)
-async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::path::Path>) -> Result<()> {
+async fn start_server(
+    grpc_port: u16,
+    http_port: u16,
+    store_path: Option<&std::path::Path>,
+) -> Result<()> {
     let log = EventLog::open_in_memory()?;
-    eprintln!("mah start: tonic gRPC on 0.0.0.0:{} + salvo HTTP on 0.0.0.0:{}", grpc_port, http_port);
+    eprintln!(
+        "mah start: tonic gRPC on 0.0.0.0:{} + salvo HTTP on 0.0.0.0:{}",
+        grpc_port, http_port
+    );
 
     // Phase 2.10 (Day 64): 业务方指定 store_path → SqliteStore 持久化
     // Phase 5.1 (Day 90): session store 一次构造, gRPC + HTTP 共用
@@ -416,7 +446,8 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
     // 2026-08-19 (Day 101): Web UI (P7-1) 通过 Vite proxy /api → tonic :50050 调 gRPC-web.
     // tonic_web::enable() 包每个 service (NamedService trait 适配),
     // 配 `accept_http1(true)` 让 server 接受 HTTP/1.1 (gRPC-web 协议).
-    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()
+    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port)
+        .parse()
         .with_context(|| format!("invalid grpc_port: {}", grpc_port))?;
     let agent_svc = builder.build_agent_service();
     let session_svc = builder.build_session_service();
@@ -432,7 +463,8 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
     // 2026-08-19 (Day 92): HTTP /v1/sessions/{id}/events 需要 EventLog, 走 run_router_with_log_and_store
     use salvo::conn::tcp::TcpAcceptor;
     let http_addr = format!("0.0.0.0:{}", http_port);
-    let http_addr_parse: std::net::SocketAddr = http_addr.parse()
+    let http_addr_parse: std::net::SocketAddr = http_addr
+        .parse()
         .with_context(|| format!("invalid http_port: {}", http_port))?;
     // 跟 gRPC 共用同一个 EventLog (in-memory) + SessionStore
     let http_event_log = EventLog::open_in_memory()?;
@@ -441,7 +473,8 @@ async fn start_server(grpc_port: u16, http_port: u16, store_path: Option<&std::p
         Arc::new(http_event_log),
         session_store,
     );
-    let tokio_listener = tokio::net::TcpListener::bind(http_addr_parse).await
+    let tokio_listener = tokio::net::TcpListener::bind(http_addr_parse)
+        .await
         .with_context(|| format!("bind http {}", http_addr))?;
     let acceptor = TcpAcceptor::try_from(tokio_listener)
         .map_err(|e| anyhow::anyhow!("TcpAcceptor::try_from failed: {}", e))?;
@@ -501,10 +534,7 @@ fn load_plugin(name: &str, ctx_id: &str) -> Result<()> {
     // Phase 2.2 (T2.2): 按名查 inventory, factory 构造, install 到 ctx
     use ma_harness_cordis::Context;
     let ctx = Context::new();
-    eprintln!(
-        "mah load-plugin: looking up '{}' in ctx '{}'",
-        name, ctx_id
-    );
+    eprintln!("mah load-plugin: looking up '{}' in ctx '{}'", name, ctx_id);
     PluginLoader::load_by_name(&ctx, name)
         .map_err(|e| anyhow::anyhow!("load '{}' failed: {}", name, e))?;
     println!("OK: loaded plugin '{}' into ctx '{}'", name, ctx_id);
@@ -533,14 +563,16 @@ fn list_events(session: &str) -> Result<()> {
 fn sessions_list(store_path: &std::path::Path) -> Result<()> {
     let store = ma_harness_server::SqliteStore::open(store_path)
         .map_err(|e| anyhow::anyhow!("open sqlite store {}: {e}", store_path.display()))?;
-    let sessions = store
-        .list()
-        .map_err(|e| anyhow::anyhow!("list: {e}"))?;
+    let sessions = store.list().map_err(|e| anyhow::anyhow!("list: {e}"))?;
     if sessions.is_empty() {
         println!("(no sessions in {})", store_path.display());
         return Ok(());
     }
-    println!("Sessions ({} total) from {}:", sessions.len(), store_path.display());
+    println!(
+        "Sessions ({} total) from {}:",
+        sessions.len(),
+        store_path.display()
+    );
     for s in &sessions {
         let state_name = ma_harness_proto::ma_harness::v1::SessionState::try_from(s.state)
             .map(|st| format!("{:?}", st))
@@ -577,15 +609,24 @@ fn sessions_get(store_path: &std::path::Path, id: &str) -> Result<()> {
             println!("  mode:   {}", s.mode);
             println!(
                 "  created: {}",
-                s.created_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+                s.created_at
+                    .as_ref()
+                    .map(format_ts)
+                    .unwrap_or_else(|| "—".to_string())
             );
             println!(
                 "  updated: {}",
-                s.updated_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+                s.updated_at
+                    .as_ref()
+                    .map(format_ts)
+                    .unwrap_or_else(|| "—".to_string())
             );
             println!(
                 "  closed:  {}",
-                s.closed_at.as_ref().map(format_ts).unwrap_or_else(|| "—".to_string())
+                s.closed_at
+                    .as_ref()
+                    .map(format_ts)
+                    .unwrap_or_else(|| "—".to_string())
             );
             println!("  user_id: {}", s.user_id);
             if !s.enabled_plugins.is_empty() {
@@ -608,7 +649,11 @@ fn sessions_events(log_path: &std::path::Path, session: &str) -> Result<()> {
         .get_model_visible(session)
         .map_err(|e| anyhow::anyhow!("get model visible: {e}"))?;
     if page.events.is_empty() {
-        println!("(no events for session {} in {})", session, log_path.display());
+        println!(
+            "(no events for session {} in {})",
+            session,
+            log_path.display()
+        );
         return Ok(());
     }
     println!(
@@ -618,11 +663,7 @@ fn sessions_events(log_path: &std::path::Path, session: &str) -> Result<()> {
         log_path.display()
     );
     for e in &page.events {
-        let payload = e
-            .event
-            .payload_json
-            .as_deref()
-            .unwrap_or("");
+        let payload = e.event.payload_json.as_deref().unwrap_or("");
         let payload_short = if payload.len() > 60 {
             format!("{}...", &payload[..60])
         } else {
@@ -650,7 +691,12 @@ fn format_ts(ts: &prost_types::Timestamp) -> String {
 }
 
 /// 跑 conformance fixture, 出报告
-fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose: bool) -> Result<()> {
+fn run_conformance(
+    fixtures_path: &PathBuf,
+    dsh: bool,
+    output: &PathBuf,
+    verbose: bool,
+) -> Result<()> {
     // 1. 加载 fixture
     let fixtures: Vec<Fixture> = if dsh {
         // dsh 风格: 先 read 整个文件, 用 dsh_format::parse_dsh_jsonl
@@ -672,7 +718,11 @@ fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose
         eprintln!("No fixtures loaded from {}", fixtures_path.display());
         return Ok(());
     }
-    eprintln!("Loaded {} fixtures from {}", fixtures.len(), fixtures_path.display());
+    eprintln!(
+        "Loaded {} fixtures from {}",
+        fixtures.len(),
+        fixtures_path.display()
+    );
 
     // 2. 跑
     let mut runner = ConformanceRunner::new();
@@ -725,8 +775,7 @@ fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose
 /// 跑 Code Mode: 编译并执行 .wat / .wasm 文件
 fn run_code(file: &std::path::Path) -> Result<()> {
     use ma_harness_code::CodeRunner;
-    let runner = CodeRunner::new()
-        .map_err(|e| anyhow::anyhow!("init CodeRunner: {e}"))?;
+    let runner = CodeRunner::new().map_err(|e| anyhow::anyhow!("init CodeRunner: {e}"))?;
     eprintln!("mah code run: loading {}", file.display());
     let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("");
     let output = match ext {
@@ -738,8 +787,8 @@ fn run_code(file: &std::path::Path) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("run WAT: {e}"))?
         }
         "wasm" => {
-            let bytes = std::fs::read(file)
-                .with_context(|| format!("read WASM: {}", file.display()))?;
+            let bytes =
+                std::fs::read(file).with_context(|| format!("read WASM: {}", file.display()))?;
             runner
                 .run_wasm(&bytes)
                 .map_err(|e| anyhow::anyhow!("run WASM: {e}"))?
@@ -803,7 +852,6 @@ fn extract_wat_from_llm_response(text: &str) -> Option<String> {
 
 // enumerate helper: walk over bytes with index
 
-
 /// **P6-1 (Day 99)**: 解析 `mah run-stream --model <S>` 字符串 → (proto::ModelAdapter enum int, model name)
 ///
 /// 业务方格式:
@@ -815,9 +863,9 @@ fn extract_wat_from_llm_response(text: &str) -> Option<String> {
 fn parse_model_arg(s: &str) -> (i32, String) {
     if let Some((provider, name)) = s.split_once(':') {
         let adapter = match provider {
-            "openai" => 1,      // proto ModelAdapter::Openai
-            "anthropic" => 1,   // proto 暂未分, fallback Openai 通道
-            _ => 0,             // 未知 provider → Unspecified, server 自己处理
+            "openai" => 1,    // proto ModelAdapter::Openai
+            "anthropic" => 1, // proto 暂未分, fallback Openai 通道
+            _ => 0,           // 未知 provider → Unspecified, server 自己处理
         };
         (adapter, name.to_string())
     } else {
@@ -825,7 +873,6 @@ fn parse_model_arg(s: &str) -> (i32, String) {
         (0, s.to_string())
     }
 }
-
 
 /// **P6-1 (Day 99)**: 走 gRPC RunStream RPC, 业务方命令行拿 streaming token
 ///
@@ -869,11 +916,11 @@ async fn run_stream_cmd(
             id: uuid::Uuid::new_v4().to_string(),
             role: ToolRole::User as i32,
             content: vec![ContentBlock {
-                content: Some(ma_harness_proto::ma_harness::v1::content_block::Content::Text(
-                    TextBlock {
+                content: Some(
+                    ma_harness_proto::ma_harness::v1::content_block::Content::Text(TextBlock {
                         text: prompt.to_string(),
-                    },
-                )),
+                    }),
+                ),
             }],
             created_at: None,
             session_id: session_id.clone(),
@@ -918,7 +965,6 @@ async fn run_stream_cmd(
     );
     Ok(())
 }
-
 
 /// **Phase 3.3 / T3.3**: 业务方 prompt → LLM 生成 .wat → wasm 沙箱跑
 ///
@@ -982,13 +1028,12 @@ async fn run_prompt(prompt: &str, api_key: Option<&str>, model: &str) -> Result<
     );
 
     // 5. 提取 WAT
-    let wat = extract_wat_from_llm_response(&resp.content)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no WAT found in LLM response. Raw content (first 500 chars):\n{}",
-                &resp.content.chars().take(500).collect::<String>()
-            )
-        })?;
+    let wat = extract_wat_from_llm_response(&resp.content).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no WAT found in LLM response. Raw content (first 500 chars):\n{}",
+            &resp.content.chars().take(500).collect::<String>()
+        )
+    })?;
 
     eprintln!("--- LLM generated WAT ({} bytes) ---", wat.len());
     for line in wat.lines() {
@@ -1063,13 +1108,19 @@ fn export_openapi(output: &std::path::Path) -> Result<()> {
     // OpenAPI 导出只关心 router 结构, 不发真 HTTP
     let router = ma_harness_server::http::run_router_with_log_and_store(
         Arc::new(StubModelAdapter),
-        Arc::new(ma_harness_core::EventLog::open_in_memory().map_err(|e| anyhow::anyhow!("event log: {e}"))?),
+        Arc::new(
+            ma_harness_core::EventLog::open_in_memory()
+                .map_err(|e| anyhow::anyhow!("event log: {e}"))?,
+        ),
         Arc::new(ma_harness_server::InMemoryStore::new()),
     );
     let doc = OpenApi::new("ma-harness API", "0.1.0").merge_router(&router);
 
     // 按扩展名决定 json / yaml
-    let ext = output.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    let ext = output
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("json");
     let content: String = match ext {
         "yaml" | "yml" => doc
             .to_yaml()
@@ -1202,7 +1253,9 @@ fn print_sandbox_status() -> Result<()> {
     {
         println!("Backend: landlock 0.4");
         println!("  - Landlock ABI V1 (kernel >= 5.13)");
-        println!("  - 12 AccessFs ops (ReadFile / ReadDir / WriteFile / RemoveFile / RemoveDir / MakeReg / MakeDir / MakeSock / MakeFifo / MakeBlock / MakeChar / Refer)");
+        println!(
+            "  - 12 AccessFs ops (ReadFile / ReadDir / WriteFile / RemoveFile / RemoveDir / MakeReg / MakeDir / MakeSock / MakeFifo / MakeBlock / MakeChar / Refer)"
+        );
         println!("  - restrict_self() 不可逆");
         println!("  - 走 landlock::Ruleset + PathBeneath");
     }
@@ -1232,7 +1285,9 @@ fn registry_list(registry: Option<&std::path::Path>) -> Result<()> {
 
     if !path.exists() {
         eprintln!("Registry file not found: {}", path.display());
-        eprintln!("Hint: run `mah plugin publish <manifest.json>` first, or pass --registry <path>");
+        eprintln!(
+            "Hint: run `mah plugin publish <manifest.json>` first, or pass --registry <path>"
+        );
         return Ok(());
     }
 
@@ -1242,16 +1297,25 @@ fn registry_list(registry: Option<&std::path::Path>) -> Result<()> {
     println!("ma-harness Plugin Registry");
     println!("============================");
     println!("Path:   {}", path.display());
-    println!("Plugins: {} ({} versions total)", reg.count(), reg.version_count());
+    println!(
+        "Plugins: {} ({} versions total)",
+        reg.count(),
+        reg.version_count()
+    );
     println!();
 
-    let mut by_author: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut by_author: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for m in reg.list() {
         by_author.entry(m.author.clone()).or_default().push(format!(
             "{} @ {} (tags: {})",
             m.name,
             m.version,
-            if m.tags.is_empty() { "-".to_string() } else { m.tags.join(", ") }
+            if m.tags.is_empty() {
+                "-".to_string()
+            } else {
+                m.tags.join(", ")
+            }
         ));
     }
 
@@ -1276,7 +1340,10 @@ fn registry_export(output: &std::path::Path, registry: Option<&std::path::Path>)
         .context("no registry path given and no ~/.ma-harness/registry.json")?;
 
     if !path.exists() {
-        anyhow::bail!("Registry file not found: {}. Run `mah plugin publish` first.", path.display());
+        anyhow::bail!(
+            "Registry file not found: {}. Run `mah plugin publish` first.",
+            path.display()
+        );
     }
 
     let reg = Registry::open(&path)
@@ -1293,7 +1360,12 @@ fn registry_export(output: &std::path::Path, registry: Option<&std::path::Path>)
     reg.export(output)
         .with_context(|| format!("failed to export registry to {}", output.display()))?;
 
-    println!("Exported {} plugins ({} versions) to {}", reg.count(), reg.version_count(), output.display());
+    println!(
+        "Exported {} plugins ({} versions) to {}",
+        reg.count(),
+        reg.version_count(),
+        output.display()
+    );
     Ok(())
 }
 
@@ -1331,8 +1403,10 @@ mod registry_cli_tests {
         let tmpdir = tempfile::tempdir().unwrap();
         let reg_path = tmpdir.path().join("registry.json");
         let mut reg = Registry::open_in_memory();
-        reg.publish(make_sample_manifest("plug-a", "0.1.0", "alice")).unwrap();
-        reg.publish(make_sample_manifest("plug-b", "0.2.0", "bob")).unwrap();
+        reg.publish(make_sample_manifest("plug-a", "0.1.0", "alice"))
+            .unwrap();
+        reg.publish(make_sample_manifest("plug-b", "0.2.0", "bob"))
+            .unwrap();
         reg.save(&reg_path).unwrap();
 
         let result = registry_list(Some(&reg_path));
@@ -1347,11 +1421,16 @@ mod registry_cli_tests {
         let out_path = tmpdir.path().join("out.json");
 
         let mut reg = Registry::open_in_memory();
-        reg.publish(make_sample_manifest("plug-x", "1.0.0", "i25ma")).unwrap();
+        reg.publish(make_sample_manifest("plug-x", "1.0.0", "i25ma"))
+            .unwrap();
         reg.save(&reg_path).unwrap();
 
         let result = registry_export(&out_path, Some(&reg_path));
-        assert!(result.is_ok(), "registry_export should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "registry_export should succeed: {:?}",
+            result
+        );
         assert!(out_path.exists(), "out.json should exist");
 
         // 验证 JSON 能 roundtrip
@@ -1459,7 +1538,11 @@ mod tests {
         let result = sessions_get(&db_path, "nonexistent-id");
         assert!(result.is_err(), "missing session 应返 Err");
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("not found"), "错误信息应含 not found, got: {}", err);
+        assert!(
+            err.contains("not found"),
+            "错误信息应含 not found, got: {}",
+            err
+        );
     }
 
     /// sessions_events 走真 EventLog
@@ -1481,7 +1564,11 @@ mod tests {
     fn format_ts_works() {
         let ts = prost_types::Timestamp::from(std::time::SystemTime::UNIX_EPOCH);
         let s = format_ts(&ts);
-        assert!(s.contains("1970") || s.contains("+"), "应含 1970 或 + (UTC offset), got {}", s);
+        assert!(
+            s.contains("1970") || s.contains("+"),
+            "应含 1970 或 + (UTC offset), got {}",
+            s
+        );
     }
 
     // === T3.3 WAT extraction helper 测试 ===

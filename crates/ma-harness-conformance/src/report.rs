@@ -125,7 +125,11 @@ impl ReportWriter {
             report.summary.passed,
             report.summary.total,
             report.summary.pass_rate * 100.0,
-            if report.summary.meets_target() { "✅ (target ≥ 95%)" } else { "❌ (target ≥ 95%)" }
+            if report.summary.meets_target() {
+                "✅ (target ≥ 95%)"
+            } else {
+                "❌ (target ≥ 95%)"
+            }
         );
         let _ = writeln!(
             out,
@@ -142,11 +146,7 @@ impl ReportWriter {
         );
 
         // 失败 + 异常段
-        let failed: Vec<_> = report
-            .results
-            .iter()
-            .filter(|r| !r.passed)
-            .collect();
+        let failed: Vec<_> = report.results.iter().filter(|r| !r.passed).collect();
 
         if !failed.is_empty() {
             let _ = writeln!(out, "## Failed fixtures ({})\n", failed.len());

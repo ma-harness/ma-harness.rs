@@ -84,24 +84,9 @@ pub const API_VERSION: &str = "0.1.0";
 
 // ---- 核心事件 / 日志 (ma_harness_core) ----
 pub use ma_harness_core::{
-    AgentLoop,
-    AgentRunRequest,
-    AgentRunResponse,
-    CompressionPolicy,
-    EventLog,
-    EventType,
-    FinishReason,
-    ModelAdapter,
-    ModelMessage,
-    ModelRequest,
-    ModelResponse,
-    OperatingMode,
-    OperatingModeConfig,
-    SessionEvent,
-    Severity,
-    StubModelAdapter,
-    ToolEntry,
-    ToolRegistry,
+    AgentLoop, AgentRunRequest, AgentRunResponse, CompressionPolicy, EventLog, EventType,
+    FinishReason, ModelAdapter, ModelMessage, ModelRequest, ModelResponse, OperatingMode,
+    OperatingModeConfig, SessionEvent, Severity, StubModelAdapter, ToolEntry, ToolRegistry,
     ToolSchema,
 };
 
@@ -278,7 +263,9 @@ impl<S: Service<Ctx = ma_harness_cordis::Context>> ma_harness_cordis::Service fo
     where
         Self: Sized,
     {
-        Ok(CordisService { inner: S::install(ctx)? })
+        Ok(CordisService {
+            inner: S::install(ctx)?,
+        })
     }
     fn name(&self) -> &str {
         self.inner.name()
@@ -332,7 +319,9 @@ impl PluginRegistry {
 
     /// 注册一个公开 Plugin
     pub fn register<P: Plugin>(&mut self, plugin: P) -> anyhow::Result<()> {
-        self.inner.plugin(CordisPlugin::new(plugin)).map_err(Into::into)
+        self.inner
+            .plugin(CordisPlugin::new(plugin))
+            .map_err(Into::into)
     }
 
     /// 列出所有 plugin
@@ -435,10 +424,7 @@ impl PluginLoader {
     /// 错误:
     /// - `PluginNotFound(name)` — inventory 没这个 plugin
     /// - plugin 自己的 `install()` 失败 (e.g. typed key 冲突)
-    pub fn load_by_name(
-        ctx: &ma_harness_cordis::Context,
-        name: &str,
-    ) -> anyhow::Result<()> {
+    pub fn load_by_name(ctx: &ma_harness_cordis::Context, name: &str) -> anyhow::Result<()> {
         for entry in inventory::iter::<PluginEntry> {
             if entry.name == name {
                 let plugin = (entry.factory)();
@@ -447,17 +433,25 @@ impl PluginLoader {
                     .map_err(|e| anyhow::anyhow!("plugin '{}' install failed: {e}", name));
             }
         }
-        anyhow::bail!("PluginLoader::load_by_name: plugin '{}' not registered", name)
+        anyhow::bail!(
+            "PluginLoader::load_by_name: plugin '{}' not registered",
+            name
+        )
     }
 
     /// 列出所有已注册 plugin 名 (按 inventory 顺序, 不保证)
     pub fn list() -> Vec<&'static str> {
-        inventory::iter::<PluginEntry>.into_iter().map(|e| e.name).collect()
+        inventory::iter::<PluginEntry>
+            .into_iter()
+            .map(|e| e.name)
+            .collect()
     }
 
     /// 按 name 查 entry 是否存在
     pub fn contains(name: &str) -> bool {
-        inventory::iter::<PluginEntry>.into_iter().any(|e| e.name == name)
+        inventory::iter::<PluginEntry>
+            .into_iter()
+            .any(|e| e.name == name)
     }
 
     /// **Phase 3.6 (T3.6) 新增**: 列出所有已注册 plugin manifest (name + 依赖)
@@ -501,8 +495,7 @@ impl PluginLoader {
         // Kahn 拓扑排序
         // in_degree[name] = 多少个 plugin 还没装
         // graph[dep] = 依赖 dep 的 plugin 列表
-        let mut in_degree: HashMap<&str, usize> =
-            manifests.keys().map(|n| (*n, 0)).collect();
+        let mut in_degree: HashMap<&str, usize> = manifests.keys().map(|n| (*n, 0)).collect();
         let mut graph: HashMap<&str, Vec<&str>> =
             manifests.keys().map(|n| (*n, Vec::new())).collect();
         for m in manifests.values() {
@@ -587,7 +580,6 @@ mod tests {
         let tokens = estimate_tokens("hello world");
         assert!(tokens > 0);
     }
-
 
     struct MyService {
         greeting: String,

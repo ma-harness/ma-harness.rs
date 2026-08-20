@@ -18,8 +18,7 @@ fn find_mah_exe() -> std::path::PathBuf {
         return std::path::PathBuf::from(p);
     }
     // 3. default cargo target dir
-    let target = std::env::var("CARGO_TARGET_DIR")
-        .unwrap_or_else(|_| "D:/rust_target".to_string());
+    let target = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "D:/rust_target".to_string());
     let exe = if cfg!(windows) { "mah.exe" } else { "mah" };
     let p = std::path::Path::new(&target).join("debug").join(exe);
     if p.exists() {
@@ -80,7 +79,9 @@ where
     drop(proc.stdin);
 
     let mut stdout_collected = String::new();
-    proc.stdout.read_to_string(&mut stdout_collected).expect("read stdout");
+    proc.stdout
+        .read_to_string(&mut stdout_collected)
+        .expect("read stdout");
     let _ = proc.stderr; // 暂不收集 stderr
 
     let status = child.wait().expect("wait");
@@ -138,7 +139,9 @@ fn acp_new_session() {
     assert_eq!(code, 0);
     let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
     assert_eq!(resp["id"], 1);
-    let session_id = resp["result"]["sessionId"].as_str().expect("sessionId string");
+    let session_id = resp["result"]["sessionId"]
+        .as_str()
+        .expect("sessionId string");
     assert!(!session_id.is_empty());
     // UUID format check (len >= 32)
     assert!(session_id.len() >= 32, "session_id too short: {session_id}");
@@ -160,7 +163,13 @@ fn acp_prompt_full_lifecycle() {
 
     // stdout 应有 4 行: 3 responses (init/newSession/prompt) + 1 notification (session/update)
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert_eq!(lines.len(), 4, "expected 4 lines, got {}: {:?}", lines.len(), lines);
+    assert_eq!(
+        lines.len(),
+        4,
+        "expected 4 lines, got {}: {:?}",
+        lines.len(),
+        lines
+    );
 
     // 1. initialize response
     let r1: serde_json::Value = serde_json::from_str(lines[0]).expect("parse line 0");
@@ -176,9 +185,17 @@ fn acp_prompt_full_lifecycle() {
     let n3: serde_json::Value = serde_json::from_str(lines[2]).expect("parse line 2");
     assert_eq!(n3["method"], "session/update");
     assert_eq!(n3["params"]["sessionId"], session_id);
-    assert_eq!(n3["params"]["update"]["sessionUpdate"], "agent_message_chunk");
-    let text = n3["params"]["update"]["content"]["text"].as_str().expect("text");
-    assert!(text.contains("hello world") || text.contains("echo"), "expected text: {text}");
+    assert_eq!(
+        n3["params"]["update"]["sessionUpdate"],
+        "agent_message_chunk"
+    );
+    let text = n3["params"]["update"]["content"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("hello world") || text.contains("echo"),
+        "expected text: {text}"
+    );
 
     // 4. prompt response
     let r4: serde_json::Value = serde_json::from_str(lines[3]).expect("parse line 3");
@@ -186,7 +203,10 @@ fn acp_prompt_full_lifecycle() {
     assert_eq!(r4["result"]["stopReason"], "end_turn");
 
     // sanity: newSession 返回的 sessionId 跟 prompt 用的 sessionId 不一样 (v1 server 独立分配)
-    assert_ne!(new_session_id, session_id, "v1 server 新建 session 跟 prompt sessionId 独立");
+    assert_ne!(
+        new_session_id, session_id,
+        "v1 server 新建 session 跟 prompt sessionId 独立"
+    );
 }
 
 #[test]
@@ -197,7 +217,10 @@ fn acp_unknown_method_returns_error() {
     assert_eq!(code, 0);
     let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
     assert_eq!(resp["id"], 1);
-    assert!(resp["error"].is_object(), "expected error object, got: {resp}");
+    assert!(
+        resp["error"].is_object(),
+        "expected error object, got: {resp}"
+    );
     assert_eq!(resp["error"]["code"], -32601); // Method not found
 }
 
@@ -221,7 +244,10 @@ fn acp_initialize_v2_capabilities() {
     let (stdout, _stderr, _code) = run_acp(input);
     let resp: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
     assert_eq!(resp["result"]["agentCapabilities"]["loadSession"], true);
-    assert_eq!(resp["result"]["agentCapabilities"]["promptCapabilities"]["image"], true);
+    assert_eq!(
+        resp["result"]["agentCapabilities"]["promptCapabilities"]["image"],
+        true
+    );
 }
 
 #[test]
@@ -229,7 +255,9 @@ fn acp_load_session_returns_metadata() {
     // P12-6 v2: 用 interactive runner (业务方 state 共享)
     let (stdout, _code) = run_acp_interactive(|proc| {
         // 1. newSession
-        proc.write_line(r#"{"jsonrpc":"2.0","id":1,"method":"newSession","params":{"cwd":"/tmp/test"}}"#);
+        proc.write_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"newSession","params":{"cwd":"/tmp/test"}}"#,
+        );
         let r1_line = proc.read_line().expect("read r1");
         let r1: serde_json::Value = serde_json::from_str(&r1_line).expect("parse r1");
         let actual_id = r1["result"]["sessionId"]
@@ -299,6 +327,11 @@ fn acp_prompt_with_image_block() {
     // stub 返 [+1 image(s)] 标记
     let r_notif: serde_json::Value = serde_json::from_str(lines[1]).expect("parse line 1");
     assert_eq!(r_notif["method"], "session/update");
-    let text = r_notif["params"]["update"]["content"]["text"].as_str().expect("text");
-    assert!(text.contains("+1 image"), "expected 'image' marker in: {text}");
+    let text = r_notif["params"]["update"]["content"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(
+        text.contains("+1 image"),
+        "expected 'image' marker in: {text}"
+    );
 }

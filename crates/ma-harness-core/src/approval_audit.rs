@@ -28,7 +28,12 @@ pub fn log_approval_request(log: &EventLog, ctx: &Context, req: &ApprovalRequest
 }
 
 /// 写 ApprovalDecision event 到 EventLog
-pub fn log_approval_decision(log: &EventLog, ctx: &Context, req: &ApprovalRequest, decision: &ApprovalDecision) -> i64 {
+pub fn log_approval_decision(
+    log: &EventLog,
+    ctx: &Context,
+    req: &ApprovalRequest,
+    decision: &ApprovalDecision,
+) -> i64 {
     let session_id = ctx_session_id(ctx);
     let (decision_str, reason) = match decision {
         ApprovalDecision::Approved => ("Approved".to_string(), String::new()),
@@ -157,6 +162,9 @@ mod tests {
         assert_eq!(risk_level_label(RiskLevel::Low), "低风险 (只读)");
         assert_eq!(risk_level_label(RiskLevel::Medium), "中风险 (写工作区)");
         assert_eq!(risk_level_label(RiskLevel::High), "高风险 (删/系统)");
-        assert_eq!(risk_level_label(RiskLevel::Critical), "严重风险 (配置/安全)");
+        assert_eq!(
+            risk_level_label(RiskLevel::Critical),
+            "严重风险 (配置/安全)"
+        );
     }
 }

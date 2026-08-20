@@ -1,4 +1,4 @@
-﻿//! # 命名约定
+//! # 命名约定
 //!
 //! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-proto`
 //! **Crate ident** (`use` 路径): `ma_harness_proto`
@@ -68,11 +68,10 @@ pub mod convert {
             4 => Severity::Fatal,
             _ => Severity::Info,
         };
-        let ts = p
-            .ts
-            .as_ref()
-            .and_then(|t| Utc.timestamp_opt(t.seconds, t.nanos as u32).single())
-            .unwrap_or_else(Utc::now);
+        let ts =
+            p.ts.as_ref()
+                .and_then(|t| Utc.timestamp_opt(t.seconds, t.nanos as u32).single())
+                .unwrap_or_else(Utc::now);
 
         let opt_str = |s: String| if s.is_empty() { None } else { Some(s) };
 

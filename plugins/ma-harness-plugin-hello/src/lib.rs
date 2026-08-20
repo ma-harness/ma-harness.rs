@@ -1,4 +1,4 @@
-﻿//! ma_harness_plugin_hello — 端到端 demo plugin (seam 风格)
+//! ma_harness_plugin_hello — 端到端 demo plugin (seam 风格)
 //!
 //! **目的**: 演示 ma-harness 公开 API (seam) 的最小可用链路.
 //!
@@ -179,9 +179,7 @@ impl AsyncSleepResource {
 impl ma_harness_cordis::AsyncDisposable for AsyncSleepResource {
     fn dispose_async<'a>(
         &'a self,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         let name = self.name.clone();
         let flag = std::sync::Arc::clone(&self.disposed);
         Box::pin(async move {
@@ -289,7 +287,10 @@ mod tests {
         use ma_harness_seam::PluginLoader;
         let ctx = Context::new();
         // inventory::iter 查表, 找 "hello" entry
-        assert!(PluginLoader::contains("hello"), "hello 应该被 inventory submit! 注册");
+        assert!(
+            PluginLoader::contains("hello"),
+            "hello 应该被 inventory submit! 注册"
+        );
         // load_by_name 走 factory 构造 HelloPlugin, install 到 ctx
         PluginLoader::load_by_name(&ctx, "hello").unwrap();
         // 装完 ctx 里有 HelloService (via inject), 拿得到
@@ -339,7 +340,11 @@ mod tests {
             who: "T2.3".to_string(),
         });
         // 验证 low 真的跑了 (count 应该是 1)
-        assert_eq!(ctx.get(GREET_COUNT), Some(1), "GreetCountListener 应该 fire 一次");
+        assert_eq!(
+            ctx.get(GREET_COUNT),
+            Some(1),
+            "GreetCountListener 应该 fire 一次"
+        );
     }
 
     /// **Phase 2.3 (T2.3) 新增**: 验证 priority < 0 也能正常工作 (负数 = 更低 priority = 更先 fire)
@@ -456,8 +461,11 @@ mod tests {
         let ctx = Context::new();
         let installed = PluginLoader::load_all(&ctx).unwrap();
         // 至少 hello 在
-        assert!(installed.contains(&"hello".to_string()),
-            "hello 应该在 installed list: {:?}", installed);
+        assert!(
+            installed.contains(&"hello".to_string()),
+            "hello 应该在 installed list: {:?}",
+            installed
+        );
     }
 
     /// 测试用本地 inventory submit 一个依赖 hello 的 plugin
@@ -470,10 +478,16 @@ mod tests {
         // 定义一个 dummy plugin 依赖 hello
         struct DepPlugin;
         impl Plugin for DepPlugin {
-            fn install(&self, _ctx: &Context) -> anyhow::Result<()> { Ok(()) }
-            fn name(&self) -> &str { "dep_plugin" }
+            fn install(&self, _ctx: &Context) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn name(&self) -> &str {
+                "dep_plugin"
+            }
         }
-        fn _dep_factory() -> Box<dyn Plugin> { Box::new(DepPlugin) }
+        fn _dep_factory() -> Box<dyn Plugin> {
+            Box::new(DepPlugin)
+        }
 
         // 提交到本地 inventory (test scope)
         inventory::submit! {

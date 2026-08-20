@@ -1,4 +1,4 @@
-﻿//! ma_harness_plugin_bash ?first-party plugin: 执行 shell 命令
+//! ma_harness_plugin_bash ?first-party plugin: 执行 shell 命令
 //!
 //! **设计**: seam 公开 API 风格, impl cordis::Service/Plugin ?ctx 内部对接.
 //!
@@ -107,9 +107,7 @@ impl BashService {
     /// assert!(output.stdout.contains("hello"));
     /// ```
     pub async fn run_command(&self, ctx: &Context, cmd: &str) -> Result<CommandOutput, BashError> {
-        let max_runtime_ms = ctx
-            .get(MAX_RUNTIME_MS)
-            .unwrap_or(DEFAULT_MAX_RUNTIME_MS);
+        let max_runtime_ms = ctx.get(MAX_RUNTIME_MS).unwrap_or(DEFAULT_MAX_RUNTIME_MS);
         self.run_command_with_timeout(cmd, Duration::from_millis(max_runtime_ms as u64))
             .await
     }
@@ -260,10 +258,7 @@ mod tests {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
         // false ?Unix 退?1, Windows 没有 false ?exit 1 通过 cmd /C "exit 1"
-        let out = svc
-            .run_command(&ctx, &false_cmd())
-            .await
-            .unwrap(); // ?panic, exit 0 也是成功命令
+        let out = svc.run_command(&ctx, &false_cmd()).await.unwrap(); // ?panic, exit 0 也是成功命令
         assert_eq!(out.exit_code, 1, "false 应退?1, got: {}", out.exit_code);
         assert!(!out.is_success());
     }
@@ -273,10 +268,7 @@ mod tests {
     async fn run_captures_stderr() {
         let ctx = ctx_with_default_timeout();
         let svc = BashService;
-        let out = svc
-            .run_command(&ctx, &stderr_cmd("oops"))
-            .await
-            .unwrap();
+        let out = svc.run_command(&ctx, &stderr_cmd("oops")).await.unwrap();
         // 命令本身退?0, ?stderr 有内?        assert!(out.is_success());
         assert!(
             out.stderr.contains("oops"),
@@ -348,6 +340,9 @@ mod tests {
     #[cfg(target_family = "windows")]
     fn sleep_cmd(secs: &str) -> String {
         // Windows 没有 sleep 内置, ?ping -n 凑合
-        format!("ping -n {} 127.0.0.1 > nul", secs.to_string().parse::<u32>().unwrap_or(5) + 1)
+        format!(
+            "ping -n {} 127.0.0.1 > nul",
+            secs.to_string().parse::<u32>().unwrap_or(5) + 1
+        )
     }
 }

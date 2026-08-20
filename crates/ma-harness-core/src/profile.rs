@@ -43,10 +43,7 @@ use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    agent_compress::CompressionPolicy,
-    operating_mode::OperatingMode,
-};
+use crate::{agent_compress::CompressionPolicy, operating_mode::OperatingMode};
 
 /// 单 profile 配置 (P10-3)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +96,8 @@ impl Profile {
         plugins.insert("cordis".to_string());
         Self {
             name: "default".to_string(),
-            description: "Default development profile (full features, all first-party plugins)".to_string(),
+            description: "Default development profile (full features, all first-party plugins)"
+                .to_string(),
             operating_mode: OperatingMode::Default,
             approval_policy: "Ask".to_string(),
             enabled_plugins: plugins,
@@ -126,8 +124,8 @@ impl Profile {
             agents_md_path: None,
             max_tool_calls_per_turn: Some(5),
             compression_policy: Some(CompressionPolicy::SlidingWindow { keep_last_n: 50 }),
-            system_prompt_suffix: "You are running in production. Be extra careful with file operations."
-                .to_string(),
+            system_prompt_suffix:
+                "You are running in production. Be extra careful with file operations.".to_string(),
         }
     }
 
@@ -204,7 +202,9 @@ impl ProfileStore {
         let json = serde_json::to_string_pretty(profile)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(&path, json)?;
-        self.cache.lock().insert(profile.name.clone(), profile.clone());
+        self.cache
+            .lock()
+            .insert(profile.name.clone(), profile.clone());
         Ok(())
     }
 

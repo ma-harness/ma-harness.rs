@@ -259,8 +259,7 @@ impl CodeRunner {
 
     /// 跑 WAT 文本
     pub fn run_wat(&self, wat_text: &str) -> anyhow::Result<CodeOutput> {
-        let bytes = wat::parse_str(wat_text)
-            .map_err(|e| anyhow::anyhow!("parse WAT: {e}"))?;
+        let bytes = wat::parse_str(wat_text).map_err(|e| anyhow::anyhow!("parse WAT: {e}"))?;
         self.run_wasm(&bytes)
     }
 
@@ -269,8 +268,8 @@ impl CodeRunner {
         // 清空 stdout (跑多次, 上次结果应消失)
         self.stdout.lock().clear();
 
-        let module = Module::new(&self.engine, bytes)
-            .map_err(|e| anyhow::anyhow!("compile module: {e}"))?;
+        let module =
+            Module::new(&self.engine, bytes).map_err(|e| anyhow::anyhow!("compile module: {e}"))?;
 
         // Store host state = MemTableLimiter (wasmtime 27 限制: limiter 是 host state 子对象)
         let limiter = MemTableLimiter::new(self.config.memory_bytes, self.config.table_elements);
@@ -281,7 +280,8 @@ impl CodeRunner {
         store.limiter(|s: &mut MemTableLimiter| -> &mut dyn ResourceLimiter { s });
         // 2. Fuel (限指令数, 0 = 不限)
         if self.config.fuel > 0 {
-            store.set_fuel(self.config.fuel)
+            store
+                .set_fuel(self.config.fuel)
                 .map_err(|e| anyhow::anyhow!("set_fuel: {e}"))?;
         }
         // 3. Epoch deadline (限 wall-clock 时间)
@@ -388,8 +388,7 @@ impl CodeRunner {
                 // 简化: 让业务方知道 host::read_file 写到 offset 0, 长度 content.len()
                 // 但 caller 不可变借用,我们要拿 mut
                 // Caller 提供 data_mut via memory
-                if let Some(memory_mut) =
-                    caller.get_export("memory").and_then(|e| e.into_memory())
+                if let Some(memory_mut) = caller.get_export("memory").and_then(|e| e.into_memory())
                 {
                     let mut buf = memory_mut.data_mut(&mut caller);
                     if write_ptr + content.len() > buf.len() {
@@ -581,7 +580,11 @@ mod tests {
             )
         "#;
         let out2 = runner.run_wat(wat2).unwrap();
-        assert_eq!(out2.stdout_lines, vec!["second"], "stdout 应被清空, 不会带 first");
+        assert_eq!(
+            out2.stdout_lines,
+            vec!["second"],
+            "stdout 应被清空, 不会带 first"
+        );
     }
 
     // === Phase 3.1 / T3.1: 沙箱配置测试 ===
@@ -661,8 +664,16 @@ mod tests {
         // 因为 limit=64KB = 当前 1 page, grow(1) 想拿 2 page = 128KB, 被拒 -> 返 -1
         let result = runner.run_wat(wat);
         // 应该跑成功, 返 -1
-        assert!(result.is_ok(), "memory.grow 失败应正常返回 -1, 不应 panic: {:?}", result.err());
-        assert_eq!(result.unwrap().return_value, -1, "memory grow 应被拒, 返 -1");
+        assert!(
+            result.is_ok(),
+            "memory.grow 失败应正常返回 -1, 不应 panic: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            result.unwrap().return_value,
+            -1,
+            "memory grow 应被拒, 返 -1"
+        );
     }
 
     /// 默认 fuel=10M 够用, 简单 wasm 跑成功
@@ -760,7 +771,8 @@ mod tests {
         std::fs::write(&file_path, b"secret data").unwrap();
 
         let mut cfg = SandboxConfig::default();
-        cfg.allowed_paths.push(std::path::PathBuf::from("/some/other/path"));
+        cfg.allowed_paths
+            .push(std::path::PathBuf::from("/some/other/path"));
 
         let runner = CodeRunner::new_with_config(cfg).unwrap();
         let wat = r#"
@@ -778,7 +790,10 @@ mod tests {
         "#;
         let output = runner.run_wat(wat).unwrap();
         // 被拒 -> (0, 0).add = 0
-        assert_eq!(output.return_value, 0, "sandbox 外文件应被拒 (ptr=0, len=0)");
+        assert_eq!(
+            output.return_value, 0,
+            "sandbox 外文件应被拒 (ptr=0, len=0)"
+        );
     }
 
     /// 空 allowed_paths 时任何文件读都被拒

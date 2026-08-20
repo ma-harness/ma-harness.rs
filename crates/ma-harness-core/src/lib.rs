@@ -46,17 +46,25 @@ pub mod profile;
 pub mod tool;
 pub mod tool_pipeline;
 
-pub use agent::{AgentLoop, AgentRunRequest, AgentRunResponse, FinishReason, ModelAdapter, ModelMessage, ModelRequest, ModelResponse, StubModelAdapter};
+pub use agent::{
+    AgentLoop, AgentRunRequest, AgentRunResponse, FinishReason, ModelAdapter, ModelMessage,
+    ModelRequest, ModelResponse, StubModelAdapter,
+};
 pub use agent_compress::{
     compress, estimate_messages_tokens, estimate_tokens, load_history_from_log, should_compress,
     CompressionPolicy,
 };
 pub use agents_md::{load_agents_md, AgentsMdConfig, AgentsMdResult};
-pub use creator::{CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, LoadedPlugin, PluginRecord, PluginSpec};
+pub use creator::{
+    CompileStatus, CreatorError, CreatorFactory, CreatorRegistry, LoadedPlugin, PluginRecord,
+    PluginSpec,
+};
 pub use creator_compile::{compile_plugin, dylib_filename, find_cargo, CompileConfig, CompileOutput};
 pub use event::{EventType, SessionEvent, Severity};
 pub use log::{EventLog, EventQuery, EventPage, StoredEvent};
 pub use operating_mode::{OperatingMode, OperatingModeConfig, OPERATING_MODE};
 pub use profile::{default_profile_dir, Profile, ProfileStore};
 pub use tool::{ToolEntry, ToolInvokeFn, ToolRegistry, ToolSchema};
-pub use tool_pipeline::{InvokeContext, PipelineConfig, PipelineStage, PostHookFn, PreHookFn, RetryPolicy, ToolConfig};
+pub use tool_pipeline::{
+    InvokeContext, PipelineConfig, PipelineStage, PostHookFn, PreHookFn, RetryPolicy, ToolConfig,
+};

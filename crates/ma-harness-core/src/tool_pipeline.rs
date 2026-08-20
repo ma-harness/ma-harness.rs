@@ -99,9 +99,8 @@ pub type PreHookFn =
 /// Post-hook: 业务方在 execute 后跑 (成功/失败都跑) (P7-3.3)
 ///
 /// result 走 `Arc<InnerResult>` (cheap clone), `anyhow::Error` 不可 Clone, 所以包一层.
-pub type PostHookFn = Arc<
-    dyn Fn(&InvokeContext, Arc<InnerResult>) -> BoxFuture<'static, ()> + Send + Sync,
->;
+pub type PostHookFn =
+    Arc<dyn Fn(&InvokeContext, Arc<InnerResult>) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// Inner result (P7-3.3): `Ok(Value)` 或 `Err(String)` (anyhow 转 String, 避免 Clone 问题)
 #[derive(Debug, Clone)]
@@ -300,8 +299,8 @@ mod tests {
     use super::*;
     use futures::future::BoxFuture;
 
-    type InvokeFn = dyn Fn(Value, &Context) -> BoxFuture<'static, anyhow::Result<Value>>
-        + Send + Sync;
+    type InvokeFn =
+        dyn Fn(Value, &Context) -> BoxFuture<'static, anyhow::Result<Value>> + Send + Sync;
 
     fn stub_invoke(_args: Value, _ctx: &Context) -> BoxFuture<'static, anyhow::Result<Value>> {
         Box::pin(async move { Ok(Value::String("ok".to_string())) })
@@ -354,8 +353,9 @@ mod tests {
             pre_hooks: vec![pre],
             post_hooks: vec![],
         };
-        let result =
-            invoke_with_pipeline(e, json!({}), Context::new(), &pipeline).await.unwrap();
+        let result = invoke_with_pipeline(e, json!({}), Context::new(), &pipeline)
+            .await
+            .unwrap();
         assert_eq!(result, "intercepted");
     }
 
@@ -407,8 +407,8 @@ mod tests {
     async fn pipeline_timeout_triggers_error() {
         let mut e = entry("slow", Arc::new(slow_invoke));
         e.config.timeout = Some(Duration::from_millis(50));
-        let result = invoke_with_pipeline(e, json!({}), Context::new(), &PipelineConfig::default())
-            .await;
+        let result =
+            invoke_with_pipeline(e, json!({}), Context::new(), &PipelineConfig::default()).await;
         let err = result.unwrap_err();
         assert!(err.to_string().contains("timeout"), "got: {err}");
     }
@@ -446,10 +446,9 @@ mod tests {
                 ..Default::default()
             },
         };
-        let result =
-            invoke_with_pipeline(e, json!({}), Context::new(), &PipelineConfig::default())
-                .await
-                .unwrap();
+        let result = invoke_with_pipeline(e, json!({}), Context::new(), &PipelineConfig::default())
+            .await
+            .unwrap();
         assert_eq!(result, "recovered");
     }
 

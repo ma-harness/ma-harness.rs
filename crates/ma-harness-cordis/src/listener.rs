@@ -1,4 +1,4 @@
-﻿//! Listener / ListenerEvent / ListenerRegistry (cordis 核心)
+//! Listener / ListenerEvent / ListenerRegistry (cordis 核心)
 //!
 //! Week 1 Day 5 实现. Phase 2.7 改走 deferred queue + dispatch_any.
 //! Phase 2.9 (Day 63) 加 priority 排序 (on_with_priority).
@@ -134,10 +134,7 @@ impl ListenerRegistry {
     /// 拿订阅某 TypeId 的所有 listener (Phase 2.7 deferred queue 用)
     ///
     /// 按 priority 升序排序, 同 priority 保持原顺序 (stable sort).
-    pub(crate) fn listeners_for_type_id(
-        &self,
-        type_id: TypeId,
-    ) -> Vec<Arc<dyn AnyListener>> {
+    pub(crate) fn listeners_for_type_id(&self, type_id: TypeId) -> Vec<Arc<dyn AnyListener>> {
         self.listeners_for_type_id_ordered(type_id)
             .into_iter()
             .map(|(_, l)| l)
@@ -275,11 +272,7 @@ impl AsyncListenerRegistry {
         &self,
         type_id: TypeId,
     ) -> Vec<std::sync::Arc<dyn AnyAsyncListener>> {
-        self.inner
-            .read()
-            .get(&type_id)
-            .cloned()
-            .unwrap_or_default()
+        self.inner.read().get(&type_id).cloned().unwrap_or_default()
     }
 
     #[allow(dead_code)]
@@ -399,19 +392,32 @@ mod tests {
         let o3 = Arc::clone(&order);
 
         // 注册顺序: high, low, medium — 应该 fire: low, medium, high
-        reg.on_with_priority::<CounterEvent>(10, Arc::new(move |_: &Context, _: &CounterEvent| {
-            o1.lock().push("high");
-        }));
-        reg.on_with_priority::<CounterEvent>(-5, Arc::new(move |_: &Context, _: &CounterEvent| {
-            o2.lock().push("low");
-        }));
-        reg.on_with_priority::<CounterEvent>(3, Arc::new(move |_: &Context, _: &CounterEvent| {
-            o3.lock().push("medium");
-        }));
+        reg.on_with_priority::<CounterEvent>(
+            10,
+            Arc::new(move |_: &Context, _: &CounterEvent| {
+                o1.lock().push("high");
+            }),
+        );
+        reg.on_with_priority::<CounterEvent>(
+            -5,
+            Arc::new(move |_: &Context, _: &CounterEvent| {
+                o2.lock().push("low");
+            }),
+        );
+        reg.on_with_priority::<CounterEvent>(
+            3,
+            Arc::new(move |_: &Context, _: &CounterEvent| {
+                o3.lock().push("medium");
+            }),
+        );
 
         reg.emit(&Context::new(), &CounterEvent { delta: 1 });
         let fired = order.lock().clone();
-        assert_eq!(fired, vec!["low", "medium", "high"], "按 priority 升序 fire");
+        assert_eq!(
+            fired,
+            vec!["low", "medium", "high"],
+            "按 priority 升序 fire"
+        );
     }
 
     #[test]
@@ -436,7 +442,11 @@ mod tests {
 
         reg.emit(&Context::new(), &CounterEvent { delta: 1 });
         let fired = order.lock().clone();
-        assert_eq!(fired, vec!["first", "second", "third"], "同 priority 保持注册顺序");
+        assert_eq!(
+            fired,
+            vec!["first", "second", "third"],
+            "同 priority 保持注册顺序"
+        );
     }
 
     #[test]

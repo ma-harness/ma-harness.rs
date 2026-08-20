@@ -1,4 +1,4 @@
-﻿//! EventLog — append-only SessionEvent 日志 (rusqlite 实现)
+//! EventLog — append-only SessionEvent 日志 (rusqlite 实现)
 //!
 //! Week 1 Day 7 实现. 设计见 `docs/ma-harness-arch-map.md` §4.
 //!
@@ -195,7 +195,9 @@ impl EventLog {
         let conn = self.inner.lock();
 
         // build WHERE
-        let mut sql = String::from("SELECT seq, id, session_id, event_type, ts, severity, run_id, plugin_name, payload_json, error_message, model_visible FROM events WHERE 1=1");
+        let mut sql = String::from(
+            "SELECT seq, id, session_id, event_type, ts, severity, run_id, plugin_name, payload_json, error_message, model_visible FROM events WHERE 1=1",
+        );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         sql.push_str(" AND session_id = ?");
@@ -241,33 +243,36 @@ impl EventLog {
 
         let mut stmt = conn.prepare(&sql)?;
         let events: rusqlite::Result<Vec<StoredEvent>> = stmt
-            .query_map(rusqlite::params_from_iter(args.iter().map(|b| b.as_ref())), |row| {
-                let seq: i64 = row.get(0)?;
-                let id: String = row.get(1)?;
-                let session_id: String = row.get(2)?;
-                let event_type_int: i32 = row.get(3)?;
-                let ts_str: String = row.get(4)?;
-                let severity_int: i32 = row.get(5)?;
-                let run_id: Option<String> = row.get(6)?;
-                let plugin_name: Option<String> = row.get(7)?;
-                let payload_json: Option<String> = row.get(8)?;
-                let error_message: Option<String> = row.get(9)?;
-                let model_visible_int: i32 = row.get(10)?;
+            .query_map(
+                rusqlite::params_from_iter(args.iter().map(|b| b.as_ref())),
+                |row| {
+                    let seq: i64 = row.get(0)?;
+                    let id: String = row.get(1)?;
+                    let session_id: String = row.get(2)?;
+                    let event_type_int: i32 = row.get(3)?;
+                    let ts_str: String = row.get(4)?;
+                    let severity_int: i32 = row.get(5)?;
+                    let run_id: Option<String> = row.get(6)?;
+                    let plugin_name: Option<String> = row.get(7)?;
+                    let payload_json: Option<String> = row.get(8)?;
+                    let error_message: Option<String> = row.get(9)?;
+                    let model_visible_int: i32 = row.get(10)?;
 
-                let event = SessionEvent {
-                    id,
-                    session_id,
-                    event_type: EventType::from_i32(event_type_int),
-                    ts: parse_rfc3339(&ts_str)?,
-                    severity: severity_from_int(severity_int),
-                    run_id,
-                    plugin_name,
-                    payload_json,
-                    error_message,
-                    model_visible: model_visible_int != 0,
-                };
-                Ok(StoredEvent { seq, event })
-            })?
+                    let event = SessionEvent {
+                        id,
+                        session_id,
+                        event_type: EventType::from_i32(event_type_int),
+                        ts: parse_rfc3339(&ts_str)?,
+                        severity: severity_from_int(severity_int),
+                        run_id,
+                        plugin_name,
+                        payload_json,
+                        error_message,
+                        model_visible: model_visible_int != 0,
+                    };
+                    Ok(StoredEvent { seq, event })
+                },
+            )?
             .collect();
 
         let events = events?;
@@ -341,8 +346,13 @@ impl EventLog {
                 let payload_json: Option<String> = row.get(8)?;
                 let error_message: Option<String> = row.get(9)?;
                 let model_visible_int: i32 = row.get(10)?;
-                let ts = parse_rfc3339(&ts_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+                let ts = parse_rfc3339(&ts_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
                 let event = SessionEvent {
                     id,
                     session_id,
@@ -368,7 +378,9 @@ impl EventLog {
 fn parse_rfc3339(s: &str) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })
 }
 
 fn severity_from_int(v: i32) -> Severity {

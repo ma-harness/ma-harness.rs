@@ -12,7 +12,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ma_harness_core::{EventLog, ToolRegistry, ToolSchema};
 use ma_harness_cordis::{
-    ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalService, BoxedError, Context, RiskLevel,
+    ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalService, BoxedError, Context,
+    RiskLevel,
 };
 use serde_json::{json, Value};
 
@@ -83,9 +84,7 @@ fn register_echo(reg: &ToolRegistry) {
             description: "echo args".into(),
             parameters: json!({"type": "object"}),
         },
-        Arc::new(|args, _ctx| {
-            Box::pin(async move { Ok(json!({ "echoed": args })) })
-        }),
+        Arc::new(|args, _ctx| Box::pin(async move { Ok(json!({ "echoed": args })) })),
     );
 }
 
@@ -106,11 +105,7 @@ async fn auto_approve_never_policy() {
         .expect("auto-approve should pass");
 
     assert_eq!(result["echoed"]["msg"], "hi");
-    assert_eq!(
-        svc.call_count(),
-        0,
-        "Never policy 不该 call service"
-    );
+    assert_eq!(svc.call_count(), 0, "Never policy 不该 call service");
 }
 
 #[tokio::test]
@@ -166,10 +161,7 @@ async fn ask_policy_service_errors() {
         .await
         .expect_err("service error should fail");
     let msg = err.to_string();
-    assert!(
-        msg.contains("approval service error"),
-        "got: {msg}"
-    );
+    assert!(msg.contains("approval service error"), "got: {msg}");
     assert!(msg.contains("network timeout"), "got: {msg}");
     assert_eq!(svc.call_count(), 1);
 }
@@ -196,11 +188,7 @@ async fn whitelist_policy_skips_listed_tool() {
         .expect("whitelist should auto-approve");
 
     assert_eq!(result["echoed"]["x"], 1);
-    assert_eq!(
-        svc.call_count(),
-        0,
-        "白名单命中不该 call service"
-    );
+    assert_eq!(svc.call_count(), 0, "白名单命中不该 call service");
 }
 
 #[tokio::test]

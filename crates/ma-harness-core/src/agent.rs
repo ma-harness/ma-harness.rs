@@ -364,7 +364,9 @@ mod tests {
         struct FailAdapter;
         #[async_trait]
         impl ModelAdapter for FailAdapter {
-            fn name(&self) -> &str { "fail" }
+            fn name(&self) -> &str {
+                "fail"
+            }
             async fn complete(&self, _req: &ModelRequest) -> anyhow::Result<ModelResponse> {
                 Err(anyhow::anyhow!("intentional fail"))
             }
@@ -389,16 +391,24 @@ mod tests {
         // (ModelRequest 永远先于 complete(), 即使 complete() 失败)
         // RunEnd 没 emit (错误路径早返回)
         let count = log.count("s1").unwrap();
-        assert_eq!(count, 3, "error path 应 emit RunStart + ModelRequest + ModelError");
+        assert_eq!(
+            count, 3,
+            "error path 应 emit RunStart + ModelRequest + ModelError"
+        );
 
-        let all = log.query(&crate::log::EventQuery {
-            session_id: "s1".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let all = log
+            .query(&crate::log::EventQuery {
+                session_id: "s1".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(all.events[0].event.event_type, EventType::RunStart);
         assert_eq!(all.events[1].event.event_type, EventType::ModelRequest);
         assert_eq!(all.events[2].event.event_type, EventType::ModelError);
-        assert!(!all.events[2].event.model_visible, "ModelError 不是 model-visible");
+        assert!(
+            !all.events[2].event.model_visible,
+            "ModelError 不是 model-visible"
+        );
     }
 
     #[tokio::test]
@@ -418,10 +428,12 @@ mod tests {
             agent.run(req).await.unwrap();
         }
 
-        let all = log.query(&crate::log::EventQuery {
-            session_id: "s1".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let all = log
+            .query(&crate::log::EventQuery {
+                session_id: "s1".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
         // 3 runs × 4 events = 12 个
         assert_eq!(all.events.len(), 12);
         // seq 单调递增
@@ -485,7 +497,12 @@ mod tests {
             collected.push(token);
         }
         // 3 个 word: "(no", "user", "message)"
-        assert_eq!(collected.len(), 3, "3 placeholder words, got {:?}", collected);
+        assert_eq!(
+            collected.len(),
+            3,
+            "3 placeholder words, got {:?}",
+            collected
+        );
         assert_eq!(collected[0], "(no ");
         assert_eq!(collected[1], "user ");
         assert_eq!(collected[2], "message) ");

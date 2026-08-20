@@ -64,7 +64,10 @@ pub enum PluginSource {
 
 /// 手动 Serialize: 把每种 variant 序列化成对应的 JSON 形态
 impl Serialize for PluginSource {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         match self {
             PluginSource::Local(path) => {
@@ -94,7 +97,9 @@ impl Serialize for PluginSource {
 
 /// 手动 Deserialize: 从 JSON 形态还原
 impl<'de> Deserialize<'de> for PluginSource {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         use serde::de::{self, MapAccess, Visitor};
         use std::fmt;
 
@@ -116,7 +121,10 @@ impl<'de> Deserialize<'de> for PluginSource {
                 f.write_str("a PluginSource object")
             }
 
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> std::result::Result<PluginSource, M::Error> {
+            fn visit_map<M: MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<PluginSource, M::Error> {
                 let mut ty: Option<String> = None;
                 let mut path: Option<String> = None;
                 let mut url: Option<String> = None;
@@ -131,13 +139,19 @@ impl<'de> Deserialize<'de> for PluginSource {
                 }
                 let ty = ty.ok_or_else(|| de::Error::missing_field("type"))?;
                 match ty.as_str() {
-                    "local" => Ok(PluginSource::Local(path.ok_or_else(|| de::Error::missing_field("path"))?)),
+                    "local" => Ok(PluginSource::Local(
+                        path.ok_or_else(|| de::Error::missing_field("path"))?,
+                    )),
                     "git" => Ok(PluginSource::Git {
                         url: url.ok_or_else(|| de::Error::missing_field("url"))?,
                         rev,
                     }),
-                    "http" => Ok(PluginSource::Http(url.ok_or_else(|| de::Error::missing_field("url"))?)),
-                    other => Err(de::Error::custom(format!("unknown PluginSource type: {other}"))),
+                    "http" => Ok(PluginSource::Http(
+                        url.ok_or_else(|| de::Error::missing_field("url"))?,
+                    )),
+                    other => Err(de::Error::custom(format!(
+                        "unknown PluginSource type: {other}"
+                    ))),
                 }
             }
         }
@@ -285,7 +299,10 @@ impl Registry {
 
     /// List all versions of a plugin
     pub fn list_versions(&self, name: &str) -> Vec<&PluginManifest> {
-        self.plugins.get(name).map(|v| v.iter().collect()).unwrap_or_default()
+        self.plugins
+            .get(name)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
     }
 
     /// Search by tag
@@ -616,9 +633,11 @@ mod tests {
     #[test]
     fn search_by_name_substring_case_insensitive() {
         let mut reg = Registry::new();
-        reg.publish(sample_manifest("awesome-tool", "0.1.0")).unwrap();
+        reg.publish(sample_manifest("awesome-tool", "0.1.0"))
+            .unwrap();
         reg.publish(sample_manifest("my-thing", "0.1.0")).unwrap();
-        reg.publish(sample_manifest("AwesomeOther", "0.1.0")).unwrap();
+        reg.publish(sample_manifest("AwesomeOther", "0.1.0"))
+            .unwrap();
 
         // 业务方搜 "awesome" 应匹配 awesome-tool + AwesomeOther
         let awesome = reg.search_by_name("awesome");

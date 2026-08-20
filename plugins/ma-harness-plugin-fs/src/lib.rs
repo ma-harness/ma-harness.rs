@@ -1,4 +1,4 @@
-﻿//! ma_harness_plugin_fs ?first-party plugin: 文件系统?/ ?//!
+//! ma_harness_plugin_fs ?first-party plugin: 文件系统?/ ?//!
 //! **设计**: seam 公开 API 风格.
 //!
 //! **Week 5-6 实装**: 3 个核心方?(read_file / write_file / list_dir) + 路径白名?//! (READ_ALLOW_LIST / WRITE_ALLOW_LIST typed key,业务?set 控制 sandbox).
@@ -135,14 +135,21 @@ impl FsService {
     }
 
     /// 检查路径是否在白名单内
-    fn check_allow_list(&self, ctx: &Context, path: &Path, list: &'static str) -> Result<(), FsError> {
+    fn check_allow_list(
+        &self,
+        ctx: &Context,
+        path: &Path,
+        list: &'static str,
+    ) -> Result<(), FsError> {
         let allows: Vec<String> = match list {
             "read" => ctx.get(READ_ALLOW_LIST).unwrap_or_default(),
             "write" => ctx.get(WRITE_ALLOW_LIST).unwrap_or_default(),
-            _ => return Err(FsError::NotInAllowList {
-                path: path.to_string_lossy().to_string(),
-                list,
-            }),
+            _ => {
+                return Err(FsError::NotInAllowList {
+                    path: path.to_string_lossy().to_string(),
+                    list,
+                });
+            }
         };
         if allows.is_empty() {
             // Phase 1: 白名单空 = 拒绝所?(fail-closed)
@@ -254,9 +261,7 @@ mod tests {
         let file_path = tmp.path().join("out.txt");
         let ctx = ctx_with_temp_allow_list(&tmp);
         let svc = FsService;
-        svc.write_file(&ctx, &file_path, "written")
-            .await
-            .unwrap();
+        svc.write_file(&ctx, &file_path, "written").await.unwrap();
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "written");
     }

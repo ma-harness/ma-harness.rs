@@ -26,7 +26,7 @@ pub struct CtxSnapshot {
     pub plugin_count: usize,
     pub plugins: Vec<String>,
     pub storage_keys: Vec<String>, // Phase 1 stub
-    pub services: Vec<String>,    // Phase 1 stub
+    pub services: Vec<String>,     // Phase 1 stub
     pub is_disposed: bool,
 }
 

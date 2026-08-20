@@ -87,7 +87,10 @@ pub struct AgentsMdResult {
 /// 1. `<cwd>/<file_name>` (按 file_names 顺序)
 /// 2. `<parent>/<file_name>` (向上递归, search_parents=true 时)
 /// 3. 返 None
-pub fn load_agents_md(workdir: impl AsRef<Path>, cfg: &AgentsMdConfig) -> std::io::Result<AgentsMdResult> {
+pub fn load_agents_md(
+    workdir: impl AsRef<Path>,
+    cfg: &AgentsMdConfig,
+) -> std::io::Result<AgentsMdResult> {
     if !cfg.enabled {
         return Ok(AgentsMdResult {
             found_path: None,

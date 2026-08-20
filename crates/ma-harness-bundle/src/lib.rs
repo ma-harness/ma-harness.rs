@@ -288,7 +288,9 @@ pub fn bundle_summary(bundle: &BundleManifest, resolved: &[ResolvedPlugin]) -> S
     let mut out = String::new();
     out.push_str(&format!(
         "Bundle: {} v{} ({})\n",
-        bundle.name(), bundle.version(), bundle.description()
+        bundle.name(),
+        bundle.version(),
+        bundle.description()
     ));
     out.push_str(&format!(
         "  Plugins: {} ({} required, {} optional)\n",
