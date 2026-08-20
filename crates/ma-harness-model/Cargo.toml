@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # 内部
 ma-harness-core = { path = "../ma-harness-core" }
+ma-harness-cordis = { path = "../ma-harness-cordis" }  # P12-8: Context type
 
 # 外部
 async-stream = { workspace = true }
