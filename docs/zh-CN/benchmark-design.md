@@ -1,6 +1,6 @@
 # Benchmark Design (Week 10-11)
 
-[English](../benchmark-design.md) | [简体中文](benchmark-design.md)
+[English](../en/benchmark-design.md) | [简体中文](benchmark-design.md)
 
 > **目的**: 量化 ma-harness 的核心路径性能, 跟 DeepSeek Harness (dsh) 差分对比, 防止 Rust 重写后性能退化。
 > **状态**: Week 10-11 设计稿, 实现中。

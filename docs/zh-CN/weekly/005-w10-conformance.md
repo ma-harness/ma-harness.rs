@@ -6,7 +6,7 @@
 
 
 
-[English](../../weekly/005-w10-conformance.md) — coming soon. 中文为主.
+[English](../../en/weekly/005-w10-conformance.md) — coming soon. 中文为主.
 
 
 ---

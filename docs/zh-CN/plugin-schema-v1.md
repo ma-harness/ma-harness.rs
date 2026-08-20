@@ -1,6 +1,6 @@
 # plugin.schema.json v1 — 设计
 
-[English](../plugin-schema-v1.md) | [简体中文](plugin-schema-v1.md)
+[English](../en/plugin-schema-v1.md) | [简体中文](plugin-schema-v1.md)
 
 > 目的: `plugin.toml` 是**人手写**的插件清单,JSON Schema 是**机读校验**,两者必须配套。
 > 本设计落到 `crates/ma_harness_plugin_schema/assets/plugin.schema.json`(Week 1 末生成),

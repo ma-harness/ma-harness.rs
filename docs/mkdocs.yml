@@ -6,12 +6,13 @@
 #
 # 业务方禁用: `mkdocs build --strict` 会 fail, 业务方先 `mkdocs build` 看 warnings.
 #
-# i18n 结构 (P12-3+, Day 101+1):
-#   英文 (默认):   docs/<name>.md
+# i18n 结构 (P13+, Day 101+1):
+#   英文 (默认):   docs/en/<name>.md
 #   简体中文:     docs/zh-CN/<name>.md
-#   OpenAPI:      docs/api/openapi.json
+#   OpenAPI:      docs/en/api/openapi.json
 #                 docs/zh-CN/api/openapi.json
 #   业务方切语言: mkdocs-material 内置 language selector (header 右上角)
+#   目录对称: docs/en/, docs/zh-CN/, 未来 docs/de/, docs/ja/
 
 site_name: ma-harness.rs
 site_description: "Rust 重写的 AI agent orchestrator (跟 dsh 对齐)"
@@ -54,7 +55,7 @@ theme:
 docs_dir: "."
 
 nav:
-  - 首页: README.md
+  - 首页: en/README.md
   - 业务方 (User):
       - Python SDK: ../crates/mah-py/README.md
       - ACP 互通 (CLI): ../crates/ma-harness-cli/src/acp.rs
@@ -62,40 +63,40 @@ nav:
       - Bundle 概念: ../crates/ma-harness-bundle/README.md
       - Artifact Viewer: ../crates/ma-harness-artifact/README.md
   - 架构 (Architecture):
-      - 架构总览: ma-harness-arch-map.md
-      - 技术栈: tech-stack.md
-      - Macro 设计: macro-design.md
-      - Plugin Schema: plugin-schema-v1.md
+      - 架构总览: en/ma-harness-arch-map.md
+      - 技术栈: en/tech-stack.md
+      - Macro 设计: en/macro-design.md
+      - Plugin Schema: en/plugin-schema-v1.md
   - 国际化 (i18n):
-      - 双语规范: i18n.md
+      - 双语规范: en/i18n.md
   - Conformance (跑分):
-      - Conformance 设计: conformance-design.md
-      - P11-2 dsh 真实 snapshot 跑分: dsh-benchmark-report.md
-      - P11 baseline 报告: p11-baseline-report.md
-      - P11 全收官报告: p11-final-report.md
-      - P12 全收官报告: p12-final-report.md
-      - week 11 conformance 报告: conformance-report-week11.md
-      - week 11 benchmark 报告: benchmark-report-week11.md
-      - Benchmark 设计: benchmark-design.md
+      - Conformance 设计: en/conformance-design.md
+      - P11-2 dsh 真实 snapshot 跑分: zh-CN/reports/dsh-benchmark-report.md
+      - P11 baseline 报告: zh-CN/reports/p11-baseline-report.md
+      - P11 全收官报告: zh-CN/reports/p11-final-report.md
+      - P12 全收官报告: zh-CN/reports/p12-final-report.md
+      - week 11 conformance 报告: zh-CN/reports/conformance-report-week11.md
+      - week 11 benchmark 报告: zh-CN/reports/benchmark-report-week11.md
+      - Benchmark 设计: en/benchmark-design.md
   - Roadmap (路线):
-      - Phase 7-10: roadmap-phase-7.md
-      - Phase 11: roadmap-phase-11.md
+      - Phase 7-10: zh-CN/reports/roadmap-phase-7.md
+      - Phase 11: zh-CN/reports/roadmap-phase-11.md
   - 实验 (Experiments):
-      - PyO3 评估: pyo3-evaluation.md
-      - Code Mode 延后: code-mode-deferred.md
+      - PyO3 评估: zh-CN/reports/pyo3-evaluation.md
+      - Code Mode 延后: zh-CN/reports/code-mode-deferred.md
   - 决策 (Decisions):
-      - 决策日志: decision-log.md
+      - 决策日志: zh-CN/decision-log.md
   - 周报 (Weekly):
-      - Day 0: weekly/000-day0.md
-      - Week 1-2: weekly/001-w01-w02.md
-      - Week 3-4: weekly/002-w03-w04.md
-      - Week 5-6: weekly/003-w05-w06.md
-      - Week 7-9: weekly/004-w07-w09.md
-      - Week 10: weekly/005-w10-conformance.md
-      - Week 11: weekly/006-w11-frameworks.md
-      - Week 12: weekly/007-w12-final.md
+      - Day 0: zh-CN/weekly/000-day0.md
+      - Week 1-2: zh-CN/weekly/001-w01-w02.md
+      - Week 3-4: zh-CN/weekly/002-w03-w04.md
+      - Week 5-6: zh-CN/weekly/003-w05-w06.md
+      - Week 7-9: zh-CN/weekly/004-w07-w09.md
+      - Week 10: zh-CN/weekly/005-w10-conformance.md
+      - Week 11: zh-CN/weekly/006-w11-frameworks.md
+      - Week 12: zh-CN/weekly/007-w12-final.md
   - API Reference:
-      - OpenAPI (English): api/openapi.json
+      - OpenAPI (English): en/api/openapi.json
       - OpenAPI (简体中文): zh-CN/api/openapi.json
 
 # mkdocs-material i18n 备用语言 (header 右上角切换)

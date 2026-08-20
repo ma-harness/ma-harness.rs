@@ -8,7 +8,7 @@
 ---
 
 
-[English](../../weekly/007-w12-final.md) — coming soon. 中文为主.
+[English](../../en/weekly/007-w12-final.md) — coming soon. 中文为主.
 
 ## TL;DR
 

@@ -1,6 +1,6 @@
 # Conformance Test Design (Week 10)
 
-[English](../conformance-design.md) | [简体中文](conformance-design.md)
+[English](../en/conformance-design.md) | [简体中文](conformance-design.md)
 
 > **目的**: 验证 ma-harness 的行为跟 DeepSeek Harness (dsh) 在相同输入下产生相同输出,确保语义等价。
 > **状态**: Week 10 设计稿,实现中。

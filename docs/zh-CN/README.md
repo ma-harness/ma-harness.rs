@@ -1,6 +1,6 @@
 # ma-harness.rs 文档索引 (P12-3 文档站 v1)
 
-[English](../README.md) | [简体中文](README.md)
+[English](../en/README.md) | [简体中文](README.md)
 
 > **入口**: 本 README 是 ma-harness.rs 文档总索引, 按主题分块.
 > **P12-3 v1**: Markdown 文档已经齐全, 本 README 提供"按角色 / 按主题"两个维度的导航.

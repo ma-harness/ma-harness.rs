@@ -1,6 +1,6 @@
 # Benchmark Design (Week 10-11)
 
-[English](benchmark-design.md) | [简体中文](zh-CN/benchmark-design.md)
+[English](benchmark-design.md) | [简体中文](../zh-CN/benchmark-design.md)
 
 > **Purpose**: Quantify the performance of ma-harness's core paths and compare
 > with DeepSeek Harness (dsh), to prevent regression after the Rust rewrite.
