@@ -563,16 +563,23 @@ pub struct ListSessionsResponse {
 /// 单个 session 的 JSON 表示 (跟 proto Session 对齐)
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProtoSessionJson {
+    /// session UUID v4
     pub id: String,
+    /// 用户给的名字 (默认 "session-<timestamp>")
     pub name: String,
     /// state: 0=Created, 1=Active, 2=Paused, 3=Closed
     pub state: i32,
     /// mode: 0=Default, 1=...
     pub mode: i32,
+    /// 创建时间 (RFC 3339 string)
     pub created_at: Option<String>,
+    /// 最后更新时间 (RFC 3339 string)
     pub updated_at: Option<String>,
+    /// 关闭时间 (RFC 3339 string, None = 未关闭)
     pub closed_at: Option<String>,
+    /// 启用的 plugin name 列表
     pub enabled_plugins: Vec<String>,
+    /// 用户 ID (Phase 2 多用户, 当前固定空字符串)
     pub user_id: String,
 }
 
@@ -790,21 +797,30 @@ async fn get_session_events_handler(
 /// 单 session token 统计响应
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TokenStatsResponse {
+    /// session UUID
     pub session_id: String,
+    /// 累计 prompt tokens (all models)
     pub prompt_tokens: u32,
+    /// 累计 completion tokens (all models)
     pub completion_tokens: u32,
+    /// prompt + completion
     pub total: u32,
+    /// ModelRequest 事件计数
     pub request_count: u32,
+    /// ModelResponse 事件计数
     pub response_count: u32,
     /// P8-2 简化: 按 model 分组 (key = model name)
     #[serde(default)]
+    /// 单 model 的 token 统计 (key 是 model name)
     pub by_model: std::collections::BTreeMap<String, ModelTokenStats>,
 }
 
 /// 单 model token 统计
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
 pub struct ModelTokenStats {
+    /// prompt tokens
     pub prompt_tokens: u32,
+    /// completion tokens
     pub completion_tokens: u32,
 }
 
@@ -995,6 +1011,9 @@ async fn stream_session_events_handler(
 }
 
 #[cfg(test)]
+// 整个 test mod: parking_lot::Mutex 锁在 async test fn 顶部故意持有 (test 串行化),
+// 业务方主动 design, clippy 误报. 一次性 allow 整个 mod 的 17 个 await_holding_lock
+#[allow(clippy::await_holding_lock)]
 mod tests {
     // 2026-08-18: 用 salvo::test::TestClient 标准 API
     // 之前 mental commit 写 `router().into_service()` + `salvo::hyper::Body::empty()` 都错.
@@ -1078,11 +1097,13 @@ mod tests {
         run_router_with_store(Arc::new(StubModelAdapter), store)
     }
 
+    #[allow(dead_code)] // 业务方备用 helper, 暂未调用 (Phase 2 集成 /v1/sessions/{id}/events 时用)
     fn full_router() -> Router {
         // 拿 log + store 都设, 走 /v1/sessions/{id}/events
         let log = EventLog::open_in_memory().unwrap();
         let store: Arc<dyn SessionStore> = Arc::new(crate::session_store::InMemoryStore::new());
-        let _ = SESSION_TEST_LOCK.lock();
+        // 拿 lock 防止并发 test 抢 global state
+        let _guard = SESSION_TEST_LOCK.lock();
         clear_global_session_store();
         clear_global_event_log();
         run_router_with_log_and_store(Arc::new(StubModelAdapter), Arc::new(log), store)

@@ -22,14 +22,18 @@ use thiserror::Error;
 
 use ma_harness_proto::ma_harness::v1::{Session as ProtoSession, SessionMetadata};
 
+/// SessionStore 操作错误 (P8-2)
 #[derive(Debug, Error)]
 pub enum SessionStoreError {
+    /// session ID 不存在
     #[error("session not found: {0}")]
     NotFound(String),
 
+    /// SQLite 底层错误 (rusqlite)
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// JSON 序列化错误
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 }

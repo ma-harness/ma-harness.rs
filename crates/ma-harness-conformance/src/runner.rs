@@ -53,8 +53,11 @@ pub struct RunnerStats {
 impl RunnerStats {
     /// 从结果列表汇总
     pub fn from_results(results: &[ConformanceResult]) -> Self {
-        let mut stats = Self::default();
-        stats.total = results.len();
+        // clippy 提示: field assignment outside initializer, 用 struct update syntax
+        let mut stats = Self {
+            total: results.len(),
+            ..Self::default()
+        };
         for r in results {
             if r.error.is_some() {
                 stats.errored += 1;

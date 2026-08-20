@@ -421,7 +421,7 @@ pub async fn run_acp_server(model: &str) -> Result<()> {
                 eprintln!("[acp] stdin EOF, shutting down");
                 break;
             }
-            Ok(n) => {
+            Ok(_n) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;

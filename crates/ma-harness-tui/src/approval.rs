@@ -45,8 +45,11 @@ pub struct AlwaysApprove;
 /// (`context` 当前 placeholder). 业务方拿这个 struct 拿完整信息.
 #[derive(Debug, Clone)]
 pub struct PendingApproval {
+    /// 工具调用 ID (LLM 生成的 uuid)
     pub tool_call_id: String,
+    /// 工具名 (snake_case, e.g. "fs.read")
     pub tool_name: String,
+    /// 业务方提供的上下文 (TUI 显示用, 当前 placeholder)
     pub context: String,
 }
 
@@ -83,18 +86,26 @@ impl ApprovalService for AskApprove {
 /// PendingApprovals (P7-2.4 兼容保留, v2 业务方用 TuiApprover.peek_pending 替代)
 #[derive(Default)]
 pub struct PendingApprovals {
+    /// 内部 vector (Mutex 保护)
     inner: Mutex<Vec<ApprovalRequest>>,
 }
 
 impl PendingApprovals {
+    /// push 一个待审批请求
     pub fn push(&self, req: ApprovalRequest) {
         self.inner.lock().push(req);
     }
+    /// pop 一个最早的待审批请求 (FIFO)
     pub fn pop(&self) -> Option<ApprovalRequest> {
         self.inner.lock().pop()
     }
+    /// 当前待审批请求数
     pub fn len(&self) -> usize {
         self.inner.lock().len()
+    }
+    /// 是否为空 (clippy::len_without_is_empty: 公开 `len` 必须配套 `is_empty`)
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().is_empty()
     }
 }
 

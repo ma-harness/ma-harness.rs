@@ -39,16 +39,27 @@ static START_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 /// 全局 metrics 计数器 (P10-7)
 #[derive(Default)]
 pub struct Metrics {
+    /// session 创建总数
     pub sessions_total: AtomicU64,
+    /// agent run 启动总数
     pub runs_total: AtomicU64,
+    /// model 请求总数
     pub model_requests_total: AtomicU64,
+    /// model 响应总数
     pub model_responses_total: AtomicU64,
+    /// tool 调用总数
     pub tool_calls_total: AtomicU64,
+    /// tool 错误总数
     pub tool_errors_total: AtomicU64,
+    /// 审批通过总数
     pub approvals_approved: AtomicU64,
+    /// 审批拒绝总数
     pub approvals_denied: AtomicU64,
+    /// 审批 auto-approved 总数 (无人工)
     pub approvals_auto: AtomicU64,
+    /// HTTP 请求总数
     pub http_requests_total: AtomicU64,
+    /// HTTP 错误总数 (status >= 400)
     pub http_errors_total: AtomicU64,
 }
 
@@ -77,24 +88,31 @@ impl Metrics {
     }
 
     /// 业务方 (各 handler) 调
+    /// 增加 session 计数 (+1)
     pub fn inc_sessions(&self) {
         self.sessions_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 run 计数 (+1)
     pub fn inc_runs(&self) {
         self.runs_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 model request 计数 (+1)
     pub fn inc_model_requests(&self) {
         self.model_requests_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 model response 计数 (+1)
     pub fn inc_model_responses(&self) {
         self.model_responses_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 tool call 计数 (+1)
     pub fn inc_tool_calls(&self) {
         self.tool_calls_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 tool error 计数 (+1)
     pub fn inc_tool_errors(&self) {
         self.tool_errors_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加审批计数 (按 decision 字符串分发)
     pub fn inc_approval(&self, decision: &str) {
         match decision {
             "approved" => {
@@ -109,9 +127,11 @@ impl Metrics {
             _ => {}
         }
     }
+    /// 增加 HTTP request 计数 (+1)
     pub fn inc_http_requests(&self) {
         self.http_requests_total.fetch_add(1, Ordering::Relaxed);
     }
+    /// 增加 HTTP error 计数 (status >= 400, +1)
     pub fn inc_http_errors(&self) {
         self.http_errors_total.fetch_add(1, Ordering::Relaxed);
     }
@@ -181,7 +201,6 @@ pub static METRICS: Metrics = Metrics::new();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU64;
 
     fn fresh() -> Metrics {
         Metrics::new()

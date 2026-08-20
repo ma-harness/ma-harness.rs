@@ -20,17 +20,17 @@ use ma_harness_conformance::{
     fixture::FixtureLoader, ConformanceRunner, ConformanceResult, Fixture, ReportFormat,
     ReportWriter,
 };
-use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, SessionEvent, StubModelAdapter};
+use ma_harness_core::{AgentLoop, AgentRunRequest, EventLog, StubModelAdapter};
 // 2026-08-18 (Day 52): ma_harness_proto 恢复 (用本地 vendor/protoc), gRPC service 恢复
 use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
 };
-use ma_harness_seam::{PluginLoader, PluginRegistry};
+use ma_harness_seam::PluginLoader;
 use ma_harness_registry::Registry; // P14 (2026-08-20): registry list/export CLI
 // Phase 2.2 (T2.2): 引用 hello plugin 触发 link, inventory::submit! 才有 effect
 #[allow(unused_imports)]
 use ma_harness_plugin_hello as _hello;
-use ma_harness_server::{AgentServiceImpl, ServerBuilder, SessionServiceImpl, SessionStore};
+use ma_harness_server::{ServerBuilder, SessionStore};
 
 #[derive(Parser, Debug)]
 #[command(name = "mah", about = "ma-harness AI agent orchestrator")]
@@ -580,7 +580,7 @@ fn sessions_list(store_path: &std::path::Path) -> Result<()> {
         let created = s
             .created_at
             .as_ref()
-            .map(|t| format_ts(t))
+            .map(format_ts)
             .unwrap_or_else(|| "—".to_string());
         println!(
             "  {:36}  state={:9}  name={:20}  created={}",
@@ -1460,6 +1460,7 @@ mod registry_cli_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ma_harness_core::SessionEvent;
 
     // === P5-5 (Day 94): mah sessions CLI ===
 

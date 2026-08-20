@@ -105,6 +105,7 @@ pub struct TuiApp {
     /// **P5-2**: 当前 mode (List / Detail)
     mode: Arc<Mutex<AppMode>>,
     /// P10-2.5: 当前 pending approval (TUI 主循环轮询 TuiApprover.peek_pending 拿)
+    #[allow(dead_code)] // Phase 2 启用 modal 路由时使用, 当前只 set 不 read
     pending_approval: Arc<Mutex<Option<crate::approval::PendingApproval>>>,
     /// P10-2.5: TuiApprover 引用 (主循环轮询 + key 路由调 approve/deny)
     tui_approver: Arc<Mutex<Option<Arc<crate::approval::TuiApprover>>>>,
@@ -217,8 +218,9 @@ impl TuiApp {
     /// **P4-3 (Phase 4) 新增**: 构造 + 接 EventLog + SessionStore
     ///
     /// 业务方传:
-    /// - log_path: 走 EventLog 拿真 events (P4-1)
-    /// - store: 走 SessionStore 拿真 sessions (P4-3)
+    ///   - log_path: 走 EventLog 拿真 events (P4-1)
+    ///   - store: 走 SessionStore 拿真 sessions (P4-3)
+    ///
     /// 都 None → 走 stub fallback
     pub fn new_with_log_and_store(
         log_path: Option<&Path>,
@@ -432,7 +434,8 @@ impl TuiApp {
         let mut sessions = self.sessions.lock();
         sessions.clear();
         for sid in session_ids.iter().take(20) {
-            let count = log.count(sid).unwrap_or_else(|_| 0);
+            // clippy 提示: `unwrap_or_else(|_| 0)` 简化为 `unwrap_or(0)` (闭包没用参数)
+            let count = log.count(sid).unwrap_or(0);
             sessions.push(SessionRow {
                 id: sid.clone(),
                 state: if count > 0 { "active" } else { "idle" }.to_string(),
@@ -1400,7 +1403,8 @@ mod tests {
 
         // 5. events 仍走 EventLog (store 跟 events 无关)
         let events = app.events.lock();
-        assert!(events.len() >= 1, "events 走 EventLog, 应有 1+ 条");
+        // clippy 提示: `>= 1` 改 `!is_empty()`, 表达更清晰
+        assert!(!events.is_empty(), "events 走 EventLog, 应有 1+ 条");
     }
 
     // === P5-2: TUI session detail view (j/k/Enter/Esc 交互) ===
@@ -1546,9 +1550,9 @@ mod tests {
                     session_id
                 );
             }
-            AppMode::List => panic!("进 detail 后 mode 应是 Detail"),
-            &AppMode::Approval { .. } => panic!("进 detail 后 mode 应是 Detail 或 Approval"),
-            AppMode::Approval { .. } => panic!("进 detail 后 mode 应是 Detail 或 Approval"),
+            // 重复 Approval pattern 是 unreachable, clippy 报错
+            // 改 `_` 通配 (前面 List 已经覆盖 None/List, 这里兜底 Approval/其他)
+            _ => panic!("进 detail 后 mode 应是 Detail"),
         }
     }
 

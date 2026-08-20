@@ -11,7 +11,6 @@ use ma_harness_proto::ma_harness::v1::{
     AgentState as ProtoAgentState, CancelRequest, CancelResponse,
     FinishReason as ProtoFinishReason, GetRunRequest,
 };
-use ma_harness_proto::convert::session_event_to_proto;
 use tonic::{Request, Response, Status};
 
 /// 内部 SessionEvent → proto::SessionEvent helper (server 用)
@@ -45,6 +44,7 @@ pub struct AgentServiceImpl {
 }
 
 impl AgentServiceImpl {
+    /// 构造 AgentServiceImpl (注入 EventLog + ModelAdapter)
     pub fn new(log: EventLog, adapter: Arc<dyn ModelAdapter>) -> Self {
         Self {
             log,
@@ -375,16 +375,13 @@ mod tests {
         let mut collected = Vec::new();
         while let Some(event) = stream.next().await {
             let event = event.unwrap();
-            match event.event {
-                Some(Event::Message(msg)) => {
-                    if let Some(ContentBlock {
-                        content: Some(Content::Text(t)),
-                    }) = msg.content.first()
-                    {
-                        collected.push(t.text.clone());
-                    }
-                }
-                _ => {}
+            // clippy 提示: `match` 解构 + `_ => {}` 简化为 `if let`
+            if let Some(Event::Message(msg)) = event.event
+                && let Some(ContentBlock {
+                    content: Some(Content::Text(t)),
+                }) = msg.content.first()
+            {
+                collected.push(t.text.clone());
             }
         }
         // 3 个 word: "alpha ", "beta ", "gamma "

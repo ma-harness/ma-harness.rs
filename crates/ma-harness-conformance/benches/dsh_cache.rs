@@ -1,6 +1,7 @@
 //! P12-1 bench: dsh_format 缓存 vs 不缓存
 //!
 //! 跑法: `cargo bench --package ma-harness-conformance --bench dsh_cache`
+#![allow(missing_docs)] // bench 文件: criterion macro 公开 fn 较多, 不强制 doc
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ma_harness_conformance::dsh_format::{parse_dsh_jsonl, DshFixtureCache};
