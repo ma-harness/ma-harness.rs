@@ -269,7 +269,7 @@ For new features, add a fixture to `crates/ma-harness-conformance/fixtures/` and
 > </tr>
 > <tr>
 >   <td><img src="docs/assets/donate-wechat.png" width="200" alt="微信收款码"></td>
->   <td><img src="docs/assets/donate-alipay.jpg" width="200" alt="支付宝收款码"></td>
+>   <td><img src="docs/assets/donate-alipay.png" width="200" alt="支付宝收款码"></td>
 > </tr>
 > </table>
 >
