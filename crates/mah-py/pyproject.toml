@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mah-py"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python SDK for ma-harness.rs (Rust AI agent orchestrator)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -39,6 +39,7 @@ Homepage = "https://gitee.com/yifenma/ma-harness.rs"
 Repository = "https://gitee.com/yifenma/ma-harness.rs"
 
 [tool.setuptools]
+package-dir = { "" = "src" }
 packages = ["mah_py"]
 
 [tool.setuptools.package-data]

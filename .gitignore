@@ -3,6 +3,13 @@
 **/*.rs.bk
 Cargo.lock.bak
 
+# Python / build
+**/dist/
+**/__pycache__/
+**/*.egg-info/
+**/.eggs/
+**/build/
+
 # Workspace 锁文件策略:
 # - Library crate: .gitignore (不跟踪)
 # - Binary / application crate: 跟踪

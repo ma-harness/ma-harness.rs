@@ -1643,3 +1643,71 @@ P12 全部 9 任务 (除 P12-4) 1 个 session 内连续收官, 累计 8 commits 
 - 跳: P12-4 PyPI (用户排除)
 - 累计 200+ commits
 
+
+## 38. P12-4 mah-py PyPI 发版收官 (2026-08-20 / Day 101+1)
+
+> P12 之前 user 明确跳过 P12-4 (业务方运营任务), 本次主动改主意做.
+
+### 决策
+
+- 业务方需求: pip install mah-py 一行装
+- v1 ( .1.0) 在 P11-3 commit da49ffe 已经收官, 但从未真发到 PyPI
+- 本次发  .1.1 (patch bump, 实质没改 v1) 到 **test.pypi.org** (先演练, 业务方验证)
+- 走 	wine upload --repository testpypi (twine 7.0.0 + build 1.5.0)
+
+### Build 踩坑 (3 个)
+
+1. **pip 镜像连 pypi.org 失败** — ConnectionResetError(10054) Windows 网络层
+   - 修: pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+2. **uild 库 UTF-8 decode bug** — Python 3.14 + Windows ANSI 编码
+   - 修: $env:PYTHONUTF8='1' (配合下面 package-dir 修解决)
+3. **package directory 'mah_py' does not exist** — pyproject.toml 说 packages = ["mah_py"] 但实际是 src/mah_py/
+   - 修: 加 package-dir = { "" = "src" } 到 [tool.setuptools]
+
+### Upload 踩坑 (2 个)
+
+1. **token scope 错配** — user 第一次贴的 token base64 decode 是 pypi.org, 不能 upload 到 test.pypi.org
+   - 解: 重新申请 test.pypi.org token (独立账号, 跟 pypi.org 无关)
+2. **HTTPS proxy 阻断上传** — $env:https_proxy=http://127.0.0.1:7890 (本地代理) 让 equests 上传被 reset
+   - 修: $env:NO_PROXY='test.pypi.org,pypi.org,files.pythonhosted.org' 让 requests 直连 Fastly CDN (151.101.192.223)
+
+### 端到端验证
+
+`
+$ pip install -i https://test.pypi.org/simple mah-py==0.1.1
+Successfully installed mah-py-0.1.1
+
+$ python -c "from mah_py import Mah, __version__; m = Mah(); r = m.run('echo hello'); print(r.content)"
+[stub] echo: echo hello
+`
+
+- 业务方 pip install -i https://test.pypi.org/simple mah-py==0.1.1 验证装上
+- Mah.run 走 mah CLI subprocess, content 跟 mah run stdout 一致
+- 0.1.1 跟 0.1.0 API 兼容 (纯 patch bump, metadata + 修 build 配)
+
+### Token 安全
+
+- 没用持久 env (setx / [Environment]::SetEnvironmentVariable) — token 不进 Windows Registry
+- 用 process env ($env:TWINE_PASSWORD=...), shell 退出即消失
+- upload 完立刻 $env:TWINE_PASSWORD='' 清空
+- token 不会进 git / log (除 user 在 input 里的粘贴, user 自己保管)
+
+### 跳过的 (留给 user)
+
+- **pypi.org 生产发版** — 等业务方在 test.pypi.org 验证通过后再上
+- **CI 自动化发版** (GitHub Actions / GitLab CI 上 twine) — user 业务方 DevOps 任务
+- **版本号自动化** (setuptools_scm / hatch-vcs) — v0.1.x 系列后再说
+
+### 给后来人
+
+- pip install build twine 前先 pip config set global.index-url <mirror> (国内网络到 pypi.org 不稳)
+- python -m build 配合 package-dir = { "" = "src" } (src layout 必需)
+- 有本地 HTTPS proxy 时, PyPI 上传/下载都设 NO_PROXY 绕开
+- test.pypi.org 跟 pypi.org 是**两套独立账号/token**, token 不能混用
+- 业务方发版前先在 test.pypi.org 演练, 改 bug 不会被生产污染
+- 决策日志 § 38 持续更新, P13 (业务方驱动) 收官写 § 39
+
+### commit (本决策)
+
+- c4fe94 P12 全收官 + 修 P7-3.4 approval 老 bug
+- 后续: version bump + .gitignore 调整 收尾 commit (本 commit)
