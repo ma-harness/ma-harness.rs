@@ -313,6 +313,80 @@ impl Registry {
             .ok_or_else(|| RegistryError::NotFound(name.to_string()))?;
         Ok(())
     }
+
+    /// P12-5: 按 author 搜索
+    pub fn search_by_author(&self, author: &str) -> Vec<&PluginManifest> {
+        self.list()
+            .into_iter()
+            .filter(|m| m.author == author)
+            .collect()
+    }
+
+    /// P12-5: 按 name 模糊搜索 (case-insensitive substring)
+    pub fn search_by_name(&self, query: &str) -> Vec<&PluginManifest> {
+        let q = query.to_lowercase();
+        self.list()
+            .into_iter()
+            .filter(|m| m.name.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    /// P12-5: 列出所有 author (去重)
+    pub fn list_authors(&self) -> Vec<String> {
+        let mut authors: Vec<String> = self
+            .plugins
+            .values()
+            .filter_map(|v| v.last())
+            .map(|m| m.author.clone())
+            .collect();
+        authors.sort();
+        authors.dedup();
+        authors
+    }
+
+    /// P12-5: 列出所有 tag (去重, 跨所有 plugin)
+    pub fn list_all_tags(&self) -> Vec<String> {
+        let mut tags: Vec<String> = self
+            .plugins
+            .values()
+            .filter_map(|v| v.last())
+            .flat_map(|m| m.tags.iter().cloned())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        tags
+    }
+
+    /// P12-5: 导出 registry 到 JSON file (供业务方发布到 GitHub Pages 静态站)
+    pub fn export(&self, path: impl AsRef<std::path::Path>) -> Result<()> {
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// P12-5: 合并另一个 registry (业务方从多个 source 合并)
+    pub fn merge(&mut self, other: Registry) -> Result<()> {
+        for (name, manifests) in other.plugins {
+            for m in manifests {
+                // 跳过已存在的同 version
+                let existing_versions: Vec<_> = self
+                    .plugins
+                    .get(&name)
+                    .map(|v| v.iter().map(|x| x.version.clone()).collect())
+                    .unwrap_or_default();
+                if existing_versions.contains(&m.version) {
+                    continue;
+                }
+                self.publish(m)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// P12-5: 公开 manifest schema 文档 (返回 markdown 字符串, 业务方塞进 docs)
+    pub fn manifest_schema_doc() -> &'static str {
+        include_str!("../docs/manifest-schema.md")
+    }
 }
 
 #[cfg(test)]
@@ -508,5 +582,136 @@ mod tests {
         let json = serde_json::to_string_pretty(&m).unwrap();
         let parsed: PluginManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, m);
+    }
+
+    // === P12-5 Registry v2 tests ===
+
+    #[test]
+    fn search_by_author_returns_matches() {
+        let mut reg = Registry::new();
+        let mut m1 = sample_manifest("alpha", "0.1.0");
+        m1.author = "alice".to_string();
+        let mut m2 = sample_manifest("beta", "0.1.0");
+        m2.author = "bob".to_string();
+        let mut m3 = sample_manifest("gamma", "0.1.0");
+        m3.author = "alice".to_string();
+        reg.publish(m1).unwrap();
+        reg.publish(m2).unwrap();
+        reg.publish(m3).unwrap();
+
+        let alice = reg.search_by_author("alice");
+        assert_eq!(alice.len(), 2);
+        let names: Vec<&str> = alice.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"gamma"));
+
+        let bob = reg.search_by_author("bob");
+        assert_eq!(bob.len(), 1);
+        assert_eq!(bob[0].name, "beta");
+
+        let unknown = reg.search_by_author("nobody");
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn search_by_name_substring_case_insensitive() {
+        let mut reg = Registry::new();
+        reg.publish(sample_manifest("awesome-tool", "0.1.0")).unwrap();
+        reg.publish(sample_manifest("my-thing", "0.1.0")).unwrap();
+        reg.publish(sample_manifest("AwesomeOther", "0.1.0")).unwrap();
+
+        // 业务方搜 "awesome" 应匹配 awesome-tool + AwesomeOther
+        let awesome = reg.search_by_name("awesome");
+        assert_eq!(awesome.len(), 2);
+
+        // 业务方搜 "AWESOME" 大小写不敏感
+        let awesome_upper = reg.search_by_name("AWESOME");
+        assert_eq!(awesome_upper.len(), 2);
+
+        // 业务方搜 "thing" 只 my-thing
+        let thing = reg.search_by_name("thing");
+        assert_eq!(thing.len(), 1);
+
+        // 不匹配
+        let empty = reg.search_by_name("xyz");
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn list_authors_dedup_sorted() {
+        let mut reg = Registry::new();
+        let mut m1 = sample_manifest("a", "0.1.0");
+        m1.author = "bob".to_string();
+        let mut m2 = sample_manifest("b", "0.1.0");
+        m2.author = "alice".to_string();
+        let mut m3 = sample_manifest("c", "0.1.0");
+        m3.author = "bob".to_string();
+        reg.publish(m1).unwrap();
+        reg.publish(m2).unwrap();
+        reg.publish(m3).unwrap();
+
+        let authors = reg.list_authors();
+        assert_eq!(authors, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn list_all_tags_dedup_sorted() {
+        let mut reg = Registry::new();
+        let mut m1 = sample_manifest("a", "0.1.0");
+        m1.tags = vec!["utility".to_string(), "fs".to_string()];
+        let mut m2 = sample_manifest("b", "0.1.0");
+        m2.tags = vec!["utility".to_string(), "vision".to_string()];
+        let mut m3 = sample_manifest("c", "0.1.0");
+        m3.tags = vec!["fs".to_string()];
+        reg.publish(m1).unwrap();
+        reg.publish(m2).unwrap();
+        reg.publish(m3).unwrap();
+
+        let tags = reg.list_all_tags();
+        assert_eq!(tags, vec!["fs", "utility", "vision"]);
+    }
+
+    #[test]
+    fn export_to_file_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("export.json");
+
+        let mut reg = Registry::new();
+        reg.publish(sample_manifest("alpha", "0.1.0")).unwrap();
+        reg.publish(sample_manifest("beta", "0.5.0")).unwrap();
+        reg.export(&path).unwrap();
+
+        let loaded = Registry::open(&path).unwrap();
+        assert_eq!(loaded.count(), 2);
+        assert_eq!(loaded.get("alpha").unwrap().version.to_string(), "0.1.0");
+        assert_eq!(loaded.get("beta").unwrap().version.to_string(), "0.5.0");
+    }
+
+    #[test]
+    fn merge_two_registries_combines_unique_versions() {
+        let mut reg_a = Registry::new();
+        reg_a.publish(sample_manifest("alpha", "0.1.0")).unwrap();
+        reg_a.publish(sample_manifest("alpha", "0.2.0")).unwrap();
+
+        let mut reg_b = Registry::new();
+        reg_b.publish(sample_manifest("alpha", "0.2.0")).unwrap(); // 重复
+        reg_b.publish(sample_manifest("alpha", "0.3.0")).unwrap(); // 新
+        reg_b.publish(sample_manifest("beta", "0.1.0")).unwrap(); // 新
+
+        reg_a.merge(reg_b).unwrap();
+        assert_eq!(reg_a.count(), 2); // alpha + beta
+        assert_eq!(reg_a.version_count(), 4); // 0.1.0, 0.2.0, 0.3.0 (alpha) + 0.1.0 (beta)
+        assert_eq!(reg_a.get("alpha").unwrap().version.to_string(), "0.3.0");
+    }
+
+    #[test]
+    fn manifest_schema_doc_loads() {
+        // 业务方 fetch manifest schema 文档 (v2: 跟 dsh docs 对齐)
+        let doc = Registry::manifest_schema_doc();
+        assert!(!doc.is_empty());
+        assert!(doc.contains("Plugin Manifest Schema"));
+        assert!(doc.contains("Local"));
+        assert!(doc.contains("Git"));
+        assert!(doc.contains("Http"));
     }
 }
