@@ -1,0 +1,86 @@
+# P12-3 v2 静态站配置 (mkdocs)
+#
+# 业务方跑 `pip install mkdocs mkdocs-material` 后:
+#   cd docs && mkdocs serve     # 本地预览 (http://localhost:8000)
+#   cd docs && mkdocs gh-deploy # 部署到 GitHub Pages
+#
+# 业务方禁用: `mkdocs build --strict` 会 fail, 业务方先 `mkdocs build` 看 warnings.
+
+site_name: ma-harness.rs
+site_description: "Rust 重写的 AI agent orchestrator (跟 dsh 对齐)"
+site_author: "ma-harness contributors"
+
+repo_url: "https://gitee.com/yifenma/ma-harness.rs"
+repo_name: "yifenma/ma-harness.rs"
+
+docs_dir: "."
+
+nav:
+  - 首页: README.md
+  - 业务方 (User):
+      - Python SDK: ../crates/mah-py/README.md
+      - ACP 互通: acp-design.md
+      - Plugin Registry: ../crates/ma-harness-registry/README.md
+      - Bundle 概念: ../crates/ma-harness-bundle/README.md
+      - Artifact Viewer: ../crates/ma-harness-artifact/README.md
+  - 架构 (Architecture):
+      - 架构总览: ma-harness-arch-map.md
+      - 技术栈: tech-stack.md
+      - Macro 设计: macro-design.md
+      - Plugin Schema: plugin-schema-v1.md
+  - Conformance (跑分):
+      - Conformance 设计: conformance-design.md
+      - P11-2 dsh 真实 snapshot 跑分: dsh-benchmark-report.md
+      - P11 baseline 报告: p11-baseline-report.md
+      - P11 全收官报告: p11-final-report.md
+      - week 11 conformance 报告: conformance-report-week11.md
+      - week 11 benchmark 报告: benchmark-report-week11.md
+      - Benchmark 设计: benchmark-design.md
+  - Roadmap (路线):
+      - Phase 7-10: roadmap-phase-7.md
+      - Phase 11: roadmap-phase-11.md
+  - 实验 (Experiments):
+      - PyO3 评估: pyo3-evaluation.md
+      - Code Mode 延后: code-mode-deferred.md
+  - 决策 (Decisions):
+      - 决策日志: decision-log.md
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到暗色
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到亮色
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+    - content.code.annotate
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search

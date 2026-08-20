@@ -1,0 +1,118 @@
+# ma-harness.rs 文档索引 (P12-3 文档站 v1)
+
+> **入口**: 本 README 是 ma-harness.rs 文档总索引, 按主题分块.
+> **P12-3 v1**: Markdown 文档已经齐全, 本 README 提供"按角色 / 按主题"两个维度的导航.
+> **v2**: 接 mdbook / mkdocs 静态站 (业务方驱动)
+
+---
+
+## 按角色 (Reader's Path)
+
+### 业务方 (用 ma-harness 跑 agent)
+
+- [快速开始](../crates/mah-py/README.md) — Python SDK `mah-py`
+- [快速开始 (CLI)](../crates/ma-harness-cli/) — `mah` 命令行
+- [ACP 互通 (跟 dsh)](acp-design.md) — `mah acp serve` 跟 dsh 互通
+- [Plugin Registry](../crates/ma-harness-registry/) — 业务方 publish / install 第三方 plugin
+- [Bundle 概念](../crates/ma-harness-bundle/) — 业务方一键装多个 plugin
+- [Artifact Viewer](../crates/ma-harness-artifact/) — 业务方 agent 产物识别 / 渲染
+- [Vision tool](../crates/ma-harness-model/src/vision_tool.rs) — `describe_image` 多模态
+- [决策日志](decision-log.md) — 业务方查"为什么这么设计"
+
+### 框架开发者 (改 ma-harness 内部)
+
+- [架构总览](ma-harness-arch-map.md) — 14 个 crate 关系
+- [技术栈](tech-stack.md) — 框架依赖 / 工具链
+- [conformance 设计](conformance-design.md) — 业务方写 fixture, 框架跑
+- [Plugin Schema](../crates/ma-harness-conformance/src/dsh_format.rs) — dsh 风格 fixture
+- [ma-py SDK 设计](../crates/mah-py/) — 业务方 Python 集成
+- [决策日志](decision-log.md) — 历次 design 决策
+
+### 性能 / 优化 (跑 dsh Terminal Bench 业务方)
+
+- [P11-2 dsh 真实 snapshot 跑分](dsh-benchmark-report.md) — 9/9 = 100% 等价
+- [P11 路线图](roadmap-phase-11.md) — 后续 9 任务 (P11-3 到 P11-10)
+- [P11 全收官报告](p11-final-report.md) — P11 收官 + 跟 dsh 对照
+- [benchmark 设计](benchmark-design.md) — bench 体系
+- [week 11 benchmark 报告](benchmark-report-week11.md) — perf baseline
+- [week 11 conformance 报告](conformance-report-week11.md) — conformance baseline
+
+### 历史 / 决策追溯
+
+- [决策日志](decision-log.md) — § 1-36 历次 design 决策
+- [P11 baseline 报告](p11-baseline-report.md) — dsh_synthetic 28.6% → 100%
+- [P11 全收官报告](p11-final-report.md) — P11 收官
+- [Roadmap Phase 7](roadmap-phase-7.md) — Phase 7-10 路线
+- [Roadmap Phase 11](roadmap-phase-11.md) — P11 路线
+
+---
+
+## 按主题 (Topic Index)
+
+### 架构 / 设计
+
+- [架构总览](ma-harness-arch-map.md)
+- [技术栈](tech-stack.md)
+- [Macro 设计](macro-design.md) — `#[derive(Context)]` 等
+- [Plugin Schema v1](plugin-schema-v1.md) — Plugin 协议
+
+### Conformance / 跑分
+
+- [Conformance 设计](conformance-design.md)
+- [P11-2 dsh 真实 snapshot 跑分](dsh-benchmark-report.md)
+- [P11 baseline 报告](p11-baseline-report.md)
+- [P11 全收官报告](p11-final-report.md)
+- [week 11 conformance 报告](conformance-report-week11.md)
+- [week 11 benchmark 报告](benchmark-report-week11.md)
+- [Benchmark 设计](benchmark-design.md)
+
+### Roadmap / 路线
+
+- [Roadmap Phase 7](roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
+- [Roadmap Phase 11](roadmap-phase-11.md) — P11 (跟 dsh 对齐)
+- [P11 baseline 报告](p11-baseline-report.md)
+- [P11 全收官报告](p11-final-report.md)
+
+### 实验 / 评估
+
+- [PyO3 评估](pyo3-evaluation.md) — Python binding 选型
+- [Code Mode deferred](code-mode-deferred.md) — wasm 模式延后决策
+
+### Crate 内部文档 (P11 收官)
+
+- [mah-py Python SDK](../crates/mah-py/README.md) — 16 tests + 5 examples
+- [ma-harness-registry](../crates/ma-harness-registry/) — Plugin Registry 18 tests
+- [ma-harness-bundle](../crates/ma-harness-bundle/) — Bundle 13 tests
+- [ma-harness-artifact](../crates/ma-harness-artifact/) — Vibe Coding 25 tests
+- [ACP (CLI 模块)](../crates/ma-harness-cli/src/acp.rs) — JSON-RPC 2.0 server
+
+### 决策
+
+- [决策日志](decision-log.md) — § 1-36 完整记录
+
+---
+
+## 文档完整性 (P12-3 v1 收官时)
+
+| 类别 | 数量 | 状态 |
+|---|---|---|
+| 架构 / 设计 | 4 | ✅ |
+| Conformance / 跑分 | 7 | ✅ |
+| Roadmap / 路线 | 4 | ✅ |
+| 实验 / 评估 | 2 | ✅ |
+| Crate 内部 README | 4 | ✅ |
+| 决策日志 | 1 (76 KB, 36 章节) | ✅ |
+| **总计** | **22 个 markdown** | **✅** |
+
+## 业务方读法
+
+1. **新业务方**: [Python SDK README](../crates/mah-py/README.md) → 5 examples → [ACP 设计](acp-design.md)
+2. **改 ma-harness 内部**: [架构总览](ma-harness-arch-map.md) → [conformance 设计](conformance-design.md) → [决策日志](decision-log.md)
+3. **跑 Terminal Bench**: [dsh-benchmark-report](dsh-benchmark-report.md) → [P11 全收官报告](p11-final-report.md)
+
+## 给后来人
+
+- 改 ma-harness 时, 跑 `cargo test --package ma-harness-*` 全过 (300+ tests)
+- 加新 doc 章节时, 在本 README 加 link
+- 决策日志 (decision-log.md) 是 single source of truth, 改设计前查一下
+- 业务方反馈 / issue / PR, 优先更新本 README
