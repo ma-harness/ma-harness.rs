@@ -99,17 +99,17 @@ jobs:
       - name: Build mah CLI
         run: cargo build -p ma-harness-cli
 
-      - name: Smoke test: mah version
+      - name: "Smoke test: mah version"
         run: ./target/debug/mah version
 
-      - name: Smoke test: mah plugins (inventory)
+      - name: "Smoke test: mah plugins (inventory)"
         run: ./target/debug/mah plugins
 
-      - name: Smoke test: mah code run (wasm sandbox)
+      - name: "Smoke test: mah code run (wasm sandbox)"
         # 跑 T3.1 demo wat, 验 fuel + memory limiter 不误杀简单代码
         run: ./target/debug/mah code run examples/hello.wat
 
-      - name: Smoke test: mah load-plugin hello
+      - name: "Smoke test: mah load-plugin hello"
         run: ./target/debug/mah load-plugin hello
 
       - name: OpenAPI drift check
@@ -151,7 +151,7 @@ jobs:
       - name: Build mah CLI
         run: cargo build -p ma-harness-cli
 
-      - name: Smoke test: mah code run (wasm sandbox on Windows)
+      - name: "Smoke test: mah code run (wasm sandbox on Windows)"
         run: .\target\debug\mah.exe code run examples/hello.wat
 
   # ============================================================================
