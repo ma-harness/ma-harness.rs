@@ -2,6 +2,12 @@
 
 > **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Most users should depend on `ma-harness-seam` instead, which is the public-facing facade. `ma-harness-cordis` exposes the raw DI container, typed key storage, and plugin/listener/disposable framework used internally by ma-harness.
 
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+
+> **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Most users should depend on `ma-harness-seam` instead, which is the public-facing facade. `ma-harness-cordis` exposes the raw DI container, typed key storage, and plugin/listener/disposable framework used internally by ma-harness.
+
 Cordis-style dependency injection container for the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) AI agent orchestrator.
 
 ## Features

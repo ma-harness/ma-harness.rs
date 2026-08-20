@@ -3,6 +3,12 @@
 > **状态**: 研究性质, 评估是否值得在现有 gRPC binding 之上, 加 pyo3 native binding
 > **结论**: 暂缓. 详见 § 4 决策矩阵
 
+
+
+[English](docs/pyo3-evaluation.md) — coming soon. 中文为主.
+
+[English](docs/pyo3-evaluation.md) — coming soon. 中文为主.
+
 ## 1. 背景
 
 ### 1.1 当前 Python 业务方接入路径

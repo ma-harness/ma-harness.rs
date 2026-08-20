@@ -1719,3 +1719,12 @@ $ python -c "from mah_py import Mah, __version__; m = Mah(); r = m.run('echo hel
 ### commit (本决策)
 
 - (本 commit 收尾) 功能完善可用 (CI exit code + 死代码清理 + .gitignore 收尾)
+
+
+### 后续 (本决策)
+
+- 后续: P13 收尾 (sqlite race, mah-py pypi.org, crates.io 0.1.0, dsh 迁移工具, GH Pages deploy, 跨平台 binary, weekly/ + 报告翻译等) 收官写 § 41
+
+### commit (本决策)
+
+- (本 commit 收尾) 文档双语规范整理 (i18n 收官, Day 101+1)

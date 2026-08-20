@@ -1,4 +1,4 @@
-﻿# Week 12 周报 — 2026-08-18 (Day 39 ~ Day 43)
+# Week 12 周报 — 2026-08-18 (Day 39 ~ Day 43)
 
 > **12 周 PoC 收官周**。
 > 累计 44 commit, 16 crate workspace, 估计 167+ 个测试, 18 bench。
@@ -6,6 +6,9 @@
 > **12 周 PoC 整体进度**: 92% (数据验证 8% 待网络)
 
 ---
+
+
+[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
 
 ## TL;DR
 
@@ -51,6 +54,15 @@ Week 12 commit:
 **`mah conformance` 用法**:
 ```bash
 # ma-harness 风格 fixture
+
+
+
+[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
+
+[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
+
+[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
+
 mah conformance --fixtures fixtures/smoke.jsonl --output target/
 
 # dsh 风格 fixture (走 dsh_format 转换层)
@@ -312,9 +324,12 @@ mah conformance --fixtures dsh/tests/fixtures/ --dsh --output target/
 
 | crate | fail 数 | 类型 |
 |---|---|---|
-| ma_harness_conformance | 1 | eport_renders_markdown — markdown 输出格式对不上 |
-| ma_harness_cordis | 8 | ork_inherits_services / ork_shares_service_arc / extend_from_* / inject_* / eentrant_emit_panics (panic msg 不匹配) — fork / extend_from 实际没继承 service, reentrant 检查 emit msg 跟测试期望的"reentrant emit" 字样不匹配 |
-| ma_harness_core | 2 | ppend_panics_on_invalid_event (model_visible 必填 payload_json 验证逻辑) / un_with_error_emits_model_error (事件数 left=3 right=2) |
+| ma_harness_conformance | 1 | 
+eport_renders_markdown — markdown 输出格式对不上 |
+| ma_harness_cordis | 8 | ork_inherits_services / ork_shares_service_arc / extend_from_* / inject_* / 
+eentrant_emit_panics (panic msg 不匹配) — fork / extend_from 实际没继承 service, reentrant 检查 emit msg 跟测试期望的"reentrant emit" 字样不匹配 |
+| ma_harness_core | 2 | ppend_panics_on_invalid_event (model_visible 必填 payload_json 验证逻辑) / 
+un_with_error_emits_model_error (事件数 left=3 right=2) |
 | ma_harness_plugin_subagent | 1 | spawn_subagent_succeeds (current_depth + 1 时 spawn 应该成功, 实际 MaxDepthExceeded(3)) |
 
 ### 累计 commit (更新)

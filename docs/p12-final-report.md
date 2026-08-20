@@ -4,6 +4,12 @@
 > **方法**: 逐任务实现 + 测试 + commit, 累计 8 commits
 > **范围**: P12-1/2/3/5/6/7/8/9 全部 ✅
 
+
+
+[English](docs/p12-final-report.md) — coming soon. 中文为主.
+
+[English](docs/p12-final-report.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

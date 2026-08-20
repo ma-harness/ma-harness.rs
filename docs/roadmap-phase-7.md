@@ -4,6 +4,12 @@
 > **周期**: 6-8 周 (专注 Phase 7, 不切题)
 > **决策日期**: 2026-08-19 (用户 review 通过, 4 个 P0)
 
+
+
+[English](docs/roadmap-phase-7.md) — coming soon. 中文为主.
+
+[English](docs/roadmap-phase-7.md) — coming soon. 中文为主.
+
 ---
 
 ## 0. 背景与动机

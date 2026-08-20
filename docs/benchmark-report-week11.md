@@ -3,6 +3,12 @@
 > **状态**: 模板, 待网络通后跑 `cargo bench --workspace` 填充.
 > 关联: [`benchmark-design.md`](./benchmark-design.md) § 6 跑法.
 
+
+
+[English](docs/benchmark-report-week11.md) — coming soon. 中文为主.
+
+[English](docs/benchmark-report-week11.md) — coming soon. 中文为主.
+
 ---
 
 ## 1. 执行摘要 (待填)

@@ -2,6 +2,12 @@
 
 > Run LLM-generated WebAssembly (WAT/WASM) in a 4-layer sandbox.
 
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+
+> Run LLM-generated WebAssembly (WAT/WASM) in a 4-layer sandbox.
+
 Part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) AI agent orchestrator. Code Mode lets a model generate code at runtime, which is then compiled and executed in a `wasmtime` sandbox.
 
 ## Features

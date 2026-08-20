@@ -1,36 +1,42 @@
-# plugin.schema.json v1 — 设计
+# plugin.schema.json v1 — Design
 
-> 目的: `plugin.toml` 是**人手写**的插件清单,JSON Schema 是**机读校验**,两者必须配套。
-> 本设计落到 `crates/ma_harness_plugin_schema/assets/plugin.schema.json`(Week 1 末生成),
-> 现在先 spec 在 `docs/`。
+[English](plugin-schema-v1.md) | [简体中文](plugin-schema-v1.zh-CN.md)
+
+> **Purpose**: `plugin.toml` is the **human-written** plugin manifest;
+> the JSON Schema is the **machine-readable validator**; the two must
+> ship together.
+> This design lands at
+> `crates/ma_harness_plugin_schema/assets/plugin.schema.json`
+> (generated end of Week 1); for now it lives in `docs/`.
 >
-> 范围:**仅元数据**。运行时配置(模型 adapter endpoint / sandbox 白名单)走另一份
-> `plugin.config.toml` 或环境变量,见 §11。
+> **Scope: metadata only**. Runtime config (model adapter endpoint /
+> sandbox whitelist) goes into a separate `plugin.config.toml` or
+> environment variables, see §11.
 
 ---
 
-## 1. 设计原则
+## 1. Design principles
 
-| 原则 | 说明 |
-|---|---|
-| **人手写优先** | `plugin.toml` 是开发者写的,**不能要求填复杂结构**。 |
-| **YAML 1.2** | 不是 TOML 0.5(我们用 YAML,因为 dsh 用 YAML,生态兼容)。 |
-| **机读校验** | mah 启动时 load `plugin.schema.json` 严格校验,失败 → 拒绝加载 + 报错。 |
-| **字段最少** | 必须字段 ≤ 5 个,可选字段按需加。**能少一个就少一个**。 |
-| **stable key** | 字段名 snake_case 且一旦发布 v1 锁住,加新字段走 `v1_1` 不破坏兼容。 |
-| **跨语言友好** | JSON Schema 格式,任何语言都能读(不只是 Rust)。 |
-| **未来能 host 类型信息** | Phase 2 插件用 wasmtime / deno_core 时,本 schema 加 `runtime` 字段即可扩展。 |
+| Principle | Description |
+|-----------|-------------|
+| **Human-written first** | `plugin.toml` is written by developers; **we must not require complex structures**. |
+| **YAML 1.2** | Not TOML 0.5 (we use YAML because dsh uses YAML; ecosystem compatible). |
+| **Machine-validated** | mah loads `plugin.schema.json` at startup and validates strictly; on failure → refuse to load + report error. |
+| **Minimum fields** | Required fields ≤ 5; optional fields added on demand. **One fewer is better**. |
+| **stable key** | Field names are snake_case and locked once v1 is released; new fields go through `v1_1` to avoid breaking compatibility. |
+| **Cross-language friendly** | JSON Schema format; any language can read (not just Rust). |
+| **Future-proof for hosted types** | When Phase 2 plugins use wasmtime / deno_core, this schema can be extended by adding a `runtime` field. |
 
 ---
 
-## 2. plugin.toml 例子 (用户视角)
+## 2. plugin.toml example (user view)
 
 ```yaml
 # plugins/ma_harness_plugin_bash/plugin.toml
 schema_version: 1
 name: bash
 version: 0.1.0
-description: 执行 shell 命令
+description: Execute shell commands
 authors:
   - yifenma <user@example.com>
 license: MIT
@@ -51,89 +57,93 @@ sandbox:
     egress: false
 ```
 
-8 个 section,**5 个必填 + 3 个选填**。
+8 sections, **5 required + 3 optional**.
 
 ---
 
-## 3. 字段定义
+## 3. Field definitions
 
-### 3.1 必填字段 (5)
+### 3.1 Required fields (5)
 
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `schema_version` | integer | 必须是 1 | 锁版本,未来 v2 走 `v2` 字段 |
-| `name` | string | snake_case, ≤ 64 字符, 全局唯一 | 插件 ID,跟 crate 名一致 |
-| `version` | string | semver 2.0 | 0.1.0, 1.2.3-alpha.1 |
-| `entry` | string | 格式 `path::Type` | 入口 struct 路径,例如 `lib::BashPlugin` |
-| `seam` | object | 见 §4 | 插件声明的能力 |
+| Field             | Type    | Constraint                                  | Description                                  |
+|-------------------|---------|---------------------------------------------|----------------------------------------------|
+| `schema_version`  | integer | must be 1                                   | Version lock; future v2 goes through `v2`    |
+| `name`            | string  | snake_case, ≤ 64 chars, globally unique     | Plugin ID, matches crate name                |
+| `version`         | string  | semver 2.0                                  | 0.1.0, 1.2.3-alpha.1                         |
+| `entry`           | string  | format `path::Type`                         | Entry struct path, e.g. `lib::BashPlugin`    |
+| `seam`            | object  | see §4                                      | Plugin's declared capabilities               |
 
-### 3.2 选填字段 (按需)
+### 3.2 Optional fields (as needed)
 
-| 字段 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `description` | string | `""` | 一句话说明,会显示在 `mah plugin list` |
-| `authors` | array of string | `[]` | `"name <email>"` 格式,或仅 name |
-| `license` | string | `"MIT"` | SPDX identifier |
-| `repository` | string | - | URL |
-| `keywords` | array of string | `[]` | 检索用 |
-| `sandbox` | object | 见 §5 | sandbox 需求声明(mah 启动时按需配置 landlock) |
-| `dependencies` | array of object | `[]` | 其他插件依赖,见 §6 |
-| `metadata` | object | `{}` | 用户自定义,机读,`mah plugin info` 会原样打印 |
+| Field          | Type            | Default     | Description |
+|----------------|-----------------|-------------|-------------|
+| `description`  | string          | `""`        | One-sentence description; shown in `mah plugin list` |
+| `authors`      | array of string | `[]`        | `"name <email>"` format, or just name |
+| `license`      | string          | `"MIT"`     | SPDX identifier |
+| `repository`   | string          | -           | URL |
+| `keywords`     | array of string | `[]`        | For search |
+| `sandbox`      | object          | see §5     | Sandbox requirements (mah configures landlock on demand) |
+| `dependencies` | array of object | `[]`        | Other plugin dependencies, see §6 |
+| `metadata`     | object          | `{}`        | User-defined, machine-readable, `mah plugin info` will print as-is |
 
 ---
 
-## 4. `seam` 字段结构
+## 4. `seam` field structure
 
 ```yaml
 seam:
-  tools: [string]      # 函数名,对应 #[dsh_tool] 注册的工具
-  listeners: [string]  # 事件名,对应 #[dsh_listener::on(Event::X)]
-  services: [string]   # struct 名,对应 #[dsh_service] 的类型
-  commands: [string]   # 命令名,对应 #[dsh_command(name = "...")]
-  handlers: [string]   # adapter 名,对应 #[dsh_handler(adapter = "...")]
+  tools: [string]      # function name, registers a tool via #[dsh_tool]
+  listeners: [string]  # event name, registers via #[dsh_listener::on(Event::X)]
+  services: [string]   # struct name, registers via #[dsh_service]
+  commands: [string]   # command name, registers via #[dsh_command(name = "...")]
+  handlers: [string]   # adapter name, registers via #[dsh_handler(adapter = "...")]
 ```
 
-| 子字段 | 类型 | 说明 |
-|---|---|---|
-| `tools` | array of string | 函数名(不带路径),mah 启动时反射查 crate 注册表 |
-| `listeners` | array of string | 事件 variant 字符串,例如 `SessionStart` |
-| `services` | array of string | struct 名 |
-| `commands` | array of string | 命令名(就是 `name = "..."` 的引号内容) |
-| `handlers` | array of string | adapter ID |
+| Sub-field    | Type            | Description |
+|--------------|-----------------|-------------|
+| `tools`      | array of string | Function name (no path), mah looks up the registry at startup |
+| `listeners`  | array of string | Event variant string, e.g. `SessionStart` |
+| `services`   | array of string | struct name |
+| `commands`   | array of string | Command name (the value of `name = "..."`) |
+| `handlers`   | array of string | adapter ID |
 
-**全部默认 `[]`,可以全部空(插件只是声明自己存在,不暴露能力)。**
+**All default to `[]`; can all be empty (the plugin just declares it exists
+without exposing capabilities).**
 
 ---
 
-## 5. `sandbox` 字段结构 (Phase 1 选填)
+## 5. `sandbox` field structure (Phase 1 optional)
 
-Phase 1 sandbox 只 Linux (landlock)。其他平台 schema 接受但 mah 启动时 warn-and-skip。
+Phase 1 sandbox is Linux only (landlock). Other platforms accept the schema
+but mah will warn-and-skip at startup.
 
 ```yaml
 sandbox:
   fs:
-    read: [绝对路径]      # 允许读的目录白名单
-    write: [绝对路径]     # 允许写的目录白名单 (read 路径自动 implicit read)
+    read: [absolute paths]      # whitelist of readable directories
+    write: [absolute paths]     # whitelist of writable directories (read paths are implicit-readable)
   net:
-    egress: false         # 是否允许出站网络
+    egress: false               # whether outbound network is allowed
   exec:
-    enabled: true         # 是否允许 fork+exec (bash 插件要 true, fs 插件 false)
-    max_runtime_ms: 30000 # 单次 fork+exec 最长跑多久
+    enabled: true               # whether fork+exec is allowed (bash plugin needs true, fs plugin false)
+    max_runtime_ms: 30000       # max runtime per fork+exec
 ```
 
-| 子字段 | 必填? | 默认 |
-|---|---|---|
-| `sandbox` | 否 | `{}` (=全拒绝,最严) |
-| `sandbox.fs` | 否 | `{read: [], write: []}` |
-| `sandbox.net` | 否 | `{egress: false}` |
-| `sandbox.exec` | 否 | `{enabled: false, max_runtime_ms: 30000}` |
+| Sub-field         | Required? | Default |
+|-------------------|-----------|---------|
+| `sandbox`         | no        | `{}` (= all denied, strictest) |
+| `sandbox.fs`      | no        | `{read: [], write: []}` |
+| `sandbox.net`     | no        | `{egress: false}` |
+| `sandbox.exec`    | no        | `{enabled: false, max_runtime_ms: 30000}` |
 
-> **设计哲学**: sandbox 默认**全拒绝** (deny by default),要开权限必须显式声明。
-> 跟 dsh 的 "fail-closed" 一致,见 `docs/ma-harness-arch-map.md` §4。
+> **Design philosophy**: sandbox defaults to **all-deny** (deny by default);
+> permissions must be explicitly declared to be granted.
+> Consistent with dsh's "fail-closed", see
+> `docs/ma-harness-arch-map.md` §4.
 
 ---
 
-## 6. `dependencies` 字段结构
+## 6. `dependencies` field structure
 
 ```yaml
 dependencies:
@@ -145,40 +155,43 @@ dependencies:
     optional: true
 ```
 
-| 子字段 | 必填? | 说明 |
-|---|---|---|
-| `name` | 是 | 依赖的插件名,跟对方 `name` 字段一致 |
-| `version` | 否 | semver range,默认 `"*"`,宽松 |
-| `optional` | 否 | 默认 `false`,true = mah 启动不强制加载 |
+| Sub-field   | Required? | Description |
+|-------------|-----------|-------------|
+| `name`      | yes       | Dependent plugin name, matches the other party's `name` field |
+| `version`   | no        | semver range, default `"*"`, lenient |
+| `optional`  | no        | Default `false`; `true` means mah doesn't force loading at startup |
 
-> **Phase 1 简化**: Phase 1 不实现依赖解析,本字段先**记录在案但 mah 启动时只 warn 不 enforce**。
-> Phase 2 加完整 cargo-style 解析器。
+> **Phase 1 simplification**: Phase 1 does not implement dependency resolution;
+> this field is **recorded but mah only warns at startup, not enforces**.
+> Phase 2 adds a full cargo-style resolver.
 
 ---
 
-## 7. `metadata` 字段结构
+## 7. `metadata` field structure
 
 ```yaml
 metadata:
-  category: dev-tool        # 自由文本, mah 不解析
+  category: dev-tool        # free-form text; mah does not parse
   icon: 🐚                  # emoji
   homepage: https://...
   custom: 
     anything: goes
 ```
 
-完全开放,机读,`mah plugin info <name>` 会原样打印。**mah 启动时不解析,只校验 JSON 合法**。
+Completely open, machine-readable; `mah plugin info <name>` prints as-is.
+**mah does not parse at startup, only validates JSON legality**.
 
 ---
 
-## 8. JSON Schema 主体 (YAML 形式的草案)
+## 8. JSON Schema body (YAML-form draft)
 
-落地成 `crates/ma_harness_plugin_schema/assets/plugin.schema.json`,下面是 schema 草案:
+Lands as `crates/ma_harness_plugin_schema/assets/plugin.schema.json`,
+draft of the schema:
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://gitee.com/yifenma/ma-harness.rs/schema/plugin.schema.json",
+  "$id": "https://github.com/ma-harness/ma-harness.rs/schema/plugin.schema.json",
   "title": "ma-harness Plugin Manifest",
   "description": "plugin.toml schema v1",
   "type": "object",
@@ -188,12 +201,12 @@ metadata:
     "schema_version": {
       "type": "integer",
       "const": 1,
-      "description": "schema 主版本号,锁住兼容性"
+      "description": "Schema major version; locks compatibility"
     },
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,63}$",
-      "description": "插件 ID,snake_case,全仓唯一"
+      "description": "Plugin ID, snake_case, globally unique"
     },
     "version": {
       "type": "string",
@@ -231,7 +244,7 @@ metadata:
     "entry": {
       "type": "string",
       "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*::[a-zA-Z_][a-zA-Z0-9_]*$",
-      "description": "path::Type 格式,例如 lib::BashPlugin"
+      "description": "path::Type format, e.g. lib::BashPlugin"
     },
     "seam": {
       "type": "object",
@@ -297,85 +310,88 @@ metadata:
 
 ---
 
-## 9. 校验流程 (mah 启动时)
+## 9. Validation flow (at mah startup)
 
 ```
 mah start
   ↓
-加载 ~/.ma-harness/plugins/*/plugin.toml
+Load ~/.ma-harness/plugins/*/plugin.toml
   ↓
-对每个 plugin.toml:
-  1. 解析 YAML → serde_yaml::Value
-  2. 跟 plugin.schema.json 校验 (jsonschema crate)
-  3. 失败 → panic with 友好错误 ("plugin 'bash' schema 校验失败: field 'name' 不匹配 pattern")
-  4. 校验通过 → 检查 name 唯一 (跨插件不重名)
-  5. 检查 entry 路径存在 (通过 proc-macro 注册表查)
-  6. 检查 seam 字段对应的 #[dsh_*] 注册项在编译期已注册 (这一步 Week 2-3 做)
+For each plugin.toml:
+  1. Parse YAML → serde_yaml::Value
+  2. Validate against plugin.schema.json (jsonschema crate)
+  3. Failure → panic with friendly error ("plugin 'bash' schema validation failed: field 'name' does not match pattern")
+  4. Validation passes → check name uniqueness (no duplicates across plugins)
+  5. Check entry path exists (via proc-macro registry)
+  6. Check that seam fields correspond to #[dsh_*] registered items at compile time (this is Week 2-3 work)
   ↓
-通过 → ctx.plugin(Plugin::install(ctx))
+Pass → ctx.plugin(Plugin::install(ctx))
 ```
 
 ---
 
-## 10. 错误信息友好度
+## 10. Error message quality
 
-校验失败要给出**指向行号的 YAML 路径**,不是只说"校验失败":
+Validation failures must give a **line-anchored YAML path**, not just
+"validation failed":
 
 ```
-error: plugin 'foo' 校验失败
+error: plugin 'foo' validation failed
   --> plugins/foo/plugin.toml:12:5
    |
 12 |     name: "MyPlugin"
-   |     ^^^^^^^^^^^^^^^^^ 必须匹配 pattern ^[a-z][a-z0-9_]{0,63}$ (snake_case)
+   |     ^^^^^^^^^^^^^^^^^ Must match pattern ^[a-z][a-z0-9_]{0,63}$ (snake_case)
    |
-help: 改成 snake_case, 例如 'my_plugin'
+help: Use snake_case, e.g. 'my_plugin'
 ```
 
-实现:用 `jsonschema` crate (Rust 0.17) 拿 `ValidationError.instance_path` 反查 YAML 源文件。
+Implementation: use `jsonschema` crate (Rust 0.17) to get
+`ValidationError.instance_path` to look up the YAML source.
 
 ---
 
-## 11. 不在 plugin.toml 的配置 (运行时)
+## 11. Configuration not in plugin.toml (runtime)
 
-| 配置 | 落点 | 加载时机 |
-|---|---|---|
-| 模型 API key | 环境变量 `MA_HARNESS_ADAPTER_<NAME>_API_KEY` | mah 启动时 |
-| 模型 endpoint | 环境变量 `MA_HARNESS_ADAPTER_<NAME>_ENDPOINT` | mah 启动时 |
-| Sandbox 实际路径白名单 | `~/.ma-harness/sandbox.toml` (per-plugin override) | mah 启动时 |
-| 用户级默认 plugin 列表 | `~/.ma-harness/plugins.yaml` | mah 启动时 |
-| 项目级 plugin 列表 | `<cwd>/.ma-harness/plugins.yaml` (项目级覆盖) | mah 启动时 |
+| Configuration | Location | Load timing |
+|---------------|----------|-------------|
+| Model API key | env var `MA_HARNESS_ADAPTER_<NAME>_API_KEY` | mah startup |
+| Model endpoint | env var `MA_HARNESS_ADAPTER_<NAME>_ENDPOINT` | mah startup |
+| Sandbox actual path whitelist | `~/.ma-harness/sandbox.toml` (per-plugin override) | mah startup |
+| User-level default plugin list | `~/.ma-harness/plugins.yaml` | mah startup |
+| Project-level plugin list | `<cwd>/.ma-harness/plugins.yaml` (project override) | mah startup |
 
-**plugin.toml 永远不出现 secrets / endpoints / 实际路径** ——
-它跟随代码进版本,这些是部署时配置。
-
----
-
-## 12. 不做的事 (避免诱惑)
-
-| 不做 | 理由 |
-|---|---|
-| 复杂嵌套的 metadata 校验 | metadata 是开放字段,只校验合法 JSON,不校验语义 |
-| plugin.toml 跨文件引用 (`$ref`) | 单文件,简单优先 |
-| 国际化 (i18n) 字段 | 全英,描述字段也只支持英文 (国际化 Phase 3) |
-| plugin.toml 支持 TOML/JSON | 锁 YAML 1.2 一种,跟 dsh 对齐 |
-| 插件签名 (GPG) | 内部仓库,先不上,Phase 2 公开发布前加 |
-| 插件 marketplace / 远程安装 | 内部仓库,直接 `git clone` 装,Phase 2 |
+**plugin.toml never contains secrets / endpoints / actual paths** ——
+it follows the code into version control; those are deployment-time config.
 
 ---
 
-## 13. 第一个落地实例 (Week 1 末)
+## 12. Things we don't do (avoiding temptation)
 
-`crates/ma_harness_plugin_schema/assets/plugin.schema.json` 落成上面 §8 的 JSON,
-配套 6 个 first-party 插件的 `plugin.toml` 一起 commit (arch-map §6 的 6 个)。
+| Don't do                                | Reason |
+|-----------------------------------------|--------|
+| Complex nested metadata validation      | metadata is open; only validate legal JSON, not semantics |
+| plugin.toml cross-file references (`$ref`) | Single file, simple first |
+| i18n fields                             | English-only; description field is English-only (i18n in Phase 3) |
+| plugin.toml in TOML/JSON                | Lock YAML 1.2; align with dsh |
+| Plugin signing (GPG)                    | Internal repo, skip for now; add before Phase 2 public release |
+| Plugin marketplace / remote install    | Internal repo, install via `git clone`; Phase 2 |
 
-每个 plugin.toml 例子:
+---
+
+## 13. First landing instance (end of Week 1)
+
+`crates/ma_harness_plugin_schema/assets/plugin.schema.json` lands as the
+JSON in §8 above, plus `plugin.toml` for the 6 first-party plugins
+(the 6 from arch-map §6) committed together.
+
+Example plugin.toml:
 
 ```yaml
 # plugins/ma_harness_plugin_bash/plugin.toml
 schema_version: 1
 name: bash
 version: 0.1.0
-description: 执行 shell 命令 (受 sandbox 限制)
+description: Execute shell commands (sandbox-restricted)
 authors:
   - ma-harness contributors
 license: MIT
@@ -398,19 +414,21 @@ sandbox:
 schema_version: 1
 name: fs
 version: 0.1.0
-description: 文件系统读 / 写
+description: File system read / write
 entry: lib::FsPlugin
 seam:
   tools: [read_file, write_file, list_dir]
-seam_handlers: []
+  seam_handlers: []
 ```
 
-(其他 4 个类似,bash / fs / web / subagent / skill / cordis 各一份。)
+(The other 4 are similar; bash / fs / web / subagent / skill / cordis each
+have one.)
 
 ---
 
-## 14. 变更记录
+## 14. Changelog
 
-| 日期 | 变更 |
-|---|---|
-| 2026-08-18 | 初版, plugin.schema.json v1 完整设计, 含 6 个 first-party plugin.toml 草案 |
+| Date       | Change |
+|------------|--------|
+| 2026-08-18 | Initial version, plugin.schema.json v1 full design, with 6 first-party plugin.toml drafts |
+| 2026-08-20 | Updated `$id` to GitHub mirror (was Gitee). Note: P11-6 Plugin Registry adds `PluginManifest` runtime type parallel to this static schema. |

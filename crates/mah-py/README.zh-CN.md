@@ -1,16 +1,12 @@
-# mah-py — Python SDK for ma-harness.rs
-
-> **v0.1.0** — 同步版 (subprocess 调 `mah run`)
-
+# mah-py — ma-harness.rs 的 Python SDK (中文 / 简体中文)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+> **v0.1.1** — 同步版 (subprocess 调 `mah run`)
 
-> **v0.1.0** — 同步版 (subprocess 调 `mah run`)
+[ma-harness.rs](https://gitee.com/yifenma/ma-harness.rs) (Rust AI agent 编排器) 的 Python SDK. 让 Python 业务方能用 ma-harness 跑 agent, API 风格跟 dsh Python SDK (`deepseek-harness-sdk`) 对齐.
 
-Python SDK for [ma-harness.rs](https://gitee.com/yifenma/ma-harness.rs) (Rust AI agent orchestrator). 让 Python 业务方能用 ma-harness 跑 agent, 跟 dsh Python SDK (`deepseek-harness-sdk`) 对齐 API 风格.
-
-## 安装 (本地, 暂未发 PyPI)
+## 安装 (本地, 已经发到 test.pypi.org)
 
 ```bash
 cd crates/mah-py
@@ -18,6 +14,11 @@ pip install -e .
 ```
 
 需要 `mah` binary 在 PATH 或 `MAH_PATH` 环境变量指向.
+
+**或者从 test.pypi.org 装 0.1.1**:
+```bash
+pip install -i https://test.pypi.org/simple --no-deps mah-py==0.1.1
+```
 
 ## 5 行入门
 
@@ -119,7 +120,7 @@ python examples/01_hello.py
 
 | 维度 | dsh (`deepseek-harness-sdk`) | mah-py (`mah-py`) |
 |---|---|---|
-| Python 包 | `deepseek-harness-sdk` (PyPI) | `mah-py` (本地) |
+| Python 包 | `deepseek-harness-sdk` (PyPI) | `mah-py` (test.pypi.org 0.1.1) |
 | import | `from deepseek_harness import DeepSeekHarness` | `from mah_py import Mah` |
 | 协议 | JSON-RPC stdio (`dsh-jsonrpc-agent`) | subprocess `mah` CLI |
 | 同步 / 异步 | 同步 (subprocess) | 同步 (subprocess) |
@@ -134,17 +135,21 @@ cd crates/mah-py
 pytest tests/ -v
 ```
 
+16/16 pytest 全过 (含 conformance, error handling, env path resolution).
+
 ## 路线图
 
-- v0.1 (现在): subprocess `mah run` 同步
-- v0.2: `mah run-stream` 流式
-- v0.3: async / await API
-- v0.4: type stub (mypy --strict)
-- v0.5: PyPI 发布 (`pip install mah-py`)
+- v0.1.0: subprocess `mah run` 同步 ✅
+- v0.1.1: 修复 build config + test.pypi.org 发版 ✅
+- v0.2: `mah run-stream` 流式 (P13+)
+- v0.3: async / await API (P13+)
+- v0.4: type stub (mypy --strict) (P13+)
+- v0.5: pypi.org 生产发版 (等 pypi.org token)
 
 ## 仓库
 
 - 主仓库: https://gitee.com/yifenma/ma-harness.rs
+- GitHub mirror: https://github.com/ma-harness/ma-harness.rs
 - mah CLI: `crates/ma-harness-cli/`
 - 设计参考: dsh Python SDK (`deepseek-harness-sdk`)
 

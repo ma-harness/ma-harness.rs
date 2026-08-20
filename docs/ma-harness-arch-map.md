@@ -1,63 +1,69 @@
-# ma-harness.rs — 架构映射 (Arch Map)
+# ma-harness.rs — Architecture Map
 
-> 目的: 把 dsh (DeepSeek Harness) 的核心机制,映射到 ma-harness.rs 的 Rust 实现。
-> 一份"翻译表",给 Week 1-2 实现 Cordis-rs 时看,避免边写边发明。
+[English](ma-harness-arch-map.md) | [简体中文](ma-harness-arch-map.zh-CN.md)
+
+> **Purpose**: Map the core mechanisms of dsh (DeepSeek Harness) to the
+> ma-harness.rs Rust implementation. A "translation table" used when
+> implementing `cordis-rs` in Week 1-2 to avoid reinventing on the fly.
 >
-> 关键原则:
-> - **不 1:1 翻译**。Rust 生态有更地道的表达,优先用 Rust idiom。
-> - **不引入 dsh 的"包袱"**。dsh 是 Node + Cordis 生态里生长出来的,有些"是 Node 才需要"的复杂度我们直接砍。
-> - **dsh 是参照系,不是圣经**。如果 Rust 这边有更直接的表达,大胆换。
+> **Key principles**:
+> - **No 1:1 translation**. The Rust ecosystem has more idiomatic expressions;
+>   prefer Rust idioms.
+> - **No dsh "baggage"**. dsh grew up in the Node + Cordis ecosystem; some
+>   complexity is "needed only because of Node" and we cut it.
+> - **dsh is a reference, not scripture**. If Rust has a more direct expression,
+>   switch boldly.
 
 ---
 
-## 1. 全景对比
+## 1. Full-picture comparison
 
-| 维度 | dsh (TypeScript) | ma-harness.rs (Rust) | 备注 |
-|---|---|---|---|
-| 语言 | TypeScript 5.x | Rust 1.81+ (stable) | |
-| 元框架 | Cordis (Yifan Shi, npm) | `ma_harness_cordis` (自主重写) | 不依赖 cordis npm 包 |
-| 协议 | JSON-RPC + WebSocket | Protobuf over gRPC (tonic) | 单协议,控制面 + 数据面合一 |
-| 异步 | Promise / async-await | tokio 1.x | |
-| 上下文存储 | `Map<string, unknown>` (ctx) | `dashmap` / 类型化 ctx | 类型安全优先 |
-| 日志 | 内存 + flush | rusqlite append-only | 不变量: model-visible means logged |
-| 插件语言 | TypeScript | Rust + (Phase 2: wasmtime / deno_core) | Phase 1 只 Rust |
-| 插件清单 | `plugin.toml` (YAML/JSON) | `plugin.toml` (YAML, 同名同结构) | JSON Schema 校验 |
-| Sandbox | bubblewrap / Seatbelt / restricted-token | landlock 0.4 (Linux) / sandbox-exec (macOS 占位) | Windows Phase 2 |
-| 模式 | 4 个 (Standard / PTC / Minimal / Creator) | Phase 1 只 Default | PTC → Phase 2 |
-| 模型调用 | 适配器 (OpenAI / Anthropic / 内部) | 适配器 (同形态) | Protobuf schema 一致 |
-| AGENTS.md 注入 | yes | yes | 字段对齐 |
+| Dimension             | dsh (TypeScript)                                | ma-harness.rs (Rust)                                  | Notes |
+|-----------------------|--------------------------------------------------|-------------------------------------------------------|-------|
+| Language              | TypeScript 5.x                                  | Rust 1.85+ (edition 2024, MSRV 1.85)                  | |
+| Meta-framework        | Cordis (Yifan Shi, npm)                          | `ma_harness_cordis` (rewritten from scratch)          | Does not depend on the cordis npm package |
+| Protocol              | JSON-RPC + WebSocket                             | Protobuf over gRPC (tonic)                            | Single protocol, control plane + data plane unified |
+| Async                 | Promise / async-await                            | tokio 1.x                                             | |
+| Context storage       | `Map<string, unknown>` (ctx)                     | `dashmap` / typed ctx                                 | Type safety first |
+| Logging               | in-memory + flush                                | rusqlite append-only                                  | Invariant: model-visible means logged |
+| Plugin language       | TypeScript                                       | Rust + (Phase 2: wasmtime / deno_core)                | Phase 1 is Rust only |
+| Plugin manifest       | `plugin.toml` (YAML/JSON)                        | `plugin.toml` (YAML, same name, same structure)       | JSON Schema validation |
+| Sandbox               | bubblewrap / Seatbelt / restricted-token         | landlock 0.4 (Linux) / sandbox-exec (macOS placeholder) | Windows in Phase 2 |
+| Modes                 | 4 (Standard / PTC / Minimal / Creator)          | Phase 1 only Default                                  | PTC → Phase 2 |
+| Model call            | adapter (OpenAI / Anthropic / internal)          | adapter (same shape)                                  | Protobuf schema identical |
+| AGENTS.md injection   | yes                                              | yes                                                   | Fields aligned |
 
 ---
 
-## 2. Cordis 元框架 (核心重写)
+## 2. Cordis meta-framework (core rewrite)
 
-dsh 的 Cordis 提供的能力:
+Capabilities provided by dsh's Cordis:
 
-| Cordis 能力 | dsh 实现 | ma-harness.rs 实现 |
-|---|---|---|
-| Context (DI 容器) | `class Context { tables, state, registry }` | `Context` struct + `dashmap` + 泛型 typed key |
-| Service 装饰器 | `@Injectable()` 类装饰器 | `#[dsh_service]` proc-macro + `Service` trait |
-| Plugin 注册 | `ctx.plugin(SomePlugin)` | `ctx.plugin(Plugin::install(ctx)?)` + 显式 `apply` |
-| Listener (事件) | `ctx.on('event', handler)` | `ctx.on(Event::Foo, handler)` + 类型化 event enum |
-| Command (指令) | `ctx.command('name', handler)` | `#[dsh_command("name", ...)]` proc-macro |
-| Disposable (资源) | `ctx.effect(() => cleanup)` / `dispose()` | `Disposable` trait + `ctx.scope()` RAII |
-| 派生 ctx | `ctx.parent.derive()` | `Context::fork()` 父子链 |
-| 生命周期 | `start / stop / dispose` | 同名 + 强类型 LifecycleState enum |
+| Cordis capability          | dsh implementation                                  | ma-harness.rs implementation                                |
+|----------------------------|------------------------------------------------------|--------------------------------------------------------------|
+| Context (DI container)     | `class Context { tables, state, registry }`          | `Context` struct + `dashmap` + generic typed key             |
+| Service decorator          | `@Injectable()` class decorator                      | `#[dsh_service]` proc-macro + `Service` trait                |
+| Plugin registration        | `ctx.plugin(SomePlugin)`                             | `ctx.plugin(Plugin::install(ctx)?)` + explicit `apply`        |
+| Listener (event)           | `ctx.on('event', handler)`                           | `ctx.on(Event::Foo, handler)` + typed event enum              |
+| Command                    | `ctx.command('name', handler)`                       | `#[dsh_command("name", ...)]` proc-macro                     |
+| Disposable (resource)      | `ctx.effect(() => cleanup)` / `dispose()`            | `Disposable` trait + `ctx.scope()` RAII                      |
+| Derived ctx                | `ctx.parent.derive()`                                 | `Context::fork()` parent-child chain                         |
+| Lifecycle                  | `start / stop / dispose`                             | Same names + strongly typed `LifecycleState` enum             |
 
-### 2.1 我们**不**照搬的
+### 2.1 What we **don't** copy
 
-| dsh 特性 | 不照搬理由 |
-|---|---|
-| `ctx.any()` (无类型化访问) | 编译期类型安全 > 运行时灵活,Rust 直接砍 |
-| 反射式 service 查找 (`ctx.get(SVC_NAME)`) | Rust 用 trait + 泛型,不要字符串 |
-| 装饰器元数据 (装饰器在 TS 是运行时) | Rust 用 proc-macro,编译期生成 |
-| 动态插件加载 (运行时 require) | 编译期 link,Phase 2 才考虑 dynamic loading |
-| 异步 ctx 钩子 (`ctx.before('start')`) | 用 tokio task + listener 替代 |
+| dsh feature                              | Reason for not copying                                       |
+|------------------------------------------|--------------------------------------------------------------|
+| `ctx.any()` (untyped access)             | Compile-time type safety > runtime flexibility; cut in Rust  |
+| Reflective service lookup (`ctx.get(SVC_NAME)`) | Rust uses trait + generics, no strings needed        |
+| Decorator metadata (runtime in TS)       | Rust uses proc-macros, generated at compile time             |
+| Dynamic plugin loading (runtime require) | Compile-time link; dynamic loading considered in Phase 2     |
+| Async ctx hooks (`ctx.before('start')`)  | Use tokio task + listener instead                            |
 
-### 2.2 ctx key 强类型
+### 2.2 Strongly-typed ctx key
 
-dsh: `ctx.set('foo', 1)`,读时 `ctx.get('foo')` 是 `unknown`。
-ma-harness: 用 phantom-typed key:
+dsh: `ctx.set('foo', 1)`, read returns `unknown`.
+ma-harness: use phantom-typed key:
 
 ```rust
 struct CtxKey<T: 'static>(PhantomData<T>);
@@ -68,195 +74,223 @@ ctx.set(SESSION_ID, "abc".to_string());
 let id: String = ctx.get(SESSION_ID).unwrap();
 ```
 
-编译期保证 T 匹配,不需要运行时 type guard。
+Compile-time guarantees that `T` matches; no runtime type guard needed.
 
-### 2.3 snake_case 强制
+### 2.3 snake_case enforcement
 
-ctx key 名字 (例如 `SessionId` 类型名 / `"session_id"` 字符串字面量) 走 proc-macro 编译期检查:
+ctx key names (e.g. `SessionId` type name / `"session_id"` string literal)
+are checked at compile time via proc-macro:
 
 ```rust
-// 这样写编译错误: camelCase not allowed
+// This fails to compile: camelCase not allowed
 let k = ctx_key!("agentLoop");
 
-// 这样写 OK
+// This is OK
 let k = ctx_key!("agent_loop");
 ```
 
-proc-macro 在 `lit` 阶段就 reject camelCase 字符串,绕不开。
+The proc-macro rejects camelCase strings at the `lit` stage — no way around it.
 
 ---
 
-## 3. Seam 类型 (Phase 1 选 3-4 个,不全做)
+## 3. Seam types (Phase 1 picks 3-4, not all)
 
-dsh 9 个 Seam 我们**不全做**。Phase 1 范围:
+We **do not implement all 9** of dsh's Seams. Phase 1 scope:
 
-| dsh Seam | ma-harness Phase 1 | 备注 |
-|---|---|---|
-| `Tool` | ✅ 做 | proc-macro `#[dsh_tool]` |
-| `Listener` | ✅ 做 | proc-macro `#[dsh_listener]` |
-| `Handler` | ✅ 做 | proc-macro `#[dsh_handler]` |
-| `Service` | ✅ 做 | proc-macro `#[dsh_service]` |
-| `Command` | ✅ 做 | proc-macro `#[dsh_command]` |
-| `Middleware` | ⏸ Phase 2 | axum middleware 即可,不需要自创 |
-| `Guard` | ⏸ Phase 2 | 输入校验,Phase 2 加 |
-| `Adapter` (model) | ⏸ Phase 2 | model 适配器先手写 1 个 |
-| `Disposable` (seam, 不是 trait) | ❌ 不做 | Rust 有 Drop trait,不需要 Seam |
+| dsh Seam                              | ma-harness Phase 1 | Notes                                  |
+|---------------------------------------|--------------------|----------------------------------------|
+| `Tool`                                | ✅ done            | proc-macro `#[dsh_tool]`               |
+| `Listener`                            | ✅ done            | proc-macro `#[dsh_listener]`           |
+| `Handler`                             | ✅ done            | proc-macro `#[dsh_handler]`            |
+| `Service`                             | ✅ done            | proc-macro `#[dsh_service]`            |
+| `Command`                             | ✅ done            | proc-macro `#[dsh_command]`            |
+| `Middleware`                          | ⏸ Phase 2         | salvo middleware suffices              |
+| `Guard`                               | ⏸ Phase 2         | input validation, added in Phase 2     |
+| `Adapter` (model)                     | ⏸ Phase 2         | write 1 model adapter by hand first    |
+| `Disposable` (seam, not trait)        | ❌ not done        | Rust has the Drop trait                |
 
-> **原则**: Seam 存在是为了"插件作者可以用统一模式声明能力"。我们 Phase 1 只暴露
-> 5 个最有用的 (Tool / Listener / Handler / Service / Command),其他用 Rust idiom 替代。
-
----
-
-## 4. SessionEvent 日志
-
-| dsh 行为 | ma-harness 实现 |
-|---|---|
-| Append-only `SessionEvent` 数组 | SQLite 表 `events(seq INTEGER PRIMARY KEY, session_id, type, payload, ts)` |
-| `model-visible means logged` 不变量 | `ctx.emit(Event)` 强制要求 `model_visible: true` 必须有对应 `Event::ModelVisible` |
-| 内存 buffer + flush | 直接 sync write (rusqlite 够用,Phase 2 再上 batch) |
-| Event replay (重放到 model context) | `events.iter().filter(model_visible).map(format_for_model)` |
-| Multi-session | `session_id` 列分区 |
-
-### 4.1 不变量强制点
-
-- **写时**: `ctx.emit(event)` 内部检查。如果 `event.model_visible == true`,
-  必须在同事务内落库,事务失败 → panic(append-only 不能丢)。
-- **读时**: model context 组装函数 (`for_model()`) 只走日志,不走 ctx 内存。
-  这样保证"看到的 = 落库的"。
-- **编译期**: `Event` enum 派生 `ModelVisible` trait,`model_visible()` 方法返回 bool,
-  漏写 → 编译警告。
+> **Principle**: Seams exist so "plugin authors can use a uniform pattern to
+> declare capabilities". Phase 1 exposes only the 5 most useful
+> (Tool / Listener / Handler / Service / Command); the rest use Rust idioms.
 
 ---
 
-## 5. Operating Mode (Phase 1 只 Default)
+## 4. SessionEvent log
 
-| dsh Mode | ma-harness Phase 1 | 备注 |
-|---|---|---|
-| Standard | ✅ 拆成"Default" + "Minimal" | Default 跑全功能,Mini 不跑 plugin |
-| PTC (Code Mode) | ⏸ Phase 2 | 见 `docs/code-mode-deferred.md` |
-| Minimal | ⏸ Phase 2 (跟 Default 一起实现,PoC 跑 Default 即可) | 跑通 Default 顺手做 Minimal 是 1 周工作 |
-| Creator | ⏸ Phase 3 (生成代码用) | 跟 plugin / codegen 关系深,放最后 |
+| dsh behavior                                  | ma-harness implementation                                              |
+|-----------------------------------------------|------------------------------------------------------------------------|
+| Append-only `SessionEvent` array              | SQLite table `events(seq INTEGER PRIMARY KEY, session_id, type, payload, ts)` |
+| Invariant: `model-visible means logged`       | `ctx.emit(Event)` enforces that `model_visible: true` requires a corresponding `Event::ModelVisible` |
+| in-memory buffer + flush                      | Direct sync write (rusqlite is enough; batching in Phase 2)            |
+| Event replay (back to model context)          | `events.iter().filter(model_visible).map(format_for_model)`            |
+| Multi-session                                 | `session_id` column partition                                          |
 
-### 5.1 Default 模式的最小行为
+### 4.1 Where the invariant is enforced
+
+- **On write**: `ctx.emit(event)` checks internally. If `event.model_visible == true`,
+  it must be persisted in the same transaction; transaction failure → panic
+  (append-only cannot drop).
+- **On read**: the model context assembly function (`for_model()`) goes through
+  the log only, not the in-memory ctx. This guarantees "what you see = what was
+  persisted".
+- **At compile time**: `Event` enum derives the `ModelVisible` trait, the
+  `model_visible()` method returns bool; missing it → compile warning.
+
+---
+
+## 5. Operating Mode (Phase 1 is Default only)
+
+| dsh Mode   | ma-harness Phase 1                | Notes                                          |
+|------------|------------------------------------|------------------------------------------------|
+| Standard   | ✅ split into "Default" + "Minimal" | Default runs full features; Minimal skips plugin |
+| PTC (Code Mode) | ⏸ Phase 2                  | see `docs/code-mode-deferred.md`               |
+| Minimal    | ⏸ Phase 2 (along with Default)     | Running Default first; Minimal is 1 week of work |
+| Creator    | ⏸ Phase 3 (for code generation)   | Heavily tied to plugin / codegen; do last      |
+
+> **Note (P11+ update)**: PTC (Code Mode) was actually shipped in P2.6 (Day 50+)
+> via `ma-harness-code` (wasmtime-based). Creator mode shipped in P10
+> (`ma-harness-creator` + dynamic plugin loading). Default + Minimal both
+> shipped in P7.
+
+### 5.1 Minimum behavior of Default mode
 
 ```
-1. 加载 plugin.toml → 注册 6 个 first-party 插件
+1. Load plugin.toml → register 6 first-party plugins
 2. ctx.plugin(Plugin).apply()
-3. event loop: 接收 AgentRun { prompt } → 走 model adapter → emit SessionEvent
-4. 工具调用循环: 收到 tool_call → ctx.invoke(tool, args) → 记录到日志 → 继续
-5. 终止: 收到 finish_reason → 落库 end session → 退出
+3. event loop: receive AgentRun { prompt } → go through model adapter → emit SessionEvent
+4. Tool call loop: receive tool_call → ctx.invoke(tool, args) → record to log → continue
+5. Termination: receive finish_reason → persist end session → exit
 ```
 
 ---
 
-## 6. Plugin (first-party 6 个)
+## 6. Plugin (6 first-party)
 
-| 插件 | dsh 里有吗 | ma-harness Phase 1 |
-|---|---|---|
-| bash | ✅ | ✅ `ma_harness_plugin_bash` (子进程 + landlock) |
-| fs | ✅ | ✅ `ma_harness_plugin_fs` (path 限制 + read/write) |
-| web | ✅ | ✅ `ma_harness_plugin_web` (reqwest + url 过滤) |
-| subagent | ✅ | ✅ `ma_harness_plugin_subagent` (fork ctx) |
-| skill | ✅ | ✅ `ma_harness_plugin_skill` (加载 .skill/ 目录) |
-| cordis | ✅ | ✅ `ma_harness_plugin_cordis` (meta 插件,展示 ctx 自身能力) |
-| memory | dsh 有 | ⏸ Phase 2 (跟持久化 / 检索绑) |
-| git | dsh 有 | ⏸ Phase 2 |
-| notify | dsh 有 | ⏸ Phase 2 |
-| plan | dsh 有 | ⏸ Phase 2 |
+| Plugin     | In dsh? | ma-harness Phase 1                                       |
+|------------|---------|----------------------------------------------------------|
+| bash       | ✅      | ✅ `ma_harness_plugin_bash` (subprocess + landlock)      |
+| fs         | ✅      | ✅ `ma_harness_plugin_fs` (path restriction + read/write)|
+| web        | ✅      | ✅ `ma_harness_plugin_web` (reqwest + URL filter)        |
+| subagent   | ✅      | ✅ `ma_harness_plugin_subagent` (fork ctx)               |
+| skill      | ✅      | ✅ `ma_harness_plugin_skill` (load `.skill/` directory)  |
+| cordis     | ✅      | ✅ `ma_harness_plugin_cordis` (meta plugin, demonstrates ctx capabilities) |
+| memory     | dsh has | ⏸ Phase 2 (bound to persistence / retrieval)             |
+| git        | dsh has | ⏸ Phase 2                                                 |
+| notify     | dsh has | ⏸ Phase 2                                                 |
+| plan       | dsh has | ⏸ Phase 2                                                 |
 
-> Phase 1 选 6 个 = **基础工具齐 (bash/fs/web) + 编排基础齐 (subagent) + 自指 (cordis) + 复用 (skill)**。
-> 不选 memory/git 是因为 PoC 阶段不验证"长期记忆 / VCS 集成"。
+> Phase 1 picks 6 = **basic tool set complete (bash/fs/web) + orchestration
+> basics complete (subagent) + self-reference (cordis) + reuse (skill)**.
+> Not picking memory/git because the PoC does not validate "long-term memory
+> / VCS integration".
+
+> **Note (P10+ update)**: `ma-harness-plugin-creator` was added in P10 to
+> support dynamic plugin compilation and loading. `ma-harness-plugin-hello`
+> is a test/demo plugin included in the workspace.
 
 ---
 
 ## 7. Model Adapter
 
-dsh 有 OpenAI / Anthropic / 内部 / 自定义 4 类适配器,通过 `ctx.inject(['modelAdapter', 'openai'])` 拿。
+dsh has OpenAI / Anthropic / internal / custom 4 types of adapters, obtained
+via `ctx.inject(['modelAdapter', 'openai'])`.
 
 ma-harness Phase 1:
 
-| Adapter | ma-harness Phase 1 |
-|---|---|
-| OpenAI Chat Completions | ✅ (`ma_harness_model_openai`, reqwest + 简单轮询) |
-| Anthropic Messages | ⏸ Phase 2 |
-| 内部 (deepseek 自家协议) | ⏸ Phase 2 (dsh 有, 我们跟 dsh 划清, 不复用) |
-| 自定义 (用户写) | ✅ 留 `ModelAdapter` trait, 用户 impl |
+| Adapter                            | ma-harness Phase 1                                       |
+|------------------------------------|----------------------------------------------------------|
+| OpenAI Chat Completions            | ✅ `ma_harness_model_openai` (reqwest + simple polling)  |
+| Anthropic Messages                 | ✅ `ma_harness_model_anthropic` (P11-5)                  |
+| Internal (deepseek's own protocol) | ⏸ — (dsh has it; we don't reuse, draw the line)         |
+| Custom (user-written)              | ✅ leaves `ModelAdapter` trait, user impl                 |
 
-> **设计**: 不复刻 dsh 的 internal adapter (虽然 dsh 有),跟 dsh 划清 ——
-> ma-harness 不做"特定厂商的特殊优化",只做 OpenAI-compatible 通用协议。
+> **Design**: Do not replicate dsh's internal adapter (even though dsh has it);
+> draw the line — ma-harness does not do "special optimizations for a specific
+> vendor", only the OpenAI-compatible general protocol.
 
----
-
-## 8. AGENTS.md 注入
-
-dsh 行为:
-1. 启动时读 `<cwd>/AGENTS.md`
-2. 解析成 `Memory<Role>` 数据结构
-3. 注入到 system prompt
-
-ma-harness 行为:**完全一致**。但加 2 项扩展:
-
-| 扩展 | 说明 |
-|---|---|
-| 多级搜索 | 当前目录 → 父目录链 → 仓库根 → `~/.ma-harness/AGENTS.md` 全局 |
-| 分层 | `AGENTS.md` (项目) + `AGENTS.local.md` (gitignore,个人) + `~/.ma-harness/AGENTS.md` (全局) |
-
-字段格式跟 dsh 一致,Protobuf 定义里加 `memory` message 复用。
+> **Note (P11+ update)**: Anthropic Messages adapter was added in P11-5 (vision
+> + messages). Vision support (P11-5 / P11-9) covers OpenAI and Anthropic.
 
 ---
 
-## 9. 跑分 / Conformance 对齐 (Week 10-12)
+## 8. AGENTS.md injection
 
-| 对齐项 | dsh 来源 | ma-harness 做法 |
-|---|---|---|
-| Benchmark suite | dsh `bench/` | 复制 dsh 的 benchmark 脚本,改 binary 名 |
-| JSONL fixtures | dsh `tests/fixtures/*.jsonl` | **直接复用**,加 `tests/fixtures_loader.rs` 转 Protobuf |
-| Conformance ratio | 100% (dsh 内部) | Phase 1 目标 ≥ 95%,漏的标 `phase2_skip` |
-| Latency baseline | dsh 测得 | 跑同样 workload,差分对比,差 > 30% 标 `investigate` |
+dsh behavior:
+1. Read `<cwd>/AGENTS.md` on startup
+2. Parse into a `Memory<Role>` data structure
+3. Inject into system prompt
 
-### 9.1 不复刻的
+ma-harness behavior: **exactly the same**. Plus 2 extensions:
 
-- dsh 的 network setup (mock 模型 API 的方式) — 我们用 `wiremock` 重写,跟 dsh 的 mock server 划清
-- dsh 的 prompt template — 我们不抄 prompt 文本,只对齐"接口"
-- dsh 的 eval dataset — 内部数据不复制,只复刻 workload 形态
+| Extension       | Description |
+|-----------------|-------------|
+| Multi-level search | Current directory → parent chain → repo root → `~/.ma-harness/AGENTS.md` (global) |
+| Layering       | `AGENTS.md` (project) + `AGENTS.local.md` (gitignore, personal) + `~/.ma-harness/AGENTS.md` (global) |
 
----
-
-## 10. 跟 dsh 划清的"硬线"清单
-
-> 这些是 dsh 有但我们**故意不做**或**反过来做**的。违反就是 dsh port 嫌疑。
-
-| 项 | dsh | ma-harness | 原因 |
-|---|---|---|---|
-| cordis npm 依赖 | 是 | 否 (自主重写) | 划清生态 |
-| `node:worker_threads` | 是 (Code Mode) | 否 (Phase 2 wasmtime) | 见 `code-mode-deferred.md` |
-| JSON-RPC | 是 | 否 (Protobuf) | 单一协议 |
-| camelCase ctx key | 是 | 否 (snake_case) | Rust idiom |
-| 4 个 mode | 是 | Phase 1 只 Default | 减 scope |
-| runtime plugin 加载 | 是 | 否 (compile-time) | 静态优先 |
-| 9 个 Seam | 是 | Phase 1 5 个 | 减 scope |
-| 内部 deepseek 模型适配 | 是 | 否 (OpenAI-only) | 划清 |
+Field format matches dsh; the Protobuf definition reuses a `memory` message.
 
 ---
 
-## 11. Week 1-2 实现优先级
+## 9. Benchmark / Conformance alignment (Week 10-12)
 
-按 arch map 排,Week 1-2 任务分配:
+| Alignment item        | dsh source                          | ma-harness approach                                         |
+|-----------------------|-------------------------------------|-------------------------------------------------------------|
+| Benchmark suite       | dsh `bench/`                        | Copy dsh's benchmark script, change the binary name         |
+| JSONL fixtures        | dsh `tests/fixtures/*.jsonl`        | **Reuse directly**; add `tests/fixtures_loader.rs` to convert to Protobuf |
+| Conformance ratio     | 100% (dsh internal)                 | Phase 1 target ≥ 95%; gaps marked `phase2_skip`             |
+| Latency baseline      | measured by dsh                     | Run the same workload; diff > 30% mark as `investigate`     |
 
-| Day | 任务 | 涉及 arch map 章节 |
-|---|---|---|
-| Day 1-2 | `ma_harness_cordis` 骨架: Context / Service trait / Plugin trait | §2 |
-| Day 3 | ctx.extend + typed key + snake_case proc-macro | §2.2, §2.3 |
-| Day 4 | hello-world 端到端 (register → inject → call) | §2 |
-| Day 5 | listener / command / disposable | §2 (Cordis 完整) |
-| Day 6-7 | rusqlite + SessionEvent 基础 + model-visible 不变量 | §4 |
-| Day 8 | 5 个 proc-macro 签名实现 | §3 |
-| Day 9 | Week 1-2 周报 | - |
+### 9.1 What we don't replicate
+
+- dsh's network setup (how it mocks the model API) — we rewrite with `wiremock`,
+  drawing the line from dsh's mock server
+- dsh's prompt template — we don't copy the prompt text, only align the "interface"
+- dsh's eval dataset — internal data is not copied, only the workload shape
+
+> **Note (P11-2 update)**: dsh acp-snapshot 9/9 fixture = 100% (see
+> `docs/dsh-benchmark-report.md`). dsh_synthetic 7/7 = 100%. dsh Terminal
+> Bench / Toolathlon / DSBench full-stack benchmarks are pending business-side
+> LLM API key (P11-2.5+).
 
 ---
 
-## 12. 变更记录
+## 10. The "hard line" we draw from dsh
 
-| 日期 | 变更 |
-|---|---|
-| 2026-08-18 | 初版,Week 1-2 起步前定稿 |
+> These are things dsh does that we **deliberately don't do** or **do in
+> reverse**. Violating them would be a dsh port smell.
+
+| Item                            | dsh     | ma-harness                  | Reason                |
+|---------------------------------|---------|-----------------------------|-----------------------|
+| cordis npm dependency           | yes     | no (rewritten from scratch) | draw the ecosystem line |
+| `node:worker_threads`           | yes (Code Mode) | no (Phase 2 wasmtime) | see `code-mode-deferred.md` |
+| JSON-RPC                        | yes     | no (Protobuf)               | single protocol       |
+| camelCase ctx key               | yes     | no (snake_case)             | Rust idiom            |
+| 4 modes                         | yes     | Phase 1 only Default        | reduce scope          |
+| runtime plugin loading          | yes     | no (compile-time)           | static-first          |
+| 9 Seams                         | yes     | Phase 1: 5                  | reduce scope          |
+| internal deepseek model adapter | yes     | no (OpenAI-only)            | draw the line         |
+
+---
+
+## 11. Week 1-2 implementation priority
+
+Tasks allocated by arch map for Week 1-2:
+
+| Day       | Task                                                 | Arch map section |
+|-----------|------------------------------------------------------|------------------|
+| Day 1-2   | `ma_harness_cordis` skeleton: Context / Service trait / Plugin trait | §2 |
+| Day 3     | ctx.extend + typed key + snake_case proc-macro       | §2.2, §2.3       |
+| Day 4     | hello-world end-to-end (register → inject → call)    | §2               |
+| Day 5     | listener / command / disposable                     | §2 (Cordis full) |
+| Day 6-7   | rusqlite + SessionEvent basics + model-visible invariant | §4           |
+| Day 8     | 5 proc-macro signature implementation                | §3               |
+| Day 9     | Week 1-2 weekly report                               | -                |
+
+---
+
+## 12. Changelog
+
+| Date       | Change |
+|------------|--------|
+| 2026-08-18 | Initial version, finalized before Week 1-2 |
+| 2026-08-20 | P11+ updates: PTC shipped in P2.6, Creator in P10, Anthropic adapter in P11-5, vision in P11-5/9, dsh conformance 9/9 in P11-2 |

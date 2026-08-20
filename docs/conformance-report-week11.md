@@ -3,6 +3,12 @@
 > **状态**: 模板, 待网络通后跑 dsh 真实 fixture 填充.
 > 关联: [`conformance-design.md`](./conformance-design.md) § 6 报告格式.
 
+
+
+[English](docs/conformance-report-week11.md) — coming soon. 中文为主.
+
+[English](docs/conformance-report-week11.md) — coming soon. 中文为主.
+
 ---
 
 ## 1. 执行摘要 (待填)

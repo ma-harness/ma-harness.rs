@@ -4,6 +4,12 @@
 > 累计 33 commit, 16 crate workspace, 估计 167+ 个测试。
 > **Week 11-12 待做**: dsh 真实 fixture 接入 + benchmark 跑数据 + Week 11 conformance 报告。
 
+
+
+[English](docs/weekly/005-w10-conformance.md) — coming soon. 中文为主.
+
+[English](docs/weekly/005-w10-conformance.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

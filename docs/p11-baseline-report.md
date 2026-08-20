@@ -3,6 +3,12 @@
 > **目标**: 量化 ma-harness.rs 当前 conformance performance, 给 P11-2 (dsh Terminal Bench) 做对比基线.
 > **方法**: 跑现有 `crates/ma-harness-conformance/fixtures/` 下两个 fixture 文件, 跟 dsh 公开 workload 对比.
 
+
+
+[English](docs/p11-baseline-report.md) — coming soon. 中文为主.
+
+[English](docs/p11-baseline-report.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

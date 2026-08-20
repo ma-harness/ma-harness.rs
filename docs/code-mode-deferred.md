@@ -2,6 +2,12 @@
 
 > 目的: 把"Code Mode 推迟"这个决策单独成档,避免 12 周 PoC 期间被反复问"为什么没做 / 什么时候做"。
 
+
+
+[English](docs/code-mode-deferred.md) — coming soon. 中文为主.
+
+[English](docs/code-mode-deferred.md) — coming soon. 中文为主.
+
 ---
 
 ## 决策

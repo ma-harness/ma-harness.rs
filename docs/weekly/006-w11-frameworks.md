@@ -4,6 +4,12 @@
 > 累计 37 commit, 16 crate workspace, 估计 167+ 个测试, 18 bench。
 > **Week 12 待做**: 网络通后跑 dsh 真实 fixture + bench 出数据 + 写最终报告。
 
+
+
+[English](docs/weekly/006-w11-frameworks.md) — coming soon. 中文为主.
+
+[English](docs/weekly/006-w11-frameworks.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

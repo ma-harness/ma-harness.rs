@@ -1,38 +1,51 @@
 # ma_harness_conformance
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 > Conformance test framework for ma-harness.
-> 状态: **Week 10 Phase 1 完成** (framework 骨架 + 合成 fixture 跑通)。
-> 关联: [`docs/conformance-design.md`](../../docs/conformance-design.md)
+> Status: **P11+ complete** (framework + synthetic fixtures + dsh 9/9 + dsh_synthetic 7/7).
+> Related: [`docs/conformance-design.md`](../../docs/conformance-design.md)
 
-## 目的
+## Purpose
 
-验证 ma-harness 在相同 trace 输入下, 跟 DeepSeek Harness (dsh) 产生语义等价的输出。
-**目标**: 通过率 **≥ 95%** (Week 11 报告指标)。
+Verify that `ma-harness` produces semantically-equivalent output to DeepSeek
+Harness (dsh) given the same trace input.
+**Target**: pass rate **≥ 95%** (P11-2 / Week 11 metric).
 
-## 模块
+## Modules
 
-| 模块 | 作用 |
-|---|---|
-| `fixture` | Fixture schema (JSONL) + 加载器 |
-| `runner` | 跑 fixture, 收集实际事件 |
-| `compare` | 比对实际 vs 期望, 产出 diff |
-| `report` | 汇总 pass/fail, 输出 markdown + json |
+| Module    | Role |
+|-----------|------|
+| `fixture` | Fixture schema (JSONL) + loader |
+| `runner`  | Run a fixture, collect actual events |
+| `compare` | Compare actual vs expected, produce diffs |
+| `report`  | Aggregate pass/fail, emit markdown + json |
+| `dsh_format` (P11-1.5) | Convert dsh `session.jsonl` events → ma-harness `FixtureEvent` |
+| `cache` (P12-1) | mtime-based `DshFixtureCache` for re-runs |
 
-## 跑法
+## How to run
 
 ```bash
-# 跑 framework 自带的合成 fixture (无 dsh, 无网络)
+# Run the framework's built-in synthetic fixtures (no dsh, no network)
 cargo test -p ma_harness_conformance
 
-# 跑 smoke test
+# Run smoke test
 cargo test -p ma_harness_conformance --test smoke
+
+# Run dsh fixtures (synthetic, P11-1.5 7/7)
+mah conformance --fixtures crates/ma-harness-conformance/fixtures/dsh_synthetic.jsonl --dsh
+
+# Run real dsh acp-snapshot fixtures (P11-2 9/9)
+DSH_FIXTURE_ROOT=${DSH_REPO}/packages/test-support/acp-snapshot/tests/fixtures \
+    mah conformance --fixtures crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap.jsonl --dsh
 ```
 
-## Fixture 格式
+## Fixture format
 
-一行一个 JSON, 字段见 `docs/conformance-design.md` § 3。
+One JSON per line; see `docs/conformance-design.md` § 3 for fields.
 
-最小 fixture:
+Minimal fixture:
+
 ```json
 {
   "name": "my_test",
@@ -52,22 +65,33 @@ cargo test -p ma_harness_conformance --test smoke
 }
 ```
 
-## 报告
+For dsh-style fixtures, see `docs/dsh-benchmark-report.md` and
+`crates/ma-harness-conformance/fixtures/dsh-snap-converted/dsh_snap.jsonl`
+(9 real acp-snapshot fixtures).
 
-跑完自动生成:
-- `target/conformance-report.md` — Markdown (人类看)
-- `target/conformance-report.json` — JSON (CI 集成)
+## Reports
 
-## Phase 1 vs Phase 2
+Auto-generated after a run:
 
-| 阶段 | 状态 | 范围 |
-|---|---|---|
-| **Phase 1** (Week 10) | ✅ Done | framework 骨架 + 合成 fixture + compare + report |
-| **Phase 2** (Week 11) | ⏳ TODO | 真 plugin 装载 + EventLog 收集 + dsh 真实 fixture 接入 |
+- `target/conformance-report.md` — Markdown (human-readable)
+- `target/conformance-report.json` — JSON (CI integration)
 
-## 不在 scope
+`mah conformance` exits with code 0 if pass rate ≥ 95%, otherwise exit 1
+(CI gating, P12-9).
 
-- 真实 model adapter (用 stub)
-- 持久化层
-- 跨进程 (server vs cli)
-- plugin-by-plugin 等价比较 (业务方 plugin 是 first-party)
+## Milestones
+
+| Milestone                         | Status     | Scope |
+|-----------------------------------|------------|-------|
+| **Phase 1** (Week 10)              | ✅ done    | framework skeleton + synthetic fixtures + compare + report |
+| **P11-1.5**                       | ✅ done    | dsh_synthetic 7/7 via `convert_input` (RunStart + UserInput + ModelResponse chain) |
+| **P11-2**                         | ✅ done    | dsh 9 acp-snapshot fixtures → 9/9 = 100% (replay identity) |
+| **P12-1**                         | ✅ done    | `DshFixtureCache` mtime invalidation |
+| **P12-9**                         | ✅ done    | `mah conformance` exit 1 on < 95% pass rate |
+
+## Out of scope
+
+- Real model adapter (uses stub)
+- Persistence layer
+- Cross-process (server vs cli)
+- Plugin-by-plugin equivalence comparison (application plugins are first-party only)

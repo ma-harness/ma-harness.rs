@@ -11,6 +11,12 @@
 > - 多种运行形态 (Web UI / TUI / Headless CLI / ACP / **Python SDK**)
 > - 自测 Terminal Bench 2.1 (87.9), Toolathlon-Verified (74.1), DSBench-FullStack (71.1)
 
+
+
+[English](docs/roadmap-phase-11.md) — coming soon. 中文为主.
+
+[English](docs/roadmap-phase-11.md) — coming soon. 中文为主.
+
 ---
 
 ## 0. 背景与动机

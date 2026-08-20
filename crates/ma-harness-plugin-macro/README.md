@@ -2,6 +2,12 @@
 
 > **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Plugin authors typically don't need to depend on this crate directly — `ma-harness-seam` re-exports the relevant derives via `ma_harness_seam::dsh_service`, `ma_harness_seam::dsh_listener`, etc.
 
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+
+> **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Plugin authors typically don't need to depend on this crate directly — `ma-harness-seam` re-exports the relevant derives via `ma_harness_seam::dsh_service`, `ma_harness_seam::dsh_listener`, etc.
+
 Procedural macros for the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) plugin framework.
 
 ## Features

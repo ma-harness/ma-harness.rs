@@ -1,177 +1,197 @@
-# ma-harness.rs — Tech Stack (PoC 期间冻结)
+# ma-harness.rs — Tech Stack (frozen during PoC)
 
-> 锁定时间: 2026-08-18
-> 冻结期: 12 周 PoC (即 ~2026-11-10 之前)
-> 升级走 ADR 单独评审,bug fix 例外
+[English](tech-stack.md) | [简体中文](tech-stack.zh-CN.md)
 
----
-
-## 1. 运行时
-
-| Crate | 版本 | 用途 | 备注 |
-|---|---|---|---|
-| `tokio` | 1.x (latest 1.40) | async runtime | 全栈 async/await |
-| `futures` | 0.3 | 异步工具 | stream / sink |
-| `async-trait` | 0.1 | async fn in trait | 跟 tonic 0.12 配合 |
+> Locked: 2026-08-18
+> Freeze period: 12-week PoC (i.e. until ~2026-11-10)
+> Upgrades require a separate ADR review; bug fixes are exceptions.
 
 ---
 
-## 2. 通信 (Protobuf 单协议)
+## 1. Runtime
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `tonic` | 0.12 | gRPC server + client |
-| `prost` | 0.13 | protobuf codec |
-| `prost-types` | 0.13 | well-known types (Timestamp/Duration) |
-| `tonic-build` | 0.12 | build script codegen |
-| `tonic-reflection` | 0.12 | gRPC reflection (debug 用) |
-
-> **不用**: `tower` 直接组合 (用 tonic 自带的 Layer);`async-channel` (用 tokio::sync);`crossbeam` (用 tokio)。
+| Crate          | Version            | Purpose                | Notes                       |
+|----------------|--------------------|------------------------|-----------------------------|
+| `tokio`        | 1.x (latest 1.40)  | async runtime          | Full async/await stack      |
+| `futures`      | 0.3                | async utilities        | stream / sink               |
+| `async-trait`  | 0.1                | async fn in trait      | Cooperates with tonic 0.12  |
 
 ---
 
-## 3. HTTP (仅 server side)
+## 2. Communication (Protobuf single protocol)
 
-> 2026-08-18: axum 0.7 → salvo 0.79 (宪法规格变更, 见 decision-log §12)
+| Crate              | Version | Purpose                            |
+|--------------------|---------|------------------------------------|
+| `tonic`            | 0.12    | gRPC server + client               |
+| `prost`            | 0.13    | protobuf codec                     |
+| `prost-types`      | 0.13    | well-known types (Timestamp/Duration) |
+| `tonic-build`      | 0.12    | build script codegen               |
+| `tonic-reflection` | 0.12    | gRPC reflection (debug)            |
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `salvo` | 0.79 | HTTP server (自带 hyper 1, 内置 OpenAPI 导出) |
-| ~~`axum`~~ | ❌ 不再使用 | 已被 salvo 替代, 见 decision-log §12 决策原因 |
-| ~~`tower`~~ | ❌ 不再使用 | salvo 自带 middleware, 不需要 tower |
-| ~~`tower-http`~~ | ❌ 不再使用 | trace / cors / compression 改用 salvo 中间件 |
-| ~~`hyper`~~ | (传递依赖) | salvo 内部用, 不直接依赖 |
-
-> **server 端**: salvo 接 HTTP/1.1 + WebSocket (供将来 browser dashboard 用)
-> **client 端**: reqwest 0.12
+> **Not used**: `tower` direct composition (use tonic's built-in Layer);
+> `async-channel` (use `tokio::sync`); `crossbeam` (use tokio).
 
 ---
 
-## 4. 序列化
+## 3. HTTP (server side only)
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `serde` | 1.x | 序列化框架 |
-| `serde_json` | 1.x | JSON (插件配置 / 日志外部格式) |
-| `serde_yaml` | 0.9 | YAML (plugin.toml) |
-| `schemars` | 0.8 | JSON Schema 生成 (给 plugin.toml 校验) |
+> 2026-08-18: axum 0.7 → salvo 0.79 (charter change, see decision-log §12)
 
----
+| Crate           | Version | Purpose |
+|-----------------|---------|---------|
+| `salvo`         | 0.79    | HTTP server (bundles hyper 1, built-in OpenAPI export) |
+| ~~`axum`~~      | ❌ no longer used | Replaced by salvo, see decision-log §12 |
+| ~~`tower`~~     | ❌ no longer used | salvo has its own middleware |
+| ~~`tower-http`~~| ❌ no longer used | trace / cors / compression via salvo middleware |
+| ~~`hyper`~~     | (transitive) | Used internally by salvo, not direct dependency |
 
-## 5. 错误处理
+> **Server side**: salvo accepts HTTP/1.1 + WebSocket (for future browser dashboard)
+> **Client side**: reqwest 0.12
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `thiserror` | 1.x | 库错误 (struct 化) |
-| `anyhow` | 1.x | 应用错误 (dyn Error) |
-| `eyre` | ❌ 不引入 | 跟 anyhow 二选一,我们选 anyhow |
-
----
-
-## 6. 可观测
-
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `tracing` | 0.1 | 结构化日志 |
-| `tracing-subscriber` | 0.3 | subscriber + filter |
-| `tracing-futures` | ❌ 不引入 | 用 `tracing::Instrument` |
-| `opentelemetry` | 0.24 | (Phase 2) |
-| `prometheus` | 0.13 | (Phase 2) |
-
-PoC 期间只用 tracing,指标走 tracing span,不开 metrics endpoint。
+> **Note**: As of P12 (Day 101+1), salvo has been upgraded from 0.79 → 0.93 (see
+> decision-log §20), and 0.95.2 in the latest run (see decision-log §21).
 
 ---
 
-## 7. 存储
+## 4. Serialization
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `rusqlite` | 0.32 | append-only 日志 (sync API,简单) |
-| `r2d2` | ❌ 不引入 | 单连接足够 |
-| `sled` | ❌ 不引入 | 复杂度不值 |
+| Crate         | Version | Purpose                                       |
+|---------------|---------|-----------------------------------------------|
+| `serde`       | 1.x     | Serialization framework                       |
+| `serde_json`  | 1.x     | JSON (plugin config / external log format)    |
+| `serde_yaml`  | 0.9     | YAML (plugin.toml)                            |
+| `schemars`    | 0.8     | JSON Schema generation (for plugin.toml validation) |
 
-> **不用** `sqlx` (异步 ORM),日志是纯 append + 范围读,rusqlite 同步 API 包在 `spawn_blocking` 就够。
-> **不用** `redb` / `lmdb` / `rocksdb`,PoC 阶段 SQLite 足够。
+---
+
+## 5. Error handling
+
+| Crate         | Version | Purpose                       |
+|---------------|---------|-------------------------------|
+| `thiserror`   | 1.x     | Library errors (struct form)  |
+| `anyhow`      | 1.x     | Application errors (dyn Error) |
+| `eyre`        | ❌ not introduced | We pick anyhow, not eyre |
+
+---
+
+## 6. Observability
+
+| Crate                  | Version | Purpose                          |
+|------------------------|---------|----------------------------------|
+| `tracing`              | 0.1     | structured logging               |
+| `tracing-subscriber`   | 0.3     | subscriber + filter              |
+| `tracing-futures`      | ❌ not introduced | use `tracing::Instrument` |
+| `opentelemetry`        | 0.24    | (Phase 2)                        |
+| `prometheus`           | 0.13    | (Phase 2)                        |
+
+During PoC, only `tracing`; metrics go through tracing span; metrics endpoint not
+exposed.
+
+> **Note**: As of P10-7, `prometheus` 0.13 is wired in via `ma-harness-server`
+> and exposes `/v1/metrics` (text format).
+
+---
+
+## 7. Storage
+
+| Crate         | Version | Purpose                                |
+|---------------|---------|----------------------------------------|
+| `rusqlite`    | 0.32    | append-only log (sync API, simple)     |
+| `r2d2`        | ❌ not introduced | single connection is enough |
+| `sled`        | ❌ not introduced | complexity not worth it     |
+
+> **Not used** `sqlx` (async ORM); logs are pure append + range read; rusqlite
+> sync API wrapped in `spawn_blocking` is sufficient.
+> **Not used** `redb` / `lmdb` / `rocksdb`; SQLite is enough for the PoC.
 
 ---
 
 ## 8. Sandbox (Linux)
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `landlock` | 0.4 | Linux 5.13+ filesystem 沙箱 |
-| `capsicum` | ❌ 不引入 | FreeBSD 专属,跳过 |
-| `nix` | 0.29 | POSIX syscall 封装 (landlock 用) |
+| Crate         | Version | Purpose                                       |
+|---------------|---------|-----------------------------------------------|
+| `landlock`    | 0.4     | Linux 5.13+ filesystem sandbox                |
+| `capsicum`    | ❌ not introduced | FreeBSD only, skip                    |
+| `nix`         | 0.29    | POSIX syscall wrapper (used by landlock)      |
 
-> macOS sandbox: Phase 1 用 `std::process::Command` + `Command::arg("--sandbox")` 转发给系统 `sandbox-exec`(占位,不深度集成)
-> Windows sandbox: Phase 1 **不做**,直接 `#[cfg(windows)]` panic with "Phase 2",因为 Windows sandbox API 跟 landlock 差异太大,PoC 期间不分心。
+> macOS sandbox: Phase 1 use `std::process::Command` + `Command::arg("--sandbox")`
+> forwarded to system `sandbox-exec` (placeholder, not deep integration)
+> Windows sandbox: Phase 1 **not implemented**, just `#[cfg(windows)]` panic
+> with "Phase 2", because the Windows sandbox API differs too much from
+> landlock; not worth the distraction during PoC.
+
+> **Note**: As of P10-1.6, `landlock` 0.4 is wired in via `ma-harness-sandbox`
+> (cross-platform: Linux landlock / macOS seatbelt / other stub).
 
 ---
 
 ## 9. CLI
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `clap` | 4.x | 命令行解析 (derive feature) |
-| `indicatif` | 0.17 | 进度条 (用户跑 benchmark 用) |
-| `console` | 0.15 | 终端样式 |
+| Crate         | Version | Purpose                                |
+|---------------|---------|----------------------------------------|
+| `clap`        | 4.x     | command-line parsing (derive feature)  |
+| `indicatif`   | 0.17    | progress bar (for end-user benchmark)  |
+| `console`     | 0.15    | terminal styling                       |
 
 ---
 
-## 10. 测试
+## 10. Testing
 
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `proptest` | 1.x | property-based testing |
-| `mockall` | 0.13 | mock (跟 trait 配合) |
-| `insta` | 1.x | snapshot test (尤其 JSONL 日志格式) |
-| `criterion` | 0.5 | benchmark |
-| `tokio-test` | 0.4 | tokio 测试工具 |
-| `pretty_assertions` | 1.x | assert 输出友好 |
-| `wiremock` | 0.6 | HTTP mock (web 插件测试) |
-
----
-
-## 11. 内部锁 / 并发原语
-
-| Crate | 版本 | 用途 |
-|---|---|---|
-| `dashmap` | 6 | 并发 HashMap (plugin registry) |
-| `parking_lot` | 0.12 | 比 std::sync 快 / 不 poison |
-| `arc-swap` | 1.7 | atomic Arc swap (config 热更新) |
+| Crate              | Version | Purpose                                              |
+|--------------------|---------|------------------------------------------------------|
+| `proptest`         | 1.x     | property-based testing                               |
+| `mockall`          | 0.13    | mock (cooperates with trait)                         |
+| `insta`            | 1.x     | snapshot test (especially for JSONL log format)      |
+| `criterion`       | 0.5     | benchmark                                            |
+| `tokio-test`       | 0.4     | tokio testing utilities                              |
+| `pretty_assertions`| 1.x     | friendly assert output                               |
+| `wiremock`         | 0.6     | HTTP mock (for web plugin testing)                   |
 
 ---
 
-## 12. 不引入的清单 (避免诱惑)
+## 11. Internal locks / concurrency primitives
 
-| 类别 | 不引入 | 理由 |
-|---|---|---|
-| JS 引擎 | `wasmtime` / `deno_core` / `boa_engine` / `rquickjs` | Phase 2,见 code-mode-deferred.md |
-| 异步运行时 | `async-std` / `smol` | tokio 统一 |
-| ORM | `diesel` / `sea-orm` / `sqlx` | 日志是 append-only,rusqlite 够 |
-| 分布式协调 | `etcd-client` / `consul` | 单机跑分,Phase 2 |
-| TLS | `rustls` / `openssl` | PoC 跑 gRPC plaintext,本地只 |
-| 配置 | `config` / `figment` | 自己写一个 50 行的,够用 |
-| 日志宏 | `log` | 用 `tracing` |
-| HTTP 客户端 | `hyper` 直接用 / `ureq` | reqwest 统一 |
+| Crate         | Version | Purpose                                          |
+|---------------|---------|--------------------------------------------------|
+| `dashmap`     | 6       | concurrent HashMap (plugin registry)             |
+| `parking_lot` | 0.12    | faster than std::sync, no poison                 |
+| `arc-swap`    | 1.7     | atomic Arc swap (hot config reload)              |
 
 ---
 
-## 13. 升级策略
+## 12. Not-introduced checklist (avoid temptation)
 
-- **patch 升级** (例 1.40.1 → 1.40.2): 直接 `cargo update`
-- **minor 升级** (例 1.40 → 1.41): 等 1 周,跑过 `cargo test` 后升级
-- **major 升级** (例 0.12 → 0.13): 写 ADR,跑 benchmark 对比,决策后才升
+| Category            | Not introduced                                          | Reason                                  |
+|---------------------|---------------------------------------------------------|-----------------------------------------|
+| JS engine           | `wasmtime` / `deno_core` / `boa_engine` / `rquickjs`    | Phase 2, see code-mode-deferred.md      |
+| Async runtime       | `async-std` / `smol`                                    | tokio unified                           |
+| ORM                 | `diesel` / `sea-orm` / `sqlx`                           | log is append-only, rusqlite is enough  |
+| Distributed coord.  | `etcd-client` / `consul`                                | single-node benchmark, Phase 2          |
+| TLS                 | `rustls` / `openssl`                                    | PoC uses gRPC plaintext, local only     |
+| Configuration       | `config` / `figment`                                    | write our own 50 lines, sufficient       |
+| Logging macro       | `log`                                                   | use `tracing`                           |
+| HTTP client         | `hyper` direct / `ureq`                                 | reqwest unified                         |
 
-## 14. 安全公告源
+---
+
+## 13. Upgrade strategy
+
+- **Patch upgrade** (e.g. 1.40.1 → 1.40.2): direct `cargo update`
+- **Minor upgrade** (e.g. 1.40 → 1.41): wait 1 week, run `cargo test` first
+- **Major upgrade** (e.g. 0.12 → 0.13): write ADR, run benchmark comparison, only
+  then upgrade
+
+## 14. Security advisory source
 
 - RustSec Advisory Database: https://rustsec.org/
-- `cargo-audit` 接入 CI(Phase 2)
+- `cargo-audit` integrated into CI (Phase 2)
 
 ---
 
-## 变更记录
+## Changelog
 
-| 日期 | 变更 |
-|---|---|
-| 2026-08-18 | 初版,PoC 期间冻结 |
+| Date       | Change |
+|------------|--------|
+| 2026-08-18 | Initial version, frozen for the PoC |
+| 2026-08-19 | Note salvo 0.79 → 0.93 / 0.95.2 upgrade (see decision-log §20 / §21) |
+| 2026-08-20 | Add P10-1.6 landlock / P10-7 prometheus wiring notes (P10) |

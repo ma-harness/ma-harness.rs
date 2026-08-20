@@ -1,39 +1,50 @@
 # Conformance Test Design (Week 10)
 
-> **目的**: 验证 ma-harness 的行为跟 DeepSeek Harness (dsh) 在相同输入下产生相同输出,确保语义等价。
-> **状态**: Week 10 设计稿,实现中。
-> **关联文档**: `benchmark-design.md`、`ma-harness-arch-map.md`、`docs/weekly/004-w07-w09.md`
+[English](conformance-design.md) | [简体中文](conformance-design.zh-CN.md)
+
+> **Purpose**: Verify that `ma-harness` produces the same output as
+> DeepSeek Harness (dsh) under the same input, ensuring semantic equivalence.
+> **Status**: Week 10 design draft; implementation in progress.
+> **Related docs**: `benchmark-design.md`, `ma-harness-arch-map.md`,
+> `docs/weekly/004-w07-w09.md`
 
 ---
 
 ## TL;DR
 
-| 维度 | 数值 |
-|---|---|
-| Crate | `ma_harness_conformance` (新加, 15 → 16 members) |
-| Fixture 格式 | JSONL (一行一个 fixture) |
-| Fixture 来源 | 1. dsh 的 `tests/fixtures/*.jsonl` 转换 2. ma-harness 自己合成 (smoke) |
-| 比对维度 | 事件序列 (event type + payload schema, 不强求 byte-for-byte) |
-| 跑法 | `cargo test -p ma_harness_conformance` (单线程) 或独立 binary |
-| 报告 | Markdown + JSON, 存 `target/conformance-report.{md,json}` |
-| 目标通过率 | **≥ 95%** (Week 11 报告指标) |
-| 失败粒度 | 事件级 (跳过相等的, 列出第一个 diff) |
+| Dimension           | Value |
+|---------------------|-------|
+| Crate               | `ma_harness_conformance` (new, 15 → 16 members) |
+| Fixture format      | JSONL (one fixture per line) |
+| Fixture source      | 1. dsh's `tests/fixtures/*.jsonl` (converted); 2. ma-harness own (smoke) |
+| Comparison dim      | event sequence (event type + payload schema, not byte-for-byte) |
+| How to run          | `cargo test -p ma_harness_conformance` (single thread) or standalone binary |
+| Report              | Markdown + JSON, written to `target/conformance-report.{md,json}` |
+| Target pass rate    | **≥ 95%** (Week 11 reported metric) |
+| Failure granularity | event level (skip equal events, list first diff) |
 
 ---
 
-## 1. Conformance 不是什么
+## 1. What Conformance is NOT
 
-明确**不**做这些:
+Explicitly **not** doing these:
 
-- **不**做 byte-for-byte 比较 — dsh 输出时间戳、UUID、序列化顺序跟 ma-harness 不同, 只比"事件类型 + 关键字段"
-- **不**跑 model adapter — 只跑 ctx + event log + tool registry, 不调真实 LLM
-- **不**做性能比较 — 性能在 `benchmark-design.md`, conformance 只看行为
-- **不**做 UI 比较 — dsh 是 TS 库, ma-harness 是 Rust 库, 没有共享 UI surface
-- **不**做 plugin-by-plugin 等价 — 业务方插件 (bash/fs/web) 是 ma-harness first-party 独有, dsh 没这些
+- **No** byte-for-byte comparison — dsh's output timestamps, UUIDs, and
+  serialization order differ from ma-harness; we only compare "event type
+  + key fields".
+- **No** model adapter calls — only ctx + event log + tool registry; no real
+  LLM is invoked.
+- **No** performance comparison — performance is in `benchmark-design.md`;
+  conformance is about behavior.
+- **No** UI comparison — dsh is a TS library, ma-harness is a Rust library;
+  no shared UI surface.
+- **No** plugin-by-plugin equivalence — application plugins (bash/fs/web) are
+  ma-harness first-party only; dsh doesn't have these.
 
-## 2. Conformance 是什么
+## 2. What Conformance IS
 
-跑一组固定的"输入事件序列" (trace), 比对两边的"输出事件序列":
+Run a fixed set of "input event sequences" (trace) and compare the two
+sides' "output event sequences":
 
 ```
         dsh fixture (input events)        ma-harness fixture (input events)
@@ -50,11 +61,13 @@
                           pass / fail + diff
 ```
 
-**关键设计**: fixture 是 trace (事件流), 不是 unit test。Conformance runner 重放事件, 捕获实际事件, 比对期望。
+**Key design**: a fixture is a trace (event stream), not a unit test.
+The Conformance runner replays events, captures actual events, and compares
+against the expected.
 
-## 3. Fixture 格式 (v1)
+## 3. Fixture format (v1)
 
-每个 fixture 是一行 JSON:
+Each fixture is one JSON line:
 
 ```json
 {
@@ -86,46 +99,56 @@
 }
 ```
 
-字段:
-- `name` (string, required) — fixture 唯一名, 用于报告
+Fields:
+
+- `name` (string, required) — unique fixture name, used in the report
 - `category` (enum, required) — `tool_call` | `agent_run` | `session_lifecycle` | `event_ordering` | `error_path`
-- `description` (string, optional) — 给人类看的说明
+- `description` (string, optional) — human-readable description
 - `input` (object, required):
-  - `session_id` (string) — 任意, 用于日志
-  - `plugins` (array of string) — fixture 启动时装载的 plugin 名
-  - `events` (array) — 喂给 runner 的事件序列
+  - `session_id` (string) — arbitrary, used for logging
+  - `plugins` (array of string) — plugin names to load at fixture start
+  - `events` (array) — events fed to the runner
 - `expected` (object, required):
-  - `events` (array) — 期望输出事件 (按顺序比对)
-    - `payload_match` (object) — 浅比较, 字段存在 + 等值; 缺失字段 = 接受
-  - `final_state_match` (object) — 跑完 fixture 后 ctx 状态的断言
+  - `events` (array) — expected output events (compared in order)
+    - `payload_match` (object) — shallow compare; field present + equal;
+      missing fields are accepted
+  - `final_state_match` (object) — assertion on ctx state after running the fixture
 
-**为什么用 `payload_match` 浅比较**:
-- dsh 时间戳跟 ma-harness 不同, 强制相等会假阳性
-- dsh 序列化字段可能多/少, 浅比较允许 ma-harness 多塞字段 (如 tracing_id)
-- 只比较"fixture 作者关心"的字段, fixture 表达力更强
+**Why `payload_match` (shallow compare)**:
 
-## 4. Runner 流程
+- dsh's timestamp differs from ma-harness; forcing equality produces false
+  positives.
+- dsh's serialization fields may be more or fewer; shallow compare allows
+  ma-harness to include extra fields (e.g. `tracing_id`).
+- Only compare the fields the fixture author cares about; fixture expressiveness
+  is higher.
+
+## 4. Runner flow
 
 ```
 run_fixture(fixture) -> Result<ConformanceResult, RunnerError>:
     1. ctx = new()
     2. for plugin in fixture.input.plugins:
-           plugin_loader.load(plugin).install(ctx)  // 真 plugin, 不用 mock
+           plugin_loader.load(plugin).install(ctx)  // real plugin, not mock
     3. event_log = EventLog::new()  // append-only
     4. for event in fixture.input.events:
            event_log.append(decode(event))
-           ctx.emit(decode(event))  // 触发 listener
+           ctx.emit(decode(event))  // trigger listener
     5. actual_events = event_log.read_all()
     6. compare(actual_events, fixture.expected)
     7. return ConformanceResult { passed, diffs, ... }
 ```
 
-**关键决策**:
-- **真 plugin 不 mock**: 跟 integration test 一致, 暴露 PSR-4 风格的"集成 gap"
-- **同步 emit**: ma-harness 的 emit 是同步, fixture 也用同步, 不引入 async 时间错乱
-- **无 model adapter**: fixture 直接发 ToolCall/ToolResult, 不走 ModelRequest 链路
+**Key decisions**:
 
-## 5. Compare 算法
+- **Real plugin, not mock**: consistent with integration test, exposes
+  PSR-4 style "integration gap".
+- **Synchronous emit**: ma-harness's emit is sync, fixture is also sync; we
+  don't introduce async timing confusion.
+- **No model adapter**: fixture directly emits ToolCall/ToolResult; we don't
+  go through the ModelRequest chain.
+
+## 5. Compare algorithm
 
 ```rust
 fn compare_events(actual: &[SessionEvent], expected: &[ExpectedEvent]) -> Vec<Diff> {
@@ -156,11 +179,12 @@ fn compare_events(actual: &[SessionEvent], expected: &[ExpectedEvent]) -> Vec<Di
 }
 ```
 
-**输出**:
-- 第一个 diff 让人知道为什么失败
-- 全部 diff 让人能调试 (而不是 fix 完一个再看下一个)
+**Output**:
 
-## 6. 报告
+- The first diff tells you why it failed.
+- All diffs are listed (so you can debug, not fix one and re-run for the next).
+
+## 6. Report
 
 ```rust
 pub struct ConformanceReport {
@@ -177,11 +201,13 @@ pub struct ReportSummary {
 }
 ```
 
-两种格式:
-- **Markdown** (`target/conformance-report.md`) — 人类看, 表格 + diff 列表
-- **JSON** (`target/conformance-report.json`) — 机器读, CI 集成
+Two formats:
 
-报告模板 (excerpt):
+- **Markdown** (`target/conformance-report.md`) — for humans, table + diff list
+- **JSON** (`target/conformance-report.json`) — for machines, CI integration
+
+Report template (excerpt):
+
 ```markdown
 # Conformance Report — 2026-08-18
 
@@ -191,59 +217,78 @@ pub struct ReportSummary {
 
 ### tool_call_bash_echo_with_spaces
 - Diff[3]: FieldMismatch key="result", expected="hello world\n", actual="hello world\r\n"
-- Reason: CRLF vs LF (Windows echo 行为)
+- Reason: CRLF vs LF (Windows echo behavior)
 - Status: KNOWN_DIFF (platform-dependent, accepted)
 ```
 
-## 7. Fixture 来源 (双轨)
+## 7. Fixture source (two tracks)
 
-**轨道 A: 合成 fixture (smoke)**
-- 仓库自带 5-10 个 fixture, 验证 framework 本身
-- 任何网络条件下都能跑
-- 跟 dsh 无关, 只验 ma-harness 内部一致性
+**Track A: synthetic fixtures (smoke)**
 
-**轨道 B: dsh 真实 fixture (conformance)**
-- 从 dsh 仓库 `tests/fixtures/*.jsonl` 拉
-- 格式转换: dsh 的 TypeScript shape → ma-harness 的 JSONL shape
-- 跑不通过的 = 真问题, 列出来手动分析
-- Week 10 实现 framework, Week 11 拉 dsh fixture 跑
+- 5-10 fixtures ship with the repo; verify the framework itself
+- Run in any network condition
+- Independent of dsh; only validates ma-harness internal consistency
 
-## 8. 不在 scope
+**Track B: dsh real fixtures (conformance)**
 
-- **不**做 fuzz testing (proptest 是单独的, 见 `docs/tech-stack.md` §"测试栈")
-- **不**做 model adapter 真实调用 (StubModelAdapter 够用)
-- **不**做跨进程 conformance (server vs CLI binary), 都是 in-process
-- **不**做持久化层的 conformance (SessionServiceImpl 是 Phase 2)
+- Pull from dsh repo's `tests/fixtures/*.jsonl`
+- Format conversion: dsh's TypeScript shape → ma-harness JSONL shape
+- Failures = real problems; list and analyze manually
+- Week 10 implements the framework; Week 11 pulls dsh fixtures and runs
 
-## 9. 失败处理
+## 8. Out of scope
 
-- **Runner panic**: 捕获 + 标记 fixture 为 "error" (不是 "fail"), 报告里单列
-- **Plugin 装载失败**: fixture 标 "skip" (列在 "skipped" 段)
-- **Compare 第一个 diff 后**: 仍然列**所有** diff, 不短路 (debug 友好)
-- **Fixture parse 失败**: 在加载阶段报, 不进 runner
+- **No** fuzz testing (proptest is separate, see `docs/tech-stack.md` § "Testing stack")
+- **No** real model adapter calls (`StubModelAdapter` is enough)
+- **No** cross-process conformance (server vs CLI binary); everything is in-process
+- **No** persistence layer conformance (`SessionServiceImpl` is Phase 2)
 
-## 10. 跟其它 doc 的关系
+## 9. Failure handling
 
-- `benchmark-design.md` — 性能比较, 跟 conformance 正交
-- `ma-harness-arch-map.md` § 12 "Hook 与 Listener 映射" — conformance 事件类型的来源
-- `docs/weekly/004-w07-w09.md` — Week 7-9 完成, Week 10 开始 conformance
+- **Runner panic**: caught + fixture marked as "error" (not "fail"); listed separately in the report
+- **Plugin load failure**: fixture marked "skip" (listed in the "skipped" section)
+- **Compare after first diff**: still list **all** diffs; do not short-circuit
+  (debug-friendly)
+- **Fixture parse failure**: reported at load time; not entering the runner
+
+## 10. Relationship to other docs
+
+- `benchmark-design.md` — performance comparison, orthogonal to conformance
+- `ma-harness-arch-map.md` § 10 "Hook & Listener mapping" — source of conformance
+  event types
+- `docs/weekly/004-w07-w09.md` — Week 7-9 done; Week 10 starts conformance
 
 ---
 
-## 给后来人
+## Notes for future contributors
 
-写新 fixture 时:
-1. 用 `name` 描述场景 (e.g. `tool_call_bash_unicode`, 不 `tc_001`)
-2. `category` 选最贴近的, 不创造新 enum
-3. `payload_match` 只写**关心的字段**, 别的让 ma-harness 多塞无所谓
-4. 跑 `cargo test -p ma_harness_conformance -- --nocapture` 看实际 diff
-5. 失败先看 "Runner panic" 还是 "Compare diff", 前者是 framework 问题, 后者是 fixture 问题
+When writing a new fixture:
 
-跑 conformance:
+1. Use `name` to describe the scenario (e.g. `tool_call_bash_unicode`, not `tc_001`)
+2. Pick the closest `category`; don't invent a new enum
+3. In `payload_match`, only list the **fields you care about**; ma-harness adding
+   extra fields is fine
+4. Run `cargo test -p ma_harness_conformance -- --nocapture` to see the actual diff
+5. On failure, first see whether it's "Runner panic" or "Compare diff" — the
+   former is a framework bug, the latter is a fixture problem
+
+To run conformance:
+
 ```bash
-# 合成 fixture (无网络)
+# Synthetic fixtures (no network)
 cargo test -p ma_harness_conformance
 
-# 全部 fixture (含 dsh, 需要 fixtures/dsh/ 目录)
+# All fixtures (including dsh, requires fixtures/dsh/ directory)
 cargo run -p ma_harness_conformance --bin run-conformance -- --fixtures fixtures/ --output target/
 ```
+
+## 11. P11+ updates (Week 10 之后)
+
+- **P11-1.5**: `convert_input` derivation now emits full event chain (RunStart + UserInput + ModelResponse); 2 failing unit tests + 1 smoke test fixed; dsh_synthetic 28.6% → 100%.
+- **P11-2**: dsh 9 acp-snapshot fixtures (real dsh repo, not converted synth) → 9/9 = 100% via Python conversion script (`dsh_snap_convert.py`). Adds the `--dsh` flag to `mah conformance`.
+- **P12-1**: `DshFixtureCache` — mtime-based invalidation for the dsh_snap.jsonl; 4/4 cache tests.
+- **P12-3**: `docs/README.md` becomes the master index; `mkdocs.yml` v2 prepared for static site.
+- **P12-9**: `mah conformance` exit code: pass rate < 95% → exit 1 (CI gating).
+
+See `docs/p11-final-report.md`, `docs/p12-final-report.md`, and
+`docs/dsh-benchmark-report.md` for the current snapshot.

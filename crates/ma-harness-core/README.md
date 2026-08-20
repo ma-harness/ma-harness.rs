@@ -2,6 +2,12 @@
 
 > **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Most users should depend on `ma-harness-seam` instead. `ma-harness-core` exposes the lower-level building blocks: agent loop, session event log (sqlite), and the `ModelAdapter` trait used to talk to LLM providers.
 
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+
+> **Note**: This crate is part of the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) workspace. Most users should depend on `ma-harness-seam` instead. `ma-harness-core` exposes the lower-level building blocks: agent loop, session event log (sqlite), and the `ModelAdapter` trait used to talk to LLM providers.
+
 Core building blocks for the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) AI agent orchestrator.
 
 ## Features

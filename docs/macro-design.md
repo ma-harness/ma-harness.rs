@@ -1,38 +1,48 @@
-# ma-harness.rs — Plugin Macro 设计
+# ma-harness.rs — Plugin Macro Design
 
-> 目的: 5 个 proc-macro 的签名、行为、约束、例子,落到可执行的代码契约。
-> 写这个文档时,Week 1-2 还没起 `ma_harness_plugin_macro` crate,本设计就是它的 spec。
+[English](macro-design.md) | [简体中文](macro-design.zh-CN.md)
+
+> **Purpose**: Lock down the signatures, behavior, constraints, and examples of
+> the 5 proc-macros into an executable code contract.
+> This doc was written when Week 1-2 hadn't started the
+> `ma_harness_plugin_macro` crate; this design **is** its spec.
 >
-> 命名约定: 项目改名 `ma-harness.rs`,但**内部宏前缀保留 `dsh_`** (致敬 DeepSeek Harness,见 `docs/decision-log.md#1`)。
+> **Naming convention**: project renamed to `ma-harness.rs`, but the
+> **internal macro prefix keeps `dsh_`** (a tribute to DeepSeek Harness; see
+> `docs/decision-log.md#1`).
 >
-> 本文档写在 `docs/` 而不是 `crates/ma_harness_plugin_macro/`,因为它是**设计 spec**,
-> 等 Week 1-2 真正写 macro 实现时,以本文档为蓝本,允许偏离但必须更新本文档。
+> This doc lives in `docs/` rather than `crates/ma_harness_plugin_macro/`
+> because it is the **design spec**. When Week 1-2 actually writes the macro
+> implementation, this doc is the blueprint; deviations are allowed but must
+> update this doc.
 
 ---
 
-## 1. 总览
+## 1. Overview
 
-| Macro | 形态 | 作用 | 复杂度 |
-|---|---|---|---|
-| `#[dsh_service]` | derive | 给 struct 加 ctx.inject() 能力 | 薄糖 |
-| `#[dsh_listener]` | derive | 给 struct 加 ctx.on(event, fn) 订阅能力 | 薄糖 |
-| `#[dsh_tool]` | attribute | 注册一个 model-callable 工具,从函数签名提取 schema | 重头 |
-| `#[dsh_command]` | attribute | 注册一个 CLI/REPL 可调指令 | 重头 |
-| `#[dsh_handler]` | attribute | 注册一个 model adapter (接 LLM API) | 重头 |
+| Macro              | Form     | Purpose                                                                 | Complexity |
+|--------------------|----------|-------------------------------------------------------------------------|------------|
+| `#[dsh_service]`   | derive   | Add `ctx.inject()` capability to a struct                                | thin sugar |
+| `#[dsh_listener]`  | derive   | Add `ctx.on(event, fn)` subscription capability to a struct              | thin sugar |
+| `#[dsh_tool]`      | attribute | Register a model-callable tool; extract schema from function signature   | heavy     |
+| `#[dsh_command]`   | attribute | Register a CLI/REPL command                                              | heavy     |
+| `#[dsh_handler]`   | attribute | Register a model adapter (talks to LLM API)                              | heavy     |
 
-> **derive vs attribute 区分**:
-> - **derive** 加在 `struct` 上,目的是"自动 impl trait",省 boilerplate。
-> - **attribute** 加在 `fn` 上,目的是"展开成完整的注册代码 + 提取 schema"。
+> **derive vs attribute**:
+> - **derive** on a `struct`, goal: "auto impl trait", saves boilerplate.
+> - **attribute** on a `fn`, goal: "expand into full registration code +
+>   extract schema".
 
 ---
 
 ## 2. `#[dsh_service]` — derive
 
-### 2.1 作用
+### 2.1 Purpose
 
-让一个 struct 通过 `ctx.inject::<MyService>()` 拿到实例,自动实现 `Service` trait。
+Let a struct be obtained via `ctx.inject::<MyService>()`, automatically
+implementing the `Service` trait.
 
-### 2.2 签名
+### 2.2 Signature
 
 ```rust
 #[dsh_service]
@@ -43,18 +53,18 @@ pub struct MyService {
 
 impl MyService {
     pub fn new(ctx: &Context) -> Result<Self> {
-        // 用户写的构造逻辑
+        // User-written construction logic
         let field = ctx.get(SESSION_ID)?;
         Ok(Self { field })
     }
 
     pub fn do_thing(&self) -> String {
-        // 业务方法
+        // business method
     }
 }
 ```
 
-展开后(伪代码):
+After expansion (pseudocode):
 
 ```rust
 impl Service for MyService {
@@ -69,22 +79,25 @@ impl Service for MyService {
 }
 
 impl MyService {
-    // 用户写的 do_thing 不动
+    // User-written do_thing untouched
 }
 ```
 
-### 2.3 约束
+### 2.3 Constraints
 
-- 必须实现 `fn new(ctx: &Context) -> Result<Self>` (用户自己写, macro 不生成)
-- `ctx: &Context` 是构造参数,不是字段
-- 字段可以是任意类型,macro 不检查
-- 默认 `Error = anyhow::Error`,如果想自定义,加 `#[dsh_service(error = MyError)]`
+- Must implement `fn new(ctx: &Context) -> Result<Self>` (user writes it; the
+  macro does not generate it).
+- `ctx: &Context` is a constructor argument, not a field.
+- Fields can be any type; the macro does not check.
+- Default `Error = anyhow::Error`; to customize, add
+  `#[dsh_service(error = MyError)]`.
 
-### 2.4 为什么是薄糖
+### 2.4 Why it's thin sugar
 
-因为 `Service` trait 已经很简单,macro 只是省 `impl Service for X { ... }` 这 6 行 boilerplate。
+Because the `Service` trait is already simple; the macro just saves the 6
+lines of `impl Service for X { ... }` boilerplate.
 
-**用户也可以手写**:
+**Users can also write it by hand**:
 
 ```rust
 impl Service for MyService {
@@ -95,17 +108,18 @@ impl Service for MyService {
 }
 ```
 
-薄糖,但 6 行省下来,值得。
+Thin sugar, but those 6 lines are worth saving.
 
 ---
 
 ## 3. `#[dsh_listener]` — derive
 
-### 3.1 作用
+### 3.1 Purpose
 
-让 struct 能订阅 ctx 事件,展开成 `ctx.on(Event::X, fn)` 的注册集合。
+Let a struct subscribe to ctx events; expand into a registration set
+of `ctx.on(Event::X, fn)`.
 
-### 3.2 签名
+### 3.2 Signature
 
 ```rust
 #[dsh_listener]
@@ -122,7 +136,7 @@ async fn on_tool_call(&self, ctx: &Context, ev: &ToolCallEvent) -> Result<()> {
 }
 ```
 
-展开后(伪代码):
+After expansion (pseudocode):
 
 ```rust
 impl Listener for MyListener {
@@ -134,37 +148,43 @@ impl Listener for MyListener {
 }
 ```
 
-### 3.3 约束
+### 3.3 Constraints
 
-- struct 上 `#[dsh_listener]` + impl 内 `#[dsh_listener::on(Event::X)]` 配对
-- 函数签名必须是 `async fn(&self, &Context, &EventType) -> Result<()>`
-- 漏写 `&self` 或改 `&mut self` → 编译错误
-- `EventType` 必须是 `ctx.event::Event` 枚举的 variant
+- `#[dsh_listener]` on the struct + `#[dsh_listener::on(Event::X)]` on
+  individual functions, paired
+- Function signature must be `async fn(&self, &Context, &EventType) -> Result<()>`
+- Missing `&self` or changing to `&mut self` → compile error
+- `EventType` must be a variant of the `ctx.event::Event` enum
 
-### 3.4 为什么是 derive 不是 attribute
+### 3.4 Why derive instead of attribute
 
-derive 在 struct 上"声明我有 listener 能力",attribute 在 fn 上"声明我订阅哪个 event",**两个都要**。这里 macro 设计是**双重宏**:`#[dsh_listener]` 是 derive,`#[dsh_listener::on(...)]` 是 helper attribute。
+The derive on the struct "declares I have listener capability"; the attribute
+on the function "declares I subscribe to which event"; **both are needed**.
+This macro design is a **dual macro**: `#[dsh_listener]` is the derive,
+`#[dsh_listener::on(...)]` is a helper attribute.
 
 ---
 
-## 4. `#[dsh_tool]` — attribute (重头)
+## 4. `#[dsh_tool]` — attribute (heavy)
 
-### 4.1 作用
+### 4.1 Purpose
 
-把一个 Rust 函数注册成 model-callable 工具。函数签名 → JSON Schema → 喂给 LLM,LLM 调用时 → 反序列化参数 → 调函数。
+Register a Rust function as a model-callable tool. Function signature →
+JSON Schema → fed to the LLM; when the LLM calls → deserialize parameters
+→ call the function.
 
-### 4.2 签名
+### 4.2 Signature
 
 ```rust
-/// 给 LLM 看的工具描述,会进 schema
+/// Description visible to the LLM, will be in the schema
 #[dsh_tool]
 async fn search_files(
-    /// 搜索模式,支持 glob
+    /// Search pattern, supports glob
     pattern: String,
-    /// 搜索根目录,默认当前工作目录
+    /// Search root directory, default current working directory
     #[dsh_arg(default = ".")]
     root: String,
-    /// 是否递归
+    /// Whether to recurse
     #[dsh_arg(default = false)]
     recursive: bool,
 ) -> Result<Vec<String>> {
@@ -173,41 +193,41 @@ async fn search_files(
 }
 ```
 
-### 4.3 展开后 (伪代码)
+### 4.3 After expansion (pseudocode)
 
 ```rust
-// 1. 保留原函数
+// 1. Keep the original function
 async fn search_files(pattern: String, root: String, recursive: bool) -> Result<Vec<String>> { ... }
 
-// 2. 生成 schema 结构
+// 2. Generate the schema struct
 pub fn search_files_schema() -> ToolSchema {
     ToolSchema {
         name: "search_files",
-        description: "给 LLM 看的工具描述,会进 schema",  // 来自 doc comment
+        description: "Description visible to the LLM, will be in the schema",  // from doc comment
         parameters: json!({
             "type": "object",
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "搜索模式,支持 glob",
+                    "description": "Search pattern, supports glob",
                 },
                 "root": {
                     "type": "string",
-                    "description": "搜索根目录,默认当前工作目录",
+                    "description": "Search root directory, default current working directory",
                     "default": ".",
                 },
                 "recursive": {
                     "type": "boolean",
-                    "description": "是否递归",
+                    "description": "Whether to recurse",
                     "default": false,
                 },
             },
-            "required": ["pattern"],  // 没有 default 的字段是 required
+            "required": ["pattern"],  // fields without default are required
         }),
     }
 }
 
-// 3. 生成调用入口
+// 3. Generate the invocation entry point
 pub async fn search_files_invoke(args: serde_json::Value) -> Result<serde_json::Value> {
     let pattern: String = serde_json::from_value(args["pattern"].clone())?;
     let root: String = args.get("root")
@@ -224,92 +244,94 @@ pub async fn search_files_invoke(args: serde_json::Value) -> Result<serde_json::
     Ok(serde_json::to_value(result)?)
 }
 
-// 4. 生成注册入口 (供 plugin 装载时调用)
+// 4. Generate the registration entry point (called when plugin loads)
 pub fn search_files_register(registry: &mut ToolRegistry) {
     registry.register("search_files", search_files_schema(), search_files_invoke);
 }
 ```
 
-### 4.4 参数支持类型
+### 4.4 Supported parameter types
 
-| Rust 类型 | JSON Schema 类型 | 备注 |
-|---|---|---|
-| `String` | `string` | |
-| `&str` | `string` | (但 ownership 问题,推荐 `String`) |
-| `i32` / `i64` / `u32` / `u64` | `integer` | |
-| `f32` / `f64` | `number` | |
-| `bool` | `boolean` | |
-| `Vec<T>` | `array` (T 的 schema 递归) | |
-| `Option<T>` | nullable T | |
-| 自定义 struct (derive `JsonSchema`) | `object` | 通过 `schemars` 0.8 |
-| enum (derive `JsonSchema`) | `string` + `enum` | |
+| Rust type                              | JSON Schema type          | Notes                                       |
+|----------------------------------------|---------------------------|---------------------------------------------|
+| `String`                               | `string`                  |                                             |
+| `&str`                                 | `string`                  | (ownership issue; prefer `String`)          |
+| `i32` / `i64` / `u32` / `u64`         | `integer`                 |                                             |
+| `f32` / `f64`                          | `number`                  |                                             |
+| `bool`                                 | `boolean`                 |                                             |
+| `Vec<T>`                               | `array` (recursive T)     |                                             |
+| `Option<T>`                            | nullable T                |                                             |
+| custom struct (derive `JsonSchema`)    | `object`                  | via `schemars` 0.8                          |
+| enum (derive `JsonSchema`)             | `string` + `enum`         |                                             |
 
-### 4.5 约束 (硬性)
+### 4.5 Hard constraints
 
-- 必须 `async fn` (Week 1-2 限定,Phase 2 加 sync 工具)
-- 必须返回 `Result<T, E: Display>` (T 自动转 JSON,E 转 string)
-- 参数必须**全部有名** (Rust 函数参数本来就有,这里只是强调)
-- doc comment 第一段是 description
-- 参数 doc comment 是该字段 description
-- 漏写 doc comment → 编译警告 (`#[deny(missing_docs)]`)
+- Must be `async fn` (Week 1-2 limit; sync tools added in Phase 2)
+- Must return `Result<T, E: Display>` (T auto-converts to JSON, E to string)
+- Parameters must **all be named** (Rust function params already are; we
+  emphasize it)
+- First paragraph of the doc comment is the description
+- Per-parameter doc comment is the field description
+- Missing doc comment → compile warning (`#[deny(missing_docs)]`)
 
-### 4.6 约束 (软性 / 推荐)
+### 4.6 Soft constraints / recommendations
 
-- 命名:snake_case 函数名,自动作为 tool name
-- description:中文或英文都行,内部统一中文 (项目风格)
-- 工具名不要带 plugin 前缀 (避免污染,例如不要 `bash_run` 直接叫 `run_bash_command`)
+- Naming: snake_case function name, used as tool name automatically
+- Description: Chinese or English, internally unified to Chinese (project style)
+- Don't prefix tool name with plugin name (avoid pollution; e.g. don't
+  `bash_run`, just `run_bash_command`)
 
 ---
 
-## 5. `#[dsh_command]` — attribute (重头)
+## 5. `#[dsh_command]` — attribute (heavy)
 
-### 5.1 作用
+### 5.1 Purpose
 
-注册一个 CLI/REPL 指令(不是给 LLM 的,是给**人**调的)。
+Register a CLI/REPL command (not for the LLM, but for the **human** to call).
 
-### 5.2 签名
+### 5.2 Signature
 
 ```rust
-/// 启动一个 session
-#[dsh_command(name = "start", about = "启动一个新会话")]
+/// Start a session
+#[dsh_command(name = "start", about = "Start a new session")]
 async fn cmd_start(
-    /// session 名字
+    /// session name
     #[arg(long, short)]
     name: String,
-    /// model adapter 名
+    /// model adapter name
     #[arg(long, default_value = "openai")]
     adapter: String,
-    ctx: &Context,  // 自动注入,不进 schema
+    ctx: &Context,  // auto-injected, not in the schema
 ) -> Result<()> {
     // ...
 }
 ```
 
-### 5.3 跟 `#[dsh_tool]` 区别
+### 5.3 Difference from `#[dsh_tool]`
 
-| 维度 | `#[dsh_tool]` | `#[dsh_command]` |
-|---|---|---|
-| 调用者 | LLM | 人 (CLI) |
-| 参数解析 | JSON 反序列化 | clap |
-| 注册位置 | ToolRegistry | CommandRegistry |
-| schema 给谁看 | model prompt | `mah --help` |
-| 依赖 | `serde_json` | `clap` 4.x |
+| Dimension       | `#[dsh_tool]`             | `#[dsh_command]`                |
+|-----------------|---------------------------|---------------------------------|
+| Caller          | LLM                       | human (CLI)                     |
+| Arg parsing     | JSON deserialize          | clap                            |
+| Registry       | ToolRegistry              | CommandRegistry                 |
+| Schema audience | model prompt              | `mah --help`                    |
+| Dependency      | `serde_json`              | `clap` 4.x                      |
 
-### 5.4 展开后 (伪代码)
+### 5.4 After expansion (pseudocode)
 
 ```rust
-// 1. 保留原函数 (去掉 ctx 参数)
+// 1. Keep the original function (drop ctx arg)
 async fn cmd_start(name: String, adapter: String) -> Result<()> { ... }
 
-// 2. 生成 clap Command
+// 2. Generate the clap Command
 pub fn start_clap_cmd() -> clap::Command {
     clap::Command::new("start")
-        .about("启动一个 session")
-        .arg(clap::Arg::new("name").long("name").short('n').required(true).help("session 名字"))
-        .arg(clap::Arg::new("adapter").long("adapter").default_value("openai").help("model adapter 名"))
+        .about("Start a new session")
+        .arg(clap::Arg::new("name").long("name").short('n').required(true).help("session name"))
+        .arg(clap::Arg::new("adapter").long("adapter").default_value("openai").help("model adapter name"))
 }
 
-// 3. 生成调用入口 (接 clap matches)
+// 3. Generate the dispatch entry point (accepts clap matches)
 pub async fn start_dispatch(ctx: &Context, matches: &clap::ArgMatches) -> Result<()> {
     let name = matches.get_one::<String>("name").cloned().unwrap();
     let adapter = matches.get_one::<String>("adapter").cloned().unwrap();
@@ -317,21 +339,22 @@ pub async fn start_dispatch(ctx: &Context, matches: &clap::ArgMatches) -> Result
 }
 ```
 
-### 5.5 约束
+### 5.5 Constraints
 
-- 最后一个参数 `ctx: &Context` 自动从 ctx pool 取,不出现在 clap 里
-- `#[arg(...)]` 是 clap 标准,直接透传
-- 必须 `async fn` + `Result<()>`
+- Last parameter `ctx: &Context` is auto-injected from the ctx pool; not in clap
+- `#[arg(...)]` is clap's standard, passed through
+- Must be `async fn` + `Result<()>`
 
 ---
 
-## 6. `#[dsh_handler]` — attribute (重头)
+## 6. `#[dsh_handler]` — attribute (heavy)
 
-### 6.1 作用
+### 6.1 Purpose
 
-注册一个 model adapter (接 LLM API 的处理函数)。Phase 1 只有一个内置 OpenAI-compatible,但 trait 要可扩展。
+Register a model adapter (handler that talks to an LLM API). Phase 1 ships
+only one built-in OpenAI-compatible, but the trait must be extensible.
 
-### 6.2 签名
+### 6.2 Signature
 
 ```rust
 /// OpenAI Chat Completions adapter
@@ -354,39 +377,39 @@ pub async fn openai_handler(
 }
 ```
 
-### 6.3 跟 `#[dsh_tool]` / `#[dsh_command]` 区别
+### 6.3 Difference from `#[dsh_tool]` / `#[dsh_command]`
 
-| 维度 | `#[dsh_handler]` | `#[dsh_tool]` | `#[dsh_command]` |
-|---|---|---|---|
-| 调用者 | model loop | LLM | 人 |
-| 输入 | `ModelRequest` (强类型) | JSON (model 输出) | clap matches |
-| 输出 | `ModelResponse` (强类型) | JSON (给 LLM 回传) | `Result<()>` |
-| 注册位置 | `AdapterRegistry` | `ToolRegistry` | `CommandRegistry` |
-| 数量 | 每个 adapter 一个 | 每个 tool 一个 | 每个 cmd 一个 |
+| Dimension       | `#[dsh_handler]`           | `#[dsh_tool]`             | `#[dsh_command]`        |
+|-----------------|----------------------------|---------------------------|-------------------------|
+| Caller          | model loop                 | LLM                       | human                   |
+| Input           | `ModelRequest` (strong)    | JSON (model output)       | clap matches            |
+| Output          | `ModelResponse` (strong)   | JSON (back to LLM)        | `Result<()>`            |
+| Registry       | `AdapterRegistry`          | `ToolRegistry`            | `CommandRegistry`       |
+| Quantity        | one per adapter            | one per tool              | one per command         |
 
-### 6.4 约束
+### 6.4 Constraints
 
-- 函数签名 `async fn(ModelRequest, &Context) -> Result<ModelResponse>` 固定
-- `adapter = "..."` 是必填,作为注册 key
-- `endpoint` 默认从 env `MA_HARNESS_ADAPTER_<NAME>_ENDPOINT` 读
-- 内部实现 reqwest / tonic HTTP,错误用 `anyhow!` 包
+- Function signature `async fn(ModelRequest, &Context) -> Result<ModelResponse>` is fixed
+- `adapter = "..."` is required; used as the registry key
+- `endpoint` defaults to reading from env `MA_HARNESS_ADAPTER_<NAME>_ENDPOINT`
+- Internally uses reqwest / tonic HTTP; errors are wrapped with `anyhow!`
 
-### 6.5 Phase 2 扩展
+### 6.5 Phase 2 extensions
 
-- 流式响应 (`async_stream` / `futures::Stream`)
-- 多 model 协议 (Anthropic / 内部)
-- 模型选路策略
+- Streaming responses (`async_stream` / `futures::Stream`)
+- Multiple model protocols (Anthropic / internal)
+- Model selection strategy
 
 ---
 
-## 7. Macro 实现要点 (给 Week 1-2 写 macro 的自己看)
+## 7. Macro implementation notes (for the Week 1-2 author)
 
-### 7.1 crate 划分
+### 7.1 Crate layout
 
 ```
 crates/ma_harness_plugin_macro/        ← proc-macro crate
 ├── src/
-│   ├── lib.rs                ← re-export 5 个 macro
+│   ├── lib.rs                ← re-export 5 macros
 │   ├── service.rs            ← #[dsh_service] derive
 │   ├── listener.rs           ← #[dsh_listener] + #[dsh_listener::on]
 │   ├── tool.rs               ← #[dsh_tool] attribute
@@ -395,41 +418,44 @@ crates/ma_harness_plugin_macro/        ← proc-macro crate
 └── Cargo.toml                ← proc-macro = true
 ```
 
-### 7.2 依赖
+### 7.2 Dependencies
 
 ```toml
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
-schemars = "0.8"     # 给 tool 生成 JSON Schema
+schemars = "0.8"     # generate JSON Schema for tool
 serde_json = "1"
 ```
 
-### 7.3 编译期检查清单 (每个 macro 都要)
+### 7.3 Compile-time checks (each macro should have these)
 
-- [ ] 函数签名合法
-- [ ] 必填字段都有
-- [ ] snake_case / 命名规范 (per arch-map)
-- [ ] doc comment 完整
-- [ ] 类型在支持表里 (`#[dsh_tool]` 参数类型)
-- [ ] ctx / Result / async 三件套齐
+- [ ] function signature is valid
+- [ ] required fields all present
+- [ ] snake_case / naming convention (per arch-map)
+- [ ] doc comments complete
+- [ ] type is in the supported table (for `#[dsh_tool]` param types)
+- [ ] ctx / Result / async triple is present
 
-### 7.4 错误信息友好度
+### 7.4 Error message quality
 
-每个 macro 出错时,`compile_error!` 给出**带 span 的可读错误**,不要 `expected TokenTree`。
+Each macro error uses `compile_error!` to emit a **span-anchored, readable
+error**, not `expected TokenTree`.
 
-错误信息例子 (好):
+Good error:
+
 ```
-error: #[dsh_tool] 参数 `recursive` 类型 `bool` 不支持
-       支持的类型: String, integer, number, boolean, Vec<T>, Option<T>
+error: #[dsh_tool] parameter `recursive` of type `bool` is not supported
+       Supported types: String, integer, number, boolean, Vec<T>, Option<T>
   --> src/lib.rs:42:5
    |
 42 |     recursive: HashMap<String, String>,
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-错误信息例子 (差):
+Bad error:
+
 ```
 error: unexpected token
   --> src/lib.rs:42:5
@@ -440,14 +466,17 @@ error: unexpected token
 
 ---
 
-## 8. 例子:hello-world plugin
+## 8. Example: hello-world plugin
 
-> ⚠️ 真实插件作者**不应该**直接 use `ma_harness_cordis::*` (2026-08-18 锁定为内部 crate)。
-> 下面是**内部视角**的写法,展示 macro 实际工作。**插件作者视角**用
-> `ma_harness_seam::{Plugin, Service, Listener, ToolRegistry}` 走 seam 抽象层。
+> ⚠️ Real plugin authors **should not** directly `use ma_harness_cordis::*`
+> (locked as an internal crate on 2026-08-18).
+> Below is the **internal view** that shows how the macros actually work.
+> The **plugin author view** uses
+> `ma_harness_seam::{Plugin, Service, Listener, ToolRegistry}` through the
+> seam abstraction layer.
 
 ```rust
-// plugins/ma_harness_plugin_hello/src/lib.rs (内部视角示例)
+// plugins/ma_harness_plugin_hello/src/lib.rs (internal-view example)
 
 use ma_harness_cordis::{Context, Service, Plugin};
 use ma_harness_plugin_macro::{dsh_service, dsh_tool};
@@ -463,10 +492,10 @@ impl HelloService {
     }
 }
 
-/// 给 model 看的工具:向某人打招呼
+/// Tool visible to the model: greet someone
 #[dsh_tool]
 async fn greet(
-    /// 要打招呼的人的名字
+    /// Name of the person to greet
     who: String,
 ) -> anyhow::Result<String> {
     Ok(format!("Hello, {}!", who))
@@ -487,20 +516,21 @@ impl Plugin for HelloPlugin {
 
 ---
 
-## 9. 不做的 (避免诱惑)
+## 9. Things we don't do (avoiding temptation)
 
-| 想做的 | 不做 |
-|---|---|
-| 给 `#[dsh_service]` 加自动 ctx 注入 field | 用户自己 new(ctx) 写,清晰 |
-| `#[dsh_tool]` 支持自定义 schema 改写 | 等 Phase 2 有人提出再加 |
-| `#[dsh_command]` 支持子命令 (subcommand) | clap 4.x 自己支持,加 wrapper 复杂度不值 |
-| `#[dsh_handler]` 多个 endpoint 选路 | Phase 2 |
-| 给 listener 加 `priority` 参数 | Phase 2,Phase 1 顺序就是注册顺序 |
+| Want to do                                       | Why not                                                 |
+|--------------------------------------------------|---------------------------------------------------------|
+| Auto-inject ctx field for `#[dsh_service]`       | User writes `new(ctx)` themselves; clearer              |
+| `#[dsh_tool]` allow custom schema override       | Wait until someone asks in Phase 2                      |
+| `#[dsh_command]` support subcommands             | clap 4.x already does; adding a wrapper isn't worth it |
+| `#[dsh_handler]` multi-endpoint routing         | Phase 2                                                 |
+| `priority` parameter for listener                | Phase 2; Phase 1 order is registration order            |
 
 ---
 
-## 10. 变更记录
+## 10. Changelog
 
-| 日期 | 变更 |
-|---|---|
-| 2026-08-18 | 初版,5 个 proc-macro 签名 + 展开伪代码 + 约束 + 例子 |
+| Date       | Change |
+|------------|--------|
+| 2026-08-18 | Initial version: 5 proc-macro signatures + expansion pseudocode + constraints + examples |
+| 2026-08-20 | P11+ updates: Anthropic handler added in P11-5; vision handler in P11-5/9; dual macro design for `dsh_listener` / `dsh_listener::on` in actual implementation |

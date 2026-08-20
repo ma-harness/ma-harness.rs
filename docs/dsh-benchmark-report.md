@@ -4,6 +4,12 @@
 > **方法**: dsh 仓库 9 个 acp-snapshot fixture 转换 + `mah conformance --dsh` 跑分
 > **范围**: dsh acp-snapshot (内部测试集), **不含** Terminal Bench 2.1 / Toolathlon-Verified (外部 LLM benchmark)
 
+
+
+[English](docs/dsh-benchmark-report.md) — coming soon. 中文为主.
+
+[English](docs/dsh-benchmark-report.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

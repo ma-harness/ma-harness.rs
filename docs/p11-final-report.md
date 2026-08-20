@@ -4,6 +4,12 @@
 > **方法**: 逐任务实现 + 测试 + commit, 累计 7 commits
 > **范围**: P0 全部 (P11-1/1.5/2/3), P1 全部 (P11-4/5/6), P2 大部分 (P11-7/8/9, 跳 P11-10)
 
+
+
+[English](docs/p11-final-report.md) — coming soon. 中文为主.
+
+[English](docs/p11-final-report.md) — coming soon. 中文为主.
+
 ---
 
 ## TL;DR

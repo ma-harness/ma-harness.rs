@@ -2,6 +2,12 @@
 
 > **The recommended public API for plugin authors.** Other `ma-harness-*` crates (cordis, plugin-macro, core) are internal building blocks; plugin code should depend only on this crate to be insulated from internal refactors.
 
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+
+> **The recommended public API for plugin authors.** Other `ma-harness-*` crates (cordis, plugin-macro, core) are internal building blocks; plugin code should depend only on this crate to be insulated from internal refactors.
+
 Stable plugin API facade for the [ma-harness](https://gitee.com/yifenma/ma-harness.rs) AI agent orchestrator.
 
 ## Features
