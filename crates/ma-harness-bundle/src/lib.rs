@@ -144,9 +144,12 @@ pub enum BundleError {
     /// IO 错误
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    /// 解析错误
+    /// 解析错误 (TOML)
     #[error("parse error: {0}")]
     Parse(#[from] toml::de::Error),
+    /// JSON 错误 (lockfile)
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Bundle 结果类型
@@ -299,6 +302,112 @@ pub fn bundle_summary(bundle: &BundleManifest, resolved: &[ResolvedPlugin]) -> S
         out.push_str(&format!("    - {} @ {}{}\n", r.name, r.version, opt));
     }
     out
+}
+
+// ============================================================================
+// P12-7 v2: Lockfile (业务方 reproducible install)
+// ============================================================================
+
+/// Lockfile entry: 业务方 lock 的 plugin version (P12-7 v2)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockEntry {
+    /// Plugin name
+    pub name: String,
+    /// Locked version (concrete, not constraint)
+    pub version: semver::Version,
+    /// 原始 constraint (业务方 debug 用)
+    pub constraint: String,
+    /// 可选 flag (业务方 debug 用)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+}
+
+/// Lockfile (P12-7 v2)
+///
+/// 业务方 `mah bundle install` 时:
+/// 1. 解析 bundle.toml (constraint 版本)
+/// 2. 调 registry 找满足 constraint 的 latest version
+/// 3. 写 bundle.lock (concrete versions, 保证下次 install 同一版本)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BundleLock {
+    /// 锁定的 bundle 名
+    pub bundle_name: String,
+    /// 锁定的 bundle version
+    pub bundle_version: semver::Version,
+    /// 业务方 lock 时间 (unix epoch 秒)
+    #[serde(default)]
+    pub locked_at: u64,
+    /// 业务方 lock 的 plugin 列表
+    pub plugins: Vec<LockEntry>,
+}
+
+impl BundleLock {
+    /// 从 bundle + resolved plugins 构造 lockfile
+    pub fn from_resolved(
+        bundle: &BundleManifest,
+        resolved: &[ResolvedPlugin],
+        locked_at: u64,
+    ) -> Self {
+        let plugins = resolved
+            .iter()
+            .map(|r| {
+                // 业务方从 bundle.bundle.plugins 找原 constraint
+                let constraint = bundle
+                    .bundle
+                    .plugins
+                    .iter()
+                    .find(|p| p.name == r.name)
+                    .map(|p| p.version.clone())
+                    .unwrap_or_else(|| r.version.to_string());
+                LockEntry {
+                    name: r.name.clone(),
+                    version: r.version.clone(),
+                    constraint,
+                    optional: r.optional,
+                }
+            })
+            .collect();
+        Self {
+            bundle_name: bundle.name().to_string(),
+            bundle_version: bundle.version().clone(),
+            locked_at,
+            plugins,
+        }
+    }
+
+    /// 业务方按 name 找 lock entry
+    pub fn get(&self, name: &str) -> Option<&LockEntry> {
+        self.plugins.iter().find(|e| e.name == name)
+    }
+
+    /// 业务方按 name 找 concrete version
+    pub fn get_version(&self, name: &str) -> Option<&semver::Version> {
+        self.get(name).map(|e| &e.version)
+    }
+
+    /// 业务方 lockfile entries 数
+    pub fn len(&self) -> usize {
+        self.plugins.len()
+    }
+
+    /// 业务方 lockfile 是否空
+    pub fn is_empty(&self) -> bool {
+        self.plugins.is_empty()
+    }
+
+    /// 业务方序列化到 JSON file
+    pub fn save(&self, path: impl AsRef<std::path::Path>) -> Result<()> {
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// 业务方从 JSON file 加载
+    pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let lock: Self = serde_json::from_str(&content)?;
+        Ok(lock)
+    }
 }
 
 #[cfg(test)]
@@ -615,5 +724,105 @@ version = "^1.0"
         assert!(s.contains("summary-test v0.5.0"));
         assert!(s.contains("for testing"));
         assert!(s.contains("bash @ 1.5.0"));
+    }
+
+    // === P12-7 v2: lockfile tests ===
+
+    #[test]
+    fn lockfile_from_resolved() {
+        let reg = registry_with_plugins();
+        let b = load_bundle_from_str(
+            r#"
+[bundle]
+name = "lock-test"
+version = "0.1.0"
+
+[[bundle.plugins]]
+name = "bash"
+version = "^1.0"
+
+[[bundle.plugins]]
+name = "fs"
+version = "^0.5"
+optional = true
+"#,
+        )
+        .unwrap();
+        let resolved = b.resolve(&reg).unwrap();
+        let lock = BundleLock::from_resolved(&b, &resolved, 1234567890);
+
+        assert_eq!(lock.bundle_name, "lock-test");
+        assert_eq!(lock.bundle_version.to_string(), "0.1.0");
+        assert_eq!(lock.locked_at, 1234567890);
+        assert_eq!(lock.len(), 2);
+        assert_eq!(lock.plugins[0].name, "bash");
+        assert_eq!(lock.plugins[0].version.to_string(), "1.5.0");
+        assert_eq!(lock.plugins[0].constraint, "^1.0");
+        assert!(!lock.plugins[0].optional);
+        assert!(lock.plugins[1].optional);
+    }
+
+    #[test]
+    fn lockfile_save_load_roundtrip() {
+        let reg = registry_with_plugins();
+        let b = load_bundle_from_str(
+            r#"
+[bundle]
+name = "lock-rt"
+version = "0.1.0"
+
+[[bundle.plugins]]
+name = "bash"
+version = "^1.0"
+"#,
+        )
+        .unwrap();
+        let resolved = b.resolve(&reg).unwrap();
+        let lock = BundleLock::from_resolved(&b, &resolved, 1234567890);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bundle.lock");
+        lock.save(&path).unwrap();
+        let loaded = BundleLock::load(&path).unwrap();
+
+        assert_eq!(lock, loaded);
+    }
+
+    #[test]
+    fn lockfile_get_version() {
+        let reg = registry_with_plugins();
+        let b = load_bundle_from_str(
+            r#"
+[bundle]
+name = "lock-get"
+version = "0.1.0"
+
+[[bundle.plugins]]
+name = "bash"
+version = "^1.0"
+"#,
+        )
+        .unwrap();
+        let resolved = b.resolve(&reg).unwrap();
+        let lock = BundleLock::from_resolved(&b, &resolved, 0);
+
+        let v = lock.get_version("bash").unwrap();
+        assert_eq!(v.to_string(), "1.5.0");
+        assert!(lock.get_version("nonexistent").is_none());
+    }
+
+    #[test]
+    fn lockfile_empty_bundle() {
+        let b = load_bundle_from_str(
+            r#"
+[bundle]
+name = "empty"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        let lock = BundleLock::from_resolved(&b, &[], 0);
+        assert!(lock.is_empty());
+        assert_eq!(lock.len(), 0);
     }
 }
