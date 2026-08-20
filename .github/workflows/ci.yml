@@ -36,6 +36,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # 2026-08-21 (Day 101+1): clippy 跑 build.rs 触发 protoc, lint job 也要装
+      # (跟 build job 同样的逻辑, vendor/ 在 .gitignore, 只能用系统 protoc)
+      - name: Install protoc (Linux, lint)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
