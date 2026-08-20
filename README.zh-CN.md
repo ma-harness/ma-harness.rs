@@ -53,26 +53,43 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 
 ### 功能矩阵
 
-| 能力 | dsh v0.1 | ma-harness.rs | 备注 |
-|---|---|---|---|
-| 核心 agent 循环 (Session / Run / Event) | ✅ | ✅ | 行为等价 |
-| ACP (JSON-RPC 2.0 stdio) | ✅ | ✅ | P11-4 |
-| Plugin 系统 | ✅ | ✅ (扩展) | cordis + inventory + macro |
-| 审批服务 (工具调用前) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP |
-| TUI dashboard | 部分 | ✅ (P3.9) | ratatui |
-| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI 导出, SSE |
-| **Plugin Registry** (npm 风格) | n/a | ✅ (P11-6 / P12-5) | search/export/merge |
-| **Bundle** (lockfile 安装) | n/a | ✅ (P11-8 / P12-7) | reproducible |
-| **Vibe Coding artifact viewer** | n/a | ✅ (P11-7) | 10 种类型, 终端渲染 |
-| **DAG 编排** | n/a | ✅ (P12-9) | Kahn topo + short-circuit |
-| **多模态 vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic |
-| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | 指数 backoff + jitter |
-| **Wasm 沙箱** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4 层防御 |
-| **Landlock 沙箱** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) |
-| Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON |
-| crates.io publish | n/a | ✅ (P12-5) | 6 个 crate at 0.1.0 |
-| LLM 后端 | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | |
-| 实现语言 | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 |
+| 能力 | dsh v0.1 | ma-harness.rs | 备注 | 状态 |
+|---|---|---|---|---|
+| 核心 agent 循环 (Session / Run / Event) | ✅ | ✅ | 行为等价 | ✅ 完成 |
+| ACP (JSON-RPC 2.0 stdio) | ✅ | ✅ | P11-4 | ✅ 完成 |
+| Plugin 系统 | ✅ | ✅ (扩展) | cordis + inventory + macro | ✅ 完成 |
+| 审批服务 (工具调用前) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP | ✅ 完成 |
+| TUI dashboard | 部分 | ✅ (P3.9) | ratatui | ✅ 完成 |
+| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI 导出, SSE | ✅ 完成 |
+| **Plugin Registry** (npm 风格) | n/a | ✅ (P11-6 / P12-5) | search/export/merge | ✅ 完成 |
+| **Bundle** (lockfile 安装) | n/a | ✅ (P11-8 / P12-7) | reproducible | ✅ 完成 |
+| **Vibe Coding artifact viewer** | n/a | ✅ (P11-7) | 10 种类型, 终端渲染 | ✅ 完成 |
+| **DAG 编排** | n/a | ✅ (P12-9) | Kahn topo + short-circuit | ✅ 完成 |
+| **多模态 vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic | ✅ 完成 |
+| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | 指数 backoff + jitter | ✅ 完成 |
+| **Wasm 沙箱** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4 层防御 | ✅ 完成 |
+| **Landlock 沙箱** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) | ✅ 完成 |
+| Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON | ✅ 完成 |
+| crates.io publish | n/a | ✅ (P12-5) | 6 个 crate at 0.1.0 | ✅ 完成 |
+| LLM 后端 | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | | ✅ 完成 |
+| 实现语言 | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 | ✅ 完成 |
+
+### 🚧 未来 / 规划 (P13+)
+
+| Item | Phase | 推迟原因 | 阻塞 | 计划 |
+|---|---|---|---|---|
+| **Terminal Bench 2.1** 等价 | P11-2.5+ | 需要真 LLM API key + dataset (87.9% baseline) | 外部 (Deepseek API key + dataset access) | 业务方驱动, P11-2.5 文档在 `docs/dsh-benchmark-report.md` |
+| **Toolathlon-Verified** 等价 | P11-2.5+ | 同上 (74.1% baseline) | 外部 | 业务方驱动 |
+| **DSBench-FullStack** 等价 | P11-2.5+ | 同上 (71.1% baseline) | 外部 | 业务方驱动 |
+| **dsh → ma-harness 迁移工具** | P13 | 自动转换 dsh plugins/fixtures | 需要决定先转什么 | P13 业务方驱动 |
+| **Cargo workspaces** 集成 | P13 | `cargo install cargo-workspaces` 没做 (临时手撸 script) | install + verify | P13, 10 分钟 |
+| **PyO3 v2** (替换 subprocess) | P13+ | v1 (subprocess) 已能用, v2 (PyO3) 提速 10-100x | 需重设计 mah-py API | P13+, 低优先 |
+| **WASI preview2** 支持 | P13+ | wasmtime 27 还没完整 WASI preview2, 需要升 28+ | wasmtime 28+ 发布 | P13+, 低优先 |
+| **Plugin Registry 公开部署** | P13+ | P12-5 `export` 已能用, 缺 GitHub Pages 托管 | GH Pages 配置 | P13, 30 分钟 |
+| **ACP v3** (等 dsh 发布) | P13+ | 等 dsh v0.2 协议规范 | 外部 | 等 dsh 发 |
+| **crates.io 0.1.0 发版** | P12-5 | workflow + secrets 配好, 等 token | `CRATES_IO_TOKEN` (GH + Gitee) | 首次 push tag `v0.1.0` |
+| **mah-py 0.1.1 → pypi.org 生产** | P12-4 | 当前在 test.pypi.org | pypi.org token (跟 test.pypi 独立) | 业务方先验 test.pypi.org |
+| **跨平台 binary 发版** (Windows / macOS / Linux) | P13+ | mah.exe 本地 build OK, 缺 cross-compile + GH release workflow | cross-compile toolchain (cargo-cross / GH Actions matrix) | P13 |
 
 ### 测试覆盖
 

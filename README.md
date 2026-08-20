@@ -53,26 +53,43 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 
 ### Feature matrix
 
-| Capability | dsh v0.1 | ma-harness.rs | Notes |
-|---|---|---|---|
-| Core agent loop (Session / Run / Event) | ✅ | ✅ | behaviorally equivalent |
-| ACP (JSON-RPC 2.0 stdio) | ✅ | ✅ | P11-4 |
-| Plugin system | ✅ | ✅ (extended) | cordis + inventory + macro |
-| Approval service (user pre-tool) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP |
-| TUI dashboard | partial | ✅ (P3.9) | ratatui |
-| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI export, SSE |
-| **Plugin Registry** (npm-style) | n/a | ✅ (P11-6 / P12-5) | search/export/merge |
-| **Bundle** (lockfile install) | n/a | ✅ (P11-8 / P12-7) | reproducible |
-| **Vibe Coding Artifact viewer** | n/a | ✅ (P11-7) | 10 kinds, terminal render |
-| **DAG orchestration** | n/a | ✅ (P12-9) | Kahn topo + short-circuit |
-| **Multi-modal vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic |
-| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | exponential backoff + jitter |
-| **Wasm sandbox** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4-layer defense |
-| **Landlock sandbox** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) |
-| Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON |
-| crates.io publish | n/a | ✅ (P12-5) | 6 crates at 0.1.0 |
-| LLM backends | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | |
-| Language | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 |
+| Capability | dsh v0.1 | ma-harness.rs | Notes | Status |
+|---|---|---|---|---|
+| Core agent loop (Session / Run / Event) | ✅ | ✅ | behaviorally equivalent | ✅ done |
+| ACP (JSON-RPC 2.0 stdio) | ✅ | ✅ | P11-4 | ✅ done |
+| Plugin system | ✅ | ✅ (extended) | cordis + inventory + macro | ✅ done |
+| Approval service (user pre-tool) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP | ✅ done |
+| TUI dashboard | partial | ✅ (P3.9) | ratatui | ✅ done |
+| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI export, SSE | ✅ done |
+| **Plugin Registry** (npm-style) | n/a | ✅ (P11-6 / P12-5) | search/export/merge | ✅ done |
+| **Bundle** (lockfile install) | n/a | ✅ (P11-8 / P12-7) | reproducible | ✅ done |
+| **Vibe Coding Artifact viewer** | n/a | ✅ (P11-7) | 10 kinds, terminal render | ✅ done |
+| **DAG orchestration** | n/a | ✅ (P12-9) | Kahn topo + short-circuit | ✅ done |
+| **Multi-modal vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic | ✅ done |
+| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | exponential backoff + jitter | ✅ done |
+| **Wasm sandbox** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4-layer defense | ✅ done |
+| **Landlock sandbox** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) | ✅ done |
+| Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON | ✅ done |
+| crates.io publish | n/a | ✅ (P12-5) | 6 crates at 0.1.0 | ✅ done |
+| LLM backends | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | | ✅ done |
+| Language | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 | ✅ done |
+
+### 🚧 Future / Planned (P13+)
+
+| Item | Phase | Why deferred | Blocker | Plan |
+|---|---|---|---|---|
+| **Terminal Bench 2.1** parity | P11-2.5+ | Needs real LLM API key + dataset (87.9% baseline target) | external (Deepseek API key + dataset access) | business-driven, P11-2.5 docs in `docs/dsh-benchmark-report.md` |
+| **Toolathlon-Verified** parity | P11-2.5+ | Same as above (74.1% baseline target) | external | business-driven |
+| **DSBench-FullStack** parity | P11-2.5+ | Same as above (71.1% baseline target) | external | business-driven |
+| **dsh → ma-harness migration tool** | P13 | Tool to convert dsh plugins/fixtures automatically | needs decision on what to convert first | P13 business-driven |
+| **Cargo workspaces** integration | P13 | `cargo install cargo-workspaces` not done yet (manual script used) | install + verify | P13, 10-min task |
+| **PyO3 v2** (replace subprocess) | P13+ | v1 (subprocess) works, v2 (PyO3) gives 10-100x speedup | needs re-design of mah-py API | P13+, low priority |
+| **WASI preview2** support | P13+ | wasmtime 27 has partial WASI, full preview2 needs upgrade | wasmtime 28+ release | P13+, low priority |
+| **Plugin Registry public deployment** | P13+ | P12-5 `export` works, need GitHub Pages hosting | GH Pages config | P13, 30-min task |
+| **ACP v3** (when dsh ships) | P13+ | wait for dsh v0.2 protocol spec | external | when dsh ships |
+| **crates.io 0.1.0 release** | P12-5 | workflow + secrets in place, waiting for token | `CRATES_IO_TOKEN` for GH + Gitee | first push tag `v0.1.0` |
+| **mah-py 0.1.1 → pypi.org production** | P12-4 | Currently on test.pypi.org only | pypi.org token (separate from test.pypi.org) | business verifies test.pypi.org first |
+| **Cross-platform binary releases** (Windows / macOS / Linux) | P13+ | mah.exe builds locally; need cross-compile + GH release workflow | cross-compile toolchain (cargo-cross / GitHub Actions matrix) | P13 |
 
 ### Test coverage
 
