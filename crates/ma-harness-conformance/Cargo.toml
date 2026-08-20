@@ -41,3 +41,7 @@ ma-harness-plugin-cordis = { path = "../../plugins/ma-harness-plugin-cordis" }
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 insta = { workspace = true }
+
+[[bench]]
+name = "dsh_cache"
+harness = false

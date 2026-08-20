@@ -47,6 +47,8 @@
 use crate::fixture::{ExpectedEvent, Fixture, FixtureCategory, FixtureEvent, FixtureInput, FixtureOutput};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use thiserror::Error;
 
 /// dsh 风格 fixture (待校准).
@@ -276,6 +278,153 @@ pub fn parse_dsh_jsonl(content: &str) -> Result<Vec<Fixture>, DshError> {
         out.push(dsh_to_fixture(dsh));
     }
     Ok(out)
+}
+
+/// P12-1 性能优化: dsh fixture 缓存 (按 path + mtime)
+///
+/// 业务方反复跑同一文件时, 跳过重复 parse. 业务方线程安全 (用 Mutex).
+#[derive(Debug, Default)]
+pub struct DshFixtureCache {
+    cache: std::sync::Mutex<BTreeMap<PathBuf, CacheEntry>>,
+}
+
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    /// File mtime (for invalidation)
+    mtime: SystemTime,
+    /// Parsed fixtures
+    fixtures: Vec<Fixture>,
+}
+
+impl DshFixtureCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get parsed fixtures from file, with mtime-based caching.
+    ///
+    /// 业务方重复调 `from_jsonl_cached` 同一 path, 只 parse 一次 (file 不变).
+    /// 业务方修改 file 后, mtime 变, 重新 parse.
+    pub fn from_jsonl_cached(&self, path: impl AsRef<Path>) -> Result<Vec<Fixture>, DshError> {
+        let path = path.as_ref().to_path_buf();
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map_err(DshError::Io)?;
+
+        let mut cache = self.cache.lock().expect("cache lock poisoned");
+
+        // 检查 cache 命中
+        if let Some(entry) = cache.get(&path) {
+            if entry.mtime == mtime {
+                return Ok(entry.fixtures.clone());
+            }
+        }
+
+        // Cache miss 或 mtime 变 → 重 parse
+        let content = std::fs::read_to_string(&path).map_err(DshError::Io)?;
+        let fixtures = parse_dsh_jsonl(&content)?;
+        cache.insert(
+            path,
+            CacheEntry {
+                mtime,
+                fixtures: fixtures.clone(),
+            },
+        );
+        Ok(fixtures)
+    }
+
+    /// 清空缓存 (业务方主动, e.g. file 改动频繁场景)
+    pub fn clear(&self) {
+        self.cache.lock().expect("cache lock poisoned").clear();
+    }
+
+    /// 当前缓存大小
+    pub fn len(&self) -> usize {
+        self.cache.lock().expect("cache lock poisoned").len()
+    }
+
+    /// 是否空
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn dsh_fixture_cache_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"name":"a","input":{{"session_id":"s","events":[]}},"expected_output":{{"events":[]}}}}"#).unwrap();
+        drop(f);
+
+        let cache = DshFixtureCache::new();
+        assert!(cache.is_empty());
+
+        // 第一次: cache miss
+        let f1 = cache.from_jsonl_cached(&path).unwrap();
+        assert_eq!(f1.len(), 1);
+        assert_eq!(cache.len(), 1);
+
+        // 第二次: cache hit (mtime 没变)
+        let f2 = cache.from_jsonl_cached(&path).unwrap();
+        assert_eq!(f2.len(), 1);
+        assert_eq!(cache.len(), 1);  // 还是 1 个 entry
+    }
+
+    #[test]
+    fn dsh_fixture_cache_mtime_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"name":"a","input":{"session_id":"s","events":[]},"expected_output":{"events":[]}}"#,
+        )
+        .unwrap();
+
+        let cache = DshFixtureCache::new();
+        let _f1 = cache.from_jsonl_cached(&path).unwrap();
+
+        // Sleep 让 mtime 变 (Windows 文件系统 mtime 精度 100ns+)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(
+            &path,
+            r#"{"name":"a","input":{"session_id":"s","events":[]},"expected_output":{"events":[]}}
+{"name":"b","input":{"session_id":"s","events":[]},"expected_output":{"events":[]}}"#,
+        )
+        .unwrap();
+
+        let f2 = cache.from_jsonl_cached(&path).unwrap();
+        assert_eq!(f2.len(), 2, "mtime change should invalidate cache");
+    }
+
+    #[test]
+    fn dsh_fixture_cache_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"name":"a","input":{"session_id":"s","events":[]},"expected_output":{"events":[]}}"#,
+        )
+        .unwrap();
+
+        let cache = DshFixtureCache::new();
+        cache.from_jsonl_cached(&path).unwrap();
+        assert_eq!(cache.len(), 1);
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn dsh_fixture_cache_nonexistent() {
+        let cache = DshFixtureCache::new();
+        let result = cache.from_jsonl_cached("/nonexistent/path.jsonl");
+        assert!(result.is_err());
+    }
 }
 
 #[cfg(test)]
