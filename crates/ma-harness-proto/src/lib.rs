@@ -35,6 +35,12 @@
 // protoc 生成的 .rs 没 doc comments, 抑制 `missing_docs` lint (rust 1.94+ 默认 warn)
 // 整个 crate 都是 generated code (mod ma_harness::v1), 没必要 enforce doc
 #![allow(missing_docs)]
+// tonic-build 生成的 gRPC server trait 返回 `Result<Response, Status>`, Status 是
+// 176+ bytes 的结构体, rust 1.99 nightly 新加 `result_large_err` lint 会报 4 处
+// (line 433/458/483/505 in target/.../out/ma_harness.v1.rs)。我们不修改 generated
+// code, 在 crate 顶部 inner attr 抑制这个 lint, 跟 `missing_docs` 同款, 覆盖
+// include_proto! 宏展开进来的全部 generated 代码。
+#![allow(clippy::result_large_err)]
 
 /// tonic-build 生成的 Protobuf 代码 (3 个 .proto 的 message + service)
 pub mod ma_harness {
