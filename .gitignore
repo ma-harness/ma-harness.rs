@@ -1,5 +1,6 @@
 ﻿# Rust / Cargo
 /target/
+**/target/
 **/*.rs.bk
 Cargo.lock.bak
 
@@ -52,3 +53,9 @@ desktop.ini
 
 # vendor (本地 protoc 镜像)
 vendor/
+
+# filter-repo 备份 (author 改写时生成, 内容跟 .git 一样, 不需要 commit)
+/.git.bad/
+/.git.broken/
+/.git.filter-repo/
+

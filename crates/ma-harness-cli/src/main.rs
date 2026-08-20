@@ -659,6 +659,10 @@ fn run_conformance(fixtures_path: &PathBuf, dsh: bool, output: &PathBuf, verbose
             "WARNING: pass rate {:.1}% < 95% target (see report for diffs)",
             summary.pass_rate * 100.0
         );
+        // CI gating: 业务方脚本可以靠 exit code 判 conformance 是否通过。
+        // dsh_synthetic 跟 dsh_snap 都 100%, smoke by design 5/8 = 62.5% 也算 by design (3 fixture 测
+        // 比较器抓 mismatch). 业务方可用 `--dsh` flag 跑 dsh 测避免 smoke 干扰, 或改 meets_target 阈值。
+        std::process::exit(1);
     }
 
     // 4. 写报告

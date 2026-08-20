@@ -75,25 +75,8 @@ impl std::fmt::Debug for ToolRegistry {
     }
 }
 
-/// P7-2.3 启发式: 工具名匹配 risk level (P7-3 后 fallback 走 `tool_pipeline::infer_risk_level`)
-/// TODO(P7-3): 工具注册时声明 `risk_level`, 走 `ToolEntry.risk_level` 字段
-#[deprecated(note = "P7-3 后用 `tool_pipeline::infer_risk_level` 兜底, 业务方应显式 `ToolConfig.risk_level`")]
-fn infer_risk_level(tool_name: &str) -> RiskLevel {
-    if tool_name.contains("delete") || tool_name.contains("rm") || tool_name.contains("chmod") {
-        RiskLevel::High
-    } else if tool_name.contains("write")
-        || tool_name.contains("append")
-        || tool_name.contains("edit")
-        || tool_name.contains("create")
-    {
-        RiskLevel::Medium
-    } else if tool_name.contains("plugin") || tool_name.contains("config") {
-        RiskLevel::Critical
-    } else {
-        // read / list / search / log / echo / fetch 等只读
-        RiskLevel::Low
-    }
-}
+/// P7-2.3 启发式已迁移到 `tool_pipeline::infer_risk_level` (P7-3 收尾).
+/// 业务方应显式 `ToolConfig.risk_level`; None 时 tool_pipeline 兜底.
 impl ToolRegistry {
     /// 新建
     pub fn new() -> Self {
