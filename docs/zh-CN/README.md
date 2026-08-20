@@ -16,6 +16,7 @@
 
 ### 业务方 (用 ma-harness 跑 agent)
 
+- **[使用手册](user-guide/README.md)** — 7 篇 step-by-step 指南 (安装 / 快速开始 / 部署 / 插件 / 跑分 / 排错)
 - [快速开始](../../crates/mah-py/README.md) — Python SDK `mah-py`
 - [快速开始 (CLI)](../../crates/ma-harness-cli/) — `mah` 命令行
 - [ACP 互通 (跟 dsh)](../../crates/ma-harness-cli/src/acp.rs) — `mah acp serve` 跟 dsh / Codex 互通
@@ -79,6 +80,7 @@
 
 ### Roadmap / 路线
 
+- **[开发计划 (单源)](development-plan.md)** — P0-P12 phases + 累计 + P15+ 未来 (推荐入口)
 - [Roadmap Phase 7](reports/roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
 - [Roadmap Phase 11](reports/roadmap-phase-11.md) — P11 (跟 dsh 对齐)
 - [P11 baseline 报告](reports/p11-baseline-report.md)
@@ -97,6 +99,17 @@
 - [ma-harness-bundle](../../crates/ma-harness-bundle/) — Bundle 13 tests
 - [ma-harness-artifact](../../crates/ma-harness-artifact/) — Vibe Coding 25 tests
 - [ACP (CLI 模块)](../../crates/ma-harness-cli/src/acp.rs) — JSON-RPC 2.0 server
+- [运维: registry GH Pages 部署](../en/operations/registry-pages.md) — plugin registry 网页部署 setup 指南 (英文, 中文翻译待办)
+
+### 使用手册 (P15+ 新建)
+
+- [使用手册入口](user-guide/README.md) — 30 秒概览 + 阅读顺序
+- [1. 安装](user-guide/01-installation.md)
+- [2. 快速开始](user-guide/02-quick-start.md)
+- [3. Server 部署](user-guide/03-server.md)
+- [4. 插件](user-guide/04-plugins.md)
+- [5. Conformance 跑分](user-guide/05-conformance.md)
+- [6. 故障排查](user-guide/06-troubleshooting.md)
 
 ### API 参考
 
@@ -109,24 +122,27 @@
 
 ---
 
-## 文档完整性 (P12-3 v1 收官时)
+## 文档完整性 (P15+ 收官: user-guide + 开发计划)
 
 | 类别 | 数量 | 状态 |
 |---|---|---|
 | 架构 / 设计 | 5 (+i18n) | ✅ |
 | Conformance / 跑分 | 8 | ✅ |
-| Roadmap / 路线 | 5 | ✅ |
+| Roadmap / 路线 | 1 (开发计划) + 4 历史 | ✅ |
 | 实验 / 评估 | 2 | ✅ |
+| 使用手册 (P15+ 新建) | 6 + 1 README | ✅ |
+| 运维指南 (P14) | 1 (registry-pages) | ✅ |
 | Crate 内部 README | 8 + 8 (.zh-CN) | ✅ |
 | API 参考 (OpenAPI) | 1 + 1 (zh-CN) | ✅ |
-| 决策日志 | 1 (~80 KB, 39 章节) | ✅ |
-| **总计** | **30 markdown + 2 OpenAPI** | **✅** |
+| 决策日志 | 4 part + master (~150 KB, §1-42) | ✅ |
+| **总计** | **~45 markdown + 2 OpenAPI** | **✅** |
 
 ## 业务方读法
 
-1. **新业务方**: [Python SDK README](../../crates/mah-py/README.md) → 5 examples → [ACP 模块](../../crates/ma-harness-cli/src/acp.rs)
+1. **新业务方**: [使用手册](user-guide/README.md) → [安装](user-guide/01-installation.md) → [快速开始](user-guide/02-quick-start.md) → [Python SDK](../../crates/mah-py/README.md)
 2. **改 ma-harness 内部**: [架构总览](ma-harness-arch-map.md) → [conformance 设计](conformance-design.md) → [决策日志](decision-log.md)
 3. **跑 Terminal Bench**: [dsh-benchmark-report](reports/dsh-benchmark-report.md) → [P11 全收官报告](reports/p11-final-report.md) → [P12 全收官报告](reports/p12-final-report.md)
+4. **跟项目 roadmap**: [开发计划](development-plan.md) → [决策日志](decision-log.md) → [周报](weekly/)
 
 ## 给后来人
 

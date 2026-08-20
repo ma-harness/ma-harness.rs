@@ -18,6 +18,7 @@
 
 ### Application developers (using ma-harness to run an agent)
 
+- **[User manual](user-guide/README.md)** — 7 step-by-step guides (install / quick-start / server / plugins / conformance / troubleshooting)
 - [Quick start](../../crates/mah-py/README.md) — Python SDK `mah-py`
 - [Quick start (CLI)](../../crates/ma-harness-cli/) — `mah` command line
 - [ACP (Agent Communication Protocol)](../../crates/ma-harness-cli/src/acp.rs) — `mah acp serve` interoperates with dsh / Codex
@@ -79,6 +80,7 @@
 
 ### Roadmap
 
+- **[Development plan (single-source)](development-plan.md)** — P0–P12 phases, totals, P15+ future (recommended entry)
 - [Roadmap Phase 7](../zh-CN/reports/roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
 - [Roadmap Phase 11](../zh-CN/reports/roadmap-phase-11.md) — P11 (dsh parity)
 - [P11 baseline report](../zh-CN/reports/p11-baseline-report.md)
@@ -97,6 +99,17 @@
 - [ma-harness-bundle](../../crates/ma-harness-bundle/) — Bundle 13 tests
 - [ma-harness-artifact](../../crates/ma-harness-artifact/) — Vibe Coding 25 tests
 - [ACP (CLI module)](../../crates/ma-harness-cli/src/acp.rs) — JSON-RPC 2.0 server
+- [Operations: registry GH Pages deploy](operations/registry-pages.md) — setup guide for plugin registry web page
+
+### User manual (P15+ new)
+
+- [User guide overview](user-guide/README.md) — 30-second tour + reading order
+- [1. Installation](user-guide/01-installation.md)
+- [2. Quick start](user-guide/02-quick-start.md)
+- [3. Server deployment](user-guide/03-server.md)
+- [4. Plugins](user-guide/04-plugins.md)
+- [5. Conformance](user-guide/05-conformance.md)
+- [6. Troubleshooting](user-guide/06-troubleshooting.md)
 
 ### API reference
 
@@ -109,24 +122,27 @@
 
 ---
 
-## Doc Completeness (as of P12-3 v1 wrap-up + i18n pass)
+## Doc Completeness (as of P15+ wrap-up: user-guide + dev-plan)
 
 | Category                   | Count              | Status |
 |----------------------------|--------------------|--------|
 | Architecture / design      | 5 (+i18n)          | ✅     |
 | Conformance / benchmark    | 8                  | ✅     |
-| Roadmap                    | 5                  | ✅     |
+| Roadmap                    | 1 (development-plan) + 4 historical | ✅ |
 | Experiments / evaluations  | 2                  | ✅     |
+| User manual (P15+ new)     | 6 + 1 README        | ✅     |
+| Operations guides (P14)    | 1 (registry-pages)  | ✅     |
 | Crate-internal README      | 8 + 8 (.zh-CN)     | ✅     |
 | API reference (OpenAPI)    | 1 + 1 (zh-CN)      | ✅     |
-| Decision log               | 1 (~80 KB, 39 sections) | ✅ |
-| **Total**                  | **30 markdown + 2 OpenAPI** | **✅** |
+| Decision log               | 4 parts + master (~150 KB, §1-42) | ✅ |
+| **Total**                  | **~45 markdown + 2 OpenAPI** | **✅** |
 
 ## Reading paths
 
-1. **New application developer**: [Python SDK README](../../crates/mah-py/README.md) → 5 examples → [ACP module](../../crates/ma-harness-cli/src/acp.rs)
+1. **New application developer**: [User guide README](user-guide/README.md) → [Installation](user-guide/01-installation.md) → [Quick start](user-guide/02-quick-start.md) → [Python SDK README](../../crates/mah-py/README.md)
 2. **Modifying ma-harness internals**: [Architecture map](ma-harness-arch-map.md) → [Conformance design](conformance-design.md) → [Decision log](../zh-CN/decision-log.md)
 3. **Running Terminal Bench**: [dsh benchmark report](../zh-CN/reports/dsh-benchmark-report.md) → [P11 final report](../zh-CN/reports/p11-final-report.md) → [P12 final report](../zh-CN/reports/p12-final-report.md)
+4. **Following the project roadmap**: [Development plan](development-plan.md) → [Decision log](../zh-CN/decision-log.md) → [Weekly reports](weekly/)
 
 ## Notes for future contributors
 

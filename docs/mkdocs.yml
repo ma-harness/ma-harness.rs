@@ -56,12 +56,21 @@ docs_dir: "."
 
 nav:
   - 首页: en/README.md
+  - 使用手册 (User Guide):
+      - 概览: en/user-guide/README.md
+      - 1. 安装: en/user-guide/01-installation.md
+      - 2. 快速开始: en/user-guide/02-quick-start.md
+      - 3. Server 部署: en/user-guide/03-server.md
+      - 4. 插件: en/user-guide/04-plugins.md
+      - 5. Conformance 跑分: en/user-guide/05-conformance.md
+      - 6. 故障排查: en/user-guide/06-troubleshooting.md
   - 业务方 (User):
       - Python SDK: ../crates/mah-py/README.md
       - ACP 互通 (CLI): ../crates/ma-harness-cli/src/acp.rs
       - Plugin Registry: ../crates/ma-harness-registry/README.md
       - Bundle 概念: ../crates/ma-harness-bundle/README.md
       - Artifact Viewer: ../crates/ma-harness-artifact/README.md
+      - Registry GH Pages 部署: en/operations/registry-pages.md
   - 架构 (Architecture):
       - 架构总览: en/ma-harness-arch-map.md
       - 技术栈: en/tech-stack.md
@@ -78,7 +87,8 @@ nav:
       - week 11 conformance 报告: zh-CN/reports/conformance-report-week11.md
       - week 11 benchmark 报告: zh-CN/reports/benchmark-report-week11.md
       - Benchmark 设计: en/benchmark-design.md
-  - Roadmap (路线):
+  - 路线 (Roadmap):
+      - 单源开发计划: en/development-plan.md
       - Phase 7-10: zh-CN/reports/roadmap-phase-7.md
       - Phase 11: zh-CN/reports/roadmap-phase-11.md
   - 实验 (Experiments):
