@@ -61,6 +61,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # 跨平台装 protoc (Windows 用 choco, Linux 用 apt, macOS 用 brew)
+      # build.rs 直接用系统 PATH 里的 protoc, 不依赖 vendor (vendor/ 在 .gitignore)
+      - name: Install protoc (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install -y protoc
+
       - name: Install protoc (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
