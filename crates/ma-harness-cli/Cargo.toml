@@ -28,6 +28,7 @@ ma-harness-code = { path = "../ma-harness-code" }  # 2026-08-19 (Day 68): Phase 
 ma-harness-model = { path = "../ma-harness-model" }  # 2026-08-19 (Day 73): Phase 3.3 LLM↔Code Mode 端到端
 ma-harness-sandbox = { path = "../ma-harness-sandbox" }  # 2026-08-19 (Day 78): Phase 3.7 landlock 集成
 ma-harness-tui = { path = "../ma-harness-tui" }  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard
+ma-harness-registry = { path = "../ma-harness-registry" }  # 2026-08-20 (P14): P12-5 export 集成到 CLI
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
 # 外部
 clap = { workspace = true }
@@ -50,3 +51,5 @@ serde_json = { workspace = true }  # P11-4 (Day 101+1): ACP JSON-RPC 2.0
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }  # P12-6 v2: integration tests
+semver = { workspace = true }  # P14: registry CLI tests
+chrono = { workspace = true }  # P14: registry CLI tests

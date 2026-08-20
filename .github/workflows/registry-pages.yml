@@ -1,0 +1,159 @@
+name: Registry Pages
+
+# P14 (2026-08-20): 部署 ma-harness Plugin Registry 到 GitHub Pages
+# 触发: push to main 修改 ~/.ma-harness/registry.json OR manual trigger
+# 流程: install mah CLI -> 跑 conformance smoke + dsh_synthetic -> 导出 registry ->
+#        生成静态 index.html -> deploy 到 gh-pages 分支
+#
+# 业务方 setup (one-time):
+#   1. GitHub repo → Settings → Pages → Source: "GitHub Actions"
+#   2. 业务方本地 `mah plugin publish <manifest.json>` 把 plugin 写到
+#      `~/.ma-harness/registry.json`, 然后 commit + push
+#   3. workflow 自动 deploy, 业务方访问
+#      `https://ma-harness.github.io/ma-harness.rs/registry/` 看 plugin 列表
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/registry-pages.yml'
+      - 'docs/registry/**'
+  workflow_dispatch:  # 业务方手动触发 (调试用)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 避免并发 deploy
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # ============================================================================
+  # Build: 跑 mah CLI 导出 registry + 生成静态 index.html
+  # ============================================================================
+  build:
+    name: Build registry site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build mah CLI
+        run: cargo build --release -p ma-harness-cli
+
+      - name: Prepare registry file
+        run: |
+          mkdir -p docs/registry
+          if [ -f docs/registry/registry.json ]; then
+            echo "Using committed docs/registry/registry.json"
+            cp docs/registry/registry.json /tmp/registry.json
+          elif [ -f ~/.ma-harness/registry.json ]; then
+            echo "Using ~/.ma-harness/registry.json"
+            cp ~/.ma-harness/registry.json /tmp/registry.json
+          else
+            echo "Warning: no registry file found, generating demo registry"
+            cat > /tmp/registry.json <<'EOF'
+          {
+            "plugins": {}
+          }
+          EOF
+          fi
+
+      - name: Generate static index.html
+        env:
+          REGISTRY: /tmp/registry.json
+        run: |
+          cat > /tmp/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>ma-harness Plugin Registry</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #24292e; }
+              h1 { border-bottom: 1px solid #eaecef; padding-bottom: 0.3em; }
+              h2 { border-bottom: 1px solid #eaecef; padding-bottom: 0.2em; margin-top: 2em; }
+              code { background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-size: 90%; }
+              .plugin { border: 1px solid #e1e4e8; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+              .plugin h3 { margin-top: 0; }
+              .tag { display: inline-block; background: #ddf4ff; color: #0366d6; padding: 0.15em 0.5em; border-radius: 3px; font-size: 85%; margin-right: 0.3em; }
+              .meta { color: #586069; font-size: 90%; }
+            </style>
+          </head>
+          <body>
+            <h1>ma-harness Plugin Registry</h1>
+            <p>Browse and install third-party plugins for <a href="https://github.com/ma-harness/ma-harness.rs">ma-harness.rs</a>.</p>
+            <p>To install a plugin: <code>mah plugin install &lt;name&gt;@&lt;version&gt;</code></p>
+            <p>To publish your own: see <a href="https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/operations/registry-pages.md">docs/en/operations/registry-pages.md</a></p>
+          HTML
+
+          # 用 Python 解析 registry.json + 生成 plugin 列表
+          python3 - <<'PY'
+          import json
+          with open('/tmp/registry.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          plugins = data.get('plugins', {})
+          if not plugins:
+              print('<p><em>No plugins published yet. Check back soon!</em></p>')
+          else:
+              for name, versions in sorted(plugins.items()):
+                  print(f'<h2>{name}</h2>')
+                  for v in versions:
+                      desc = v.get('description', '(no description)')
+                      author = v.get('author', 'unknown')
+                      ver = v.get('version', '?')
+                      tags = v.get('tags', [])
+                      source = v.get('source', {})
+                      source_str = ''
+                      if 'local' in source:
+                          source_str = f"<code>local:{source['local']}</code>"
+                      elif 'git' in source:
+                          source_str = f"<code>git:{source['git']}</code>"
+                      elif 'http' in source:
+                          source_str = f"<code>http:{source['http']}</code>"
+                      tag_html = ' '.join(f'<span class="tag">{t}</span>' for t in tags)
+                      print(f'''
+          <div class="plugin">
+            <h3>{name} <code>{ver}</code></h3>
+            <p>{desc}</p>
+            <p class="meta">by {author} · {tag_html}</p>
+            <p class="meta">source: {source_str}</p>
+          </div>''')
+          PY
+
+          echo '</body></html>' >> /tmp/index.html
+
+      - name: Setup Pages artifact
+        run: |
+          mkdir -p _site
+          cp /tmp/index.html _site/index.html
+          cp /tmp/registry.json _site/registry.json
+          ls -la _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  # ============================================================================
+  # Deploy
+  # ============================================================================
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

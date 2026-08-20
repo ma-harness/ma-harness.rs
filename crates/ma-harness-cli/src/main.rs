@@ -25,6 +25,7 @@ use ma_harness_proto::ma_harness::v1::{
     agent_service_server::AgentServiceServer, session_service_server::SessionServiceServer,
 };
 use ma_harness_seam::{PluginLoader, PluginRegistry};
+use ma_harness_registry::Registry;  // P14 (2026-08-20): registry list/export CLI
 // Phase 2.2 (T2.2): 引用 hello plugin 触发 link, inventory::submit! 才有 effect
 #[allow(unused_imports)]
 use ma_harness_plugin_hello as _hello;
@@ -120,6 +121,16 @@ enum Commands {
     Bench {
         /// 单 crate (e.g. ma_harness_cordis) 不传跑全部
         crate_name: Option<String>,
+    },
+    /// **P14 (2026-08-20)**: Plugin Registry 列表 / 导出 (GH Pages 部署用)
+    ///
+    /// 例子:
+    ///   mah registry list
+    ///   mah registry list --registry ~/.ma-harness/registry.json
+    ///   mah registry export --output docs/registry/registry.json
+    Registry {
+        #[command(subcommand)]
+        action: RegistryAction,
     },
     /// 版本
     Version,
@@ -253,6 +264,28 @@ enum OpenApiAction {
 }
 
 #[derive(Subcommand, Debug)]
+enum RegistryAction {
+    /// 列已 publish 的 plugin (默认 `~/.ma-harness/registry.json`)
+    List {
+        /// Registry JSON file (默认 `~/.ma-harness/registry.json`)
+        #[arg(long)]
+        registry: Option<std::path::PathBuf>,
+    },
+    /// 导出 registry 到 JSON file (供 GH Pages 静态站消费)
+    ///
+    /// 业务方 workflow: `mah registry export --output registry.json`
+    /// 跟 `registry-pages.yml` workflow 配合, 自动部署到 GH Pages
+    Export {
+        /// 输出 JSON file
+        #[arg(long, default_value = "registry.json")]
+        output: std::path::PathBuf,
+        /// Registry JSON file (默认 `~/.ma-harness/registry.json`)
+        #[arg(long)]
+        registry: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum SandboxAction {
     /// Enforce landlock/seatbelt/stub 沙箱 (不可逆)
     Apply {
@@ -348,6 +381,10 @@ async fn main() -> Result<()> {
         }
         Commands::Acp { action } => match action {
             AcpAction::Serve { model } => Box::pin(acp::run_acp_server(&model)).await,
+        },
+        Commands::Registry { action } => match action {
+            RegistryAction::List { registry } => registry_list(registry.as_deref()),
+            RegistryAction::Export { output, registry } => registry_export(&output, registry.as_deref()),
         },
     }
 }
@@ -1180,6 +1217,165 @@ fn print_sandbox_status() -> Result<()> {
         println!("  - warn + no-op, 业务方 fs 不受限制");
     }
     Ok(())
+}
+
+/// **P14 (2026-08-20)**: 业务方 publish 后的 plugin list (给 GH Pages 静态站消费)
+///
+/// 例子:
+///   mah registry list                            # 默认 ~/.ma-harness/registry.json
+///   mah registry list --registry my.json         # 自定义路径
+fn registry_list(registry: Option<&std::path::Path>) -> Result<()> {
+    let path = registry
+        .map(|p| p.to_path_buf())
+        .or_else(|| dirs_home().map(|h| h.join(".ma-harness").join("registry.json")))
+        .context("no registry path given and no ~/.ma-harness/registry.json")?;
+
+    if !path.exists() {
+        eprintln!("Registry file not found: {}", path.display());
+        eprintln!("Hint: run `mah plugin publish <manifest.json>` first, or pass --registry <path>");
+        return Ok(());
+    }
+
+    let reg = Registry::open(&path)
+        .with_context(|| format!("failed to open registry at {}", path.display()))?;
+
+    println!("ma-harness Plugin Registry");
+    println!("============================");
+    println!("Path:   {}", path.display());
+    println!("Plugins: {} ({} versions total)", reg.count(), reg.version_count());
+    println!();
+
+    let mut by_author: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for m in reg.list() {
+        by_author.entry(m.author.clone()).or_default().push(format!(
+            "{} @ {} (tags: {})",
+            m.name,
+            m.version,
+            if m.tags.is_empty() { "-".to_string() } else { m.tags.join(", ") }
+        ));
+    }
+
+    for (author, plugins) in &by_author {
+        println!("{} ({}):", author, plugins.len());
+        for p in plugins {
+            println!("  - {}", p);
+        }
+    }
+    Ok(())
+}
+
+/// **P14 (2026-08-20)**: 导出 registry 到 JSON file (给 GH Pages 静态站消费)
+///
+/// 例子:
+///   mah registry export --output docs/registry/registry.json
+///   mah registry export --output target/registry.json --registry my.json
+fn registry_export(output: &std::path::Path, registry: Option<&std::path::Path>) -> Result<()> {
+    let path = registry
+        .map(|p| p.to_path_buf())
+        .or_else(|| dirs_home().map(|h| h.join(".ma-harness").join("registry.json")))
+        .context("no registry path given and no ~/.ma-harness/registry.json")?;
+
+    if !path.exists() {
+        anyhow::bail!("Registry file not found: {}. Run `mah plugin publish` first.", path.display());
+    }
+
+    let reg = Registry::open(&path)
+        .with_context(|| format!("failed to open registry at {}", path.display()))?;
+
+    // 确保输出目录存在
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create output dir {}", parent.display()))?;
+        }
+    }
+
+    reg.export(output)
+        .with_context(|| format!("failed to export registry to {}", output.display()))?;
+
+    println!("Exported {} plugins ({} versions) to {}", reg.count(), reg.version_count(), output.display());
+    Ok(())
+}
+
+/// Helper: 拿 $HOME / %USERPROFILE% (无依赖 dirs crate)
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// **P14 (2026-08-20)**: tests for `mah registry` CLI subcommand
+#[cfg(test)]
+mod registry_cli_tests {
+    use super::*;
+    use ma_harness_registry::{PluginManifest, PluginSource, Registry};
+    use semver::Version;
+    use chrono::Utc;
+
+    fn make_sample_manifest(name: &str, version: &str, author: &str) -> PluginManifest {
+        PluginManifest {
+            name: name.to_string(),
+            version: version.parse().unwrap(),
+            description: format!("Sample plugin {}", name),
+            author: author.to_string(),
+            source: PluginSource::Local(format!("../plugins/{}", name)),
+            tags: vec!["test".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// registry_list 走 sample registry
+    #[test]
+    fn registry_list_works() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let reg_path = tmpdir.path().join("registry.json");
+        let mut reg = Registry::open_in_memory();
+        reg.publish(make_sample_manifest("plug-a", "0.1.0", "alice")).unwrap();
+        reg.publish(make_sample_manifest("plug-b", "0.2.0", "bob")).unwrap();
+        reg.save(&reg_path).unwrap();
+
+        let result = registry_list(Some(&reg_path));
+        assert!(result.is_ok(), "registry_list should succeed: {:?}", result);
+    }
+
+    /// registry_export 生成 JSON, 内容正确
+    #[test]
+    fn registry_export_writes_valid_json() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let reg_path = tmpdir.path().join("registry.json");
+        let out_path = tmpdir.path().join("out.json");
+
+        let mut reg = Registry::open_in_memory();
+        reg.publish(make_sample_manifest("plug-x", "1.0.0", "i25ma")).unwrap();
+        reg.save(&reg_path).unwrap();
+
+        let result = registry_export(&out_path, Some(&reg_path));
+        assert!(result.is_ok(), "registry_export should succeed: {:?}", result);
+        assert!(out_path.exists(), "out.json should exist");
+
+        // 验证 JSON 能 roundtrip
+        let loaded = Registry::open(&out_path).unwrap();
+        let manifest = loaded.get("plug-x").expect("plug-x should be in registry");
+        assert_eq!(manifest.version, Version::parse("1.0.0").unwrap());
+        assert_eq!(manifest.author, "i25ma");
+    }
+
+    /// registry_list / export 在 registry 不存在时返 Err (export) 或 Ok+warning (list)
+    #[test]
+    fn registry_missing_file_handled() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let reg_path = tmpdir.path().join("nonexistent.json");
+        let out_path = tmpdir.path().join("out.json");
+
+        // list: 不 panic, 返 Ok, 警告
+        let list_result = registry_list(Some(&reg_path));
+        assert!(list_result.is_ok(), "list 不存在 file 应返 Ok + warning");
+
+        // export: 返 Err
+        let export_result = registry_export(&out_path, Some(&reg_path));
+        assert!(export_result.is_err(), "export 不存在 file 应返 Err");
+    }
 }
 
 #[cfg(test)]
