@@ -328,8 +328,7 @@ impl DagScheduler {
         let mut stack = vec![failed_task.to_string()];
         while let Some(t) = stack.pop() {
             for task in run.tasks.values() {
-                if task.task.depends_on.iter().any(|d| d == &t)
-                    && to_skip.insert(task.name.clone())
+                if task.task.depends_on.iter().any(|d| d == &t) && to_skip.insert(task.name.clone())
                 {
                     stack.push(task.name.clone());
                 }

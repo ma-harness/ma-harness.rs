@@ -5,7 +5,6 @@
 //! 设计: 见 `docs/benchmark-design.md` § 3.2.
 #![allow(missing_docs)] // bench 文件: criterion macro 公开 fn 较多, 不强制 doc
 
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ma_harness_core::agent::{AgentLoop, AgentRunRequest, ModelAdapter, ModelRequest, StubModelAdapter};
 use ma_harness_core::event::{EventType, SessionEvent};

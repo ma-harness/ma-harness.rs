@@ -157,7 +157,11 @@ fn sanitize_lib_name(name: &str) -> String {
     for c in name.chars() {
         // valid alphanumeric + '_' 直接保留, 其他 (含 '-') 替换成 '_'
         // (clippy 报 identical blocks, 简化)
-        let replacement = if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' };
+        let replacement = if c.is_ascii_alphanumeric() || c == '_' {
+            c
+        } else {
+            '_'
+        };
         out.push(replacement);
     }
     // 末尾 . / 空格 (Windows 修剪)

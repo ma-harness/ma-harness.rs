@@ -11,7 +11,8 @@
 
 use std::any::Any;
 
-#[allow(unused_imports)] // 公开 re-export (lib.rs) 已经让 Context 可见, 这里显式 use 是历史 code style
+#[allow(unused_imports)]
+// 公开 re-export (lib.rs) 已经让 Context 可见, 这里显式 use 是历史 code style
 use crate::Context;
 
 /// Service trait (内部视角)
