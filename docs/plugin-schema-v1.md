@@ -1,6 +1,6 @@
 # plugin.schema.json v1 — Design
 
-[English](plugin-schema-v1.md) | [简体中文](plugin-schema-v1.zh-CN.md)
+[English](plugin-schema-v1.md) | [简体中文](zh-CN/plugin-schema-v1.md)
 
 > **Purpose**: `plugin.toml` is the **human-written** plugin manifest;
 > the JSON Schema is the **machine-readable validator**; the two must

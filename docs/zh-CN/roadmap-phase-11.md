@@ -13,9 +13,8 @@
 
 
 
-[English](docs/roadmap-phase-11.md) — coming soon. 中文为主.
+[English](../roadmap-phase-11.md) — coming soon. 中文为主.
 
-[English](docs/roadmap-phase-11.md) — coming soon. 中文为主.
 
 ---
 

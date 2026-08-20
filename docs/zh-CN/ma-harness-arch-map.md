@@ -1,6 +1,6 @@
 # ma-harness.rs — 架构映射 (Arch Map)
 
-[English](ma-harness-arch-map.md) | [简体中文](ma-harness-arch-map.zh-CN.md)
+[English](../ma-harness-arch-map.md) | [简体中文](ma-harness-arch-map.md)
 
 > 目的: 把 dsh (DeepSeek Harness) 的核心机制,映射到 ma-harness.rs 的 Rust 实现。
 > 一份"翻译表",给 Week 1-2 实现 Cordis-rs 时看,避免边写边发明。

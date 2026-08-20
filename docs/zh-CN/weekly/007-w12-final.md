@@ -8,7 +8,7 @@
 ---
 
 
-[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
+[English](../../weekly/007-w12-final.md) — coming soon. 中文为主.
 
 ## TL;DR
 
@@ -57,11 +57,8 @@ Week 12 commit:
 
 
 
-[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
 
-[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
 
-[English](docs/weekly/007-w12-final.md) — coming soon. 中文为主.
 
 mah conformance --fixtures fixtures/smoke.jsonl --output target/
 

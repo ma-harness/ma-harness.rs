@@ -6,9 +6,8 @@
 
 
 
-[English](docs/weekly/005-w10-conformance.md) — coming soon. 中文为主.
+[English](../../weekly/005-w10-conformance.md) — coming soon. 中文为主.
 
-[English](docs/weekly/005-w10-conformance.md) — coming soon. 中文为主.
 
 ---
 

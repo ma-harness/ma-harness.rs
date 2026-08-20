@@ -1,6 +1,6 @@
 # ma-harness.rs — Plugin Macro Design
 
-[English](macro-design.md) | [简体中文](macro-design.zh-CN.md)
+[English](macro-design.md) | [简体中文](zh-CN/macro-design.md)
 
 > **Purpose**: Lock down the signatures, behavior, constraints, and examples of
 > the 5 proc-macros into an executable code contract.

@@ -1,6 +1,6 @@
 # ma-harness.rs — Tech Stack (frozen during PoC)
 
-[English](tech-stack.md) | [简体中文](tech-stack.zh-CN.md)
+[English](tech-stack.md) | [简体中文](zh-CN/tech-stack.md)
 
 > Locked: 2026-08-18
 > Freeze period: 12-week PoC (i.e. until ~2026-11-10)

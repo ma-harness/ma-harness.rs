@@ -5,9 +5,8 @@
 
 
 
-[English](docs/conformance-report-week11.md) — coming soon. 中文为主.
+[English](../conformance-report-week11.md) — coming soon. 中文为主.
 
-[English](docs/conformance-report-week11.md) — coming soon. 中文为主.
 
 ---
 

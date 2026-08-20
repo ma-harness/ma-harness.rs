@@ -6,9 +6,8 @@
 
 
 
-[English](docs/p12-final-report.md) — coming soon. 中文为主.
+[English](../p12-final-report.md) — coming soon. 中文为主.
 
-[English](docs/p12-final-report.md) — coming soon. 中文为主.
 
 ---
 

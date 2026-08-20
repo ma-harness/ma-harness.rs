@@ -6,9 +6,8 @@
 
 
 
-[English](docs/weekly/006-w11-frameworks.md) — coming soon. 中文为主.
+[English](../../weekly/006-w11-frameworks.md) — coming soon. 中文为主.
 
-[English](docs/weekly/006-w11-frameworks.md) — coming soon. 中文为主.
 
 ---
 

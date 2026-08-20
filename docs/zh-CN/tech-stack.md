@@ -1,6 +1,6 @@
 # ma-harness.rs — 技术栈 (PoC 期间冻结)
 
-[English](tech-stack.md) | [简体中文](tech-stack.zh-CN.md)
+[English](../tech-stack.md) | [简体中文](tech-stack.md)
 
 > 锁定时间: 2026-08-18
 > 冻结期: 12 周 PoC (即 ~2026-11-10 之前)

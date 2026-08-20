@@ -5,9 +5,8 @@
 
 
 
-[English](docs/benchmark-report-week11.md) — coming soon. 中文为主.
+[English](../benchmark-report-week11.md) — coming soon. 中文为主.
 
-[English](docs/benchmark-report-week11.md) — coming soon. 中文为主.
 
 ---
 

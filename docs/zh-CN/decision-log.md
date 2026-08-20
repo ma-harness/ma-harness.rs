@@ -1728,3 +1728,12 @@ $ python -c "from mah_py import Mah, __version__; m = Mah(); r = m.run('echo hel
 ### commit (本决策)
 
 - (本 commit 收尾) 文档双语规范整理 (i18n 收官, Day 101+1)
+
+
+### 后续 (本决策)
+
+- 后续: P13 收尾 (sqlite race, mah-py pypi.org, crates.io 0.1.0, dsh 迁移工具, GH Pages deploy, 跨平台 binary, Tier 2 翻译等) 收官写 § 42
+
+### commit (本决策)
+
+- (本 commit 收尾) 目录结构调整 (docs/ + docs/zh-CN/ 子目录分离, Day 101+1)

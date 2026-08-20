@@ -1,6 +1,6 @@
 # ma-harness.rs — Plugin Macro 设计
 
-[English](macro-design.md) | [简体中文](macro-design.zh-CN.md)
+[English](../macro-design.md) | [简体中文](macro-design.md)
 
 > 目的: 5 个 proc-macro 的签名、行为、约束、例子,落到可执行的代码契约。
 > 写这个文档时,Week 1-2 还没起 `ma_harness_plugin_macro` crate,本设计就是它的 spec。

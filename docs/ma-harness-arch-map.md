@@ -1,6 +1,6 @@
 # ma-harness.rs — Architecture Map
 
-[English](ma-harness-arch-map.md) | [简体中文](ma-harness-arch-map.zh-CN.md)
+[English](ma-harness-arch-map.md) | [简体中文](zh-CN/ma-harness-arch-map.md)
 
 > **Purpose**: Map the core mechanisms of dsh (DeepSeek Harness) to the
 > ma-harness.rs Rust implementation. A "translation table" used when

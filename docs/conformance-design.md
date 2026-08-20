@@ -1,6 +1,6 @@
 # Conformance Test Design (Week 10)
 
-[English](conformance-design.md) | [简体中文](conformance-design.zh-CN.md)
+[English](conformance-design.md) | [简体中文](zh-CN/conformance-design.md)
 
 > **Purpose**: Verify that `ma-harness` produces the same output as
 > DeepSeek Harness (dsh) under the same input, ensuring semantic equivalence.

@@ -1,14 +1,14 @@
 # ma-harness.rs 文档索引 (P12-3 文档站 v1)
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](../README.md) | [简体中文](README.md)
 
 > **入口**: 本 README 是 ma-harness.rs 文档总索引, 按主题分块.
 > **P12-3 v1**: Markdown 文档已经齐全, 本 README 提供"按角色 / 按主题"两个维度的导航.
 > **v2**: 接 mdbook / mkdocs 静态站 (业务方驱动)
 
-📖 **根 README**: [English](../README.md) | [简体中文](../README.zh-CN.md) — 跟 dsh 对比 / 完成度 / 快速开始 / 功能矩阵
+📖 **根 README**: [English](../../README.md) | [简体中文](../../README.zh-CN.md) — 跟 dsh 对比 / 完成度 / 快速开始 / 功能矩阵
 
-🌐 **i18n 规范**: [docs/i18n.md](i18n.md) — 双语 (英文 / 简体中文) 文件命名跟翻译规则.
+🌐 **i18n 规范**: [docs/i18n.md](i18n.md) — 双语 (英文 / 简体中文) 子目录结构跟翻译规则.
 
 ---
 
@@ -16,13 +16,13 @@
 
 ### 业务方 (用 ma-harness 跑 agent)
 
-- [快速开始](../crates/mah-py/README.md) — Python SDK `mah-py`
-- [快速开始 (CLI)](../crates/ma-harness-cli/) — `mah` 命令行
-- [ACP 互通 (跟 dsh)](../crates/ma-harness-cli/src/acp.rs) — `mah acp serve` 跟 dsh / Codex 互通
-- [Plugin Registry](../crates/ma-harness-registry/) — 业务方 publish / install 第三方 plugin
-- [Bundle 概念](../crates/ma-harness-bundle/) — 业务方一键装多个 plugin
-- [Artifact Viewer](../crates/ma-harness-artifact/) — 业务方 agent 产物识别 / 渲染
-- [Vision tool](../crates/ma-harness-model/src/vision_tool.rs) — `describe_image` 多模态
+- [快速开始](../../crates/mah-py/README.md) — Python SDK `mah-py`
+- [快速开始 (CLI)](../../crates/ma-harness-cli/) — `mah` 命令行
+- [ACP 互通 (跟 dsh)](../../crates/ma-harness-cli/src/acp.rs) — `mah acp serve` 跟 dsh / Codex 互通
+- [Plugin Registry](../../crates/ma-harness-registry/) — 业务方 publish / install 第三方 plugin
+- [Bundle 概念](../../crates/ma-harness-bundle/) — 业务方一键装多个 plugin
+- [Artifact Viewer](../../crates/ma-harness-artifact/) — 业务方 agent 产物识别 / 渲染
+- [Vision tool](../../crates/ma-harness-model/src/vision_tool.rs) — `describe_image` 多模态
 - [决策日志](decision-log.md) — 业务方查"为什么这么设计"
 
 ### 框架开发者 (改 ma-harness 内部)
@@ -30,8 +30,8 @@
 - [架构总览](ma-harness-arch-map.md) — 14 个 crate 关系
 - [技术栈](tech-stack.md) — 框架依赖 / 工具链
 - [conformance 设计](conformance-design.md) — 业务方写 fixture, 框架跑
-- [Plugin Schema](../crates/ma-harness-conformance/src/dsh_format.rs) — dsh 风格 fixture
-- [ma-py SDK 设计](../crates/mah-py/) — 业务方 Python 集成
+- [Plugin Schema](../../crates/ma-harness-conformance/src/dsh_format.rs) — dsh 风格 fixture
+- [ma-py SDK 设计](../../crates/mah-py/) — 业务方 Python 集成
 - [决策日志](decision-log.md) — 历次 design 决策
 - [i18n 规范](i18n.md) — 双语文档命名跟翻译规则
 
@@ -92,16 +92,16 @@
 
 ### Crate 内部文档 (P11 收官)
 
-- [mah-py Python SDK](../crates/mah-py/README.md) — 16 tests + 5 examples
-- [ma-harness-registry](../crates/ma-harness-registry/) — Plugin Registry 18 tests
-- [ma-harness-bundle](../crates/ma-harness-bundle/) — Bundle 13 tests
-- [ma-harness-artifact](../crates/ma-harness-artifact/) — Vibe Coding 25 tests
-- [ACP (CLI 模块)](../crates/ma-harness-cli/src/acp.rs) — JSON-RPC 2.0 server
+- [mah-py Python SDK](../../crates/mah-py/README.md) — 16 tests + 5 examples
+- [ma-harness-registry](../../crates/ma-harness-registry/) — Plugin Registry 18 tests
+- [ma-harness-bundle](../../crates/ma-harness-bundle/) — Bundle 13 tests
+- [ma-harness-artifact](../../crates/ma-harness-artifact/) — Vibe Coding 25 tests
+- [ACP (CLI 模块)](../../crates/ma-harness-cli/src/acp.rs) — JSON-RPC 2.0 server
 
 ### API 参考
 
 - [OpenAPI spec (English)](api/openapi.json) — REST API 表面 (英文)
-- [OpenAPI spec (简体中文)](api/openapi.zh-CN.json) — REST API 表面 (简体中文)
+- [OpenAPI spec (简体中文)](api/openapi.json) — REST API 表面 (简体中文)
 
 ### 决策
 
@@ -124,7 +124,7 @@
 
 ## 业务方读法
 
-1. **新业务方**: [Python SDK README](../crates/mah-py/README.md) → 5 examples → [ACP 模块](../crates/ma-harness-cli/src/acp.rs)
+1. **新业务方**: [Python SDK README](../../crates/mah-py/README.md) → 5 examples → [ACP 模块](../../crates/ma-harness-cli/src/acp.rs)
 2. **改 ma-harness 内部**: [架构总览](ma-harness-arch-map.md) → [conformance 设计](conformance-design.md) → [决策日志](decision-log.md)
 3. **跑 Terminal Bench**: [dsh-benchmark-report](dsh-benchmark-report.md) → [P11 全收官报告](p11-final-report.md) → [P12 全收官报告](p12-final-report.md)
 

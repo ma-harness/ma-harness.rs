@@ -6,23 +6,20 @@
 #
 # 业务方禁用: `mkdocs build --strict` 会 fail, 业务方先 `mkdocs build` 看 warnings.
 #
-# i18n (P12-3+):
-#   英文 (默认): `name.md`
-#   简体中文: `name.zh-CN.md`
-#   业务方切换语言: mkdocs-material 内置 language selector (header 右上角).
-#   GitHub 浏览时: 自动按 `Accept-Language` 选文件.
+# i18n 结构 (P12-3+, Day 101+1):
+#   英文 (默认):   docs/<name>.md
+#   简体中文:     docs/zh-CN/<name>.md
+#   OpenAPI:      docs/api/openapi.json
+#                 docs/zh-CN/api/openapi.json
+#   业务方切语言: mkdocs-material 内置 language selector (header 右上角)
 
 site_name: ma-harness.rs
 site_description: "Rust 重写的 AI agent orchestrator (跟 dsh 对齐)"
 site_author: "ma-harness contributors"
 
-# 改用 GitHub 作为主仓库 (国内 Gitee 是 mirror)
+# 主仓库: GitHub; 国内 mirror: Gitee
 repo_url: "https://github.com/ma-harness/ma-harness.rs"
 repo_name: "ma-harness/ma-harness.rs"
-
-# mkdocs-material i18n (官方支持多语言导航)
-# docs_language: en (default)
-# 简体中文: 业务方切 zh-CN
 
 theme:
   name: material
@@ -51,7 +48,7 @@ theme:
     - content.tabs.link
     - content.code.annotate
 
-  # 备用语言 (header 右上角切换)
+  # mkdocs-material 自动从 docs/<lang>/ 切语言
   alternate_language: zh-CN
 
 docs_dir: "."
@@ -88,9 +85,28 @@ nav:
       - Code Mode 延后: code-mode-deferred.md
   - 决策 (Decisions):
       - 决策日志: decision-log.md
+  - 周报 (Weekly):
+      - Day 0: weekly/000-day0.md
+      - Week 1-2: weekly/001-w01-w02.md
+      - Week 3-4: weekly/002-w03-w04.md
+      - Week 5-6: weekly/003-w05-w06.md
+      - Week 7-9: weekly/004-w07-w09.md
+      - Week 10: weekly/005-w10-conformance.md
+      - Week 11: weekly/006-w11-frameworks.md
+      - Week 12: weekly/007-w12-final.md
   - API Reference:
       - OpenAPI (English): api/openapi.json
-      - OpenAPI (简体中文): api/openapi.zh-CN.json
+      - OpenAPI (简体中文): zh-CN/api/openapi.json
+
+# mkdocs-material i18n 备用语言 (header 右上角切换)
+extra:
+  alternate:
+    - name: English
+      link: /en/
+      lang: en
+    - name: 简体中文
+      link: /zh-CN/
+      lang: zh-CN
 
 markdown_extensions:
   - admonition
@@ -107,15 +123,3 @@ markdown_extensions:
 
 plugins:
   - search
-  # i18n 插件 (mkdocs-material 内置)
-  # business runs: `pip install mkdocs-material[i18n]`
-
-# i18n 扩展 (mkdocs-material 自带, 不需要额外 plugin)
-extra:
-  alternate:
-    - name: English
-      link: /en/
-      lang: en
-    - name: 简体中文
-      link: /zh-CN/
-      lang: zh-CN

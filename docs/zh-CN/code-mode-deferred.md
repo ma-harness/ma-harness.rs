@@ -4,9 +4,8 @@
 
 
 
-[English](docs/code-mode-deferred.md) — coming soon. 中文为主.
+[English](../code-mode-deferred.md) — coming soon. 中文为主.
 
-[English](docs/code-mode-deferred.md) — coming soon. 中文为主.
 
 ---
 
