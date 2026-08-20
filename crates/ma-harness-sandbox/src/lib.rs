@@ -187,7 +187,9 @@ impl Default for LinuxLandlockEnforcer {
 #[cfg(target_os = "linux")]
 impl Enforcer for LinuxLandlockEnforcer {
     fn enforce(&self, policy: &Policy) -> Result<(), EnforceError> {
-        use landlock::{AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI};
+        use landlock::{
+            Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI,
+        };
 
         // 1. 选定最低 ABI 等级 (V1 = kernel 5.13 引入, 业务方主流生产环境都覆盖)
         //    Ruleset::default() 会自动 probe 当前内核实际 ABI
