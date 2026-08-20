@@ -1,13 +1,16 @@
 name: Release
 
-# Phase 3.8 / T3.8: 自动 publish 到 crates.io
-# 用 crates.io Trusted Publishing (OIDC) — 无需 CARGO_REGISTRY_TOKEN secret
-# https://crates.io/docs/trusted-publishing
+# Layer 3 CI/CD: 自动 publish 到 crates.io
+# 触发: git push tag v*.*.*  (v0.1.0 / v0.1.1 / v0.2.0 ...)
+# 流程: test → dry-run → publish (按依赖顺序) → GitHub release notes
+#
+# Secret: 在 GitHub repo → Settings → Secrets → actions 加 CARGO_REGISTRY_TOKEN
+# Token:  https://crates.io/settings/tokens  (scope: publish)
 
 on:
   push:
     tags:
-      - 'v*'  # v0.1.0, v0.1.1, v0.2.0, etc.
+      - 'v*'
   workflow_dispatch:  # 业务方手动触发 (调试用)
 
 env:
@@ -15,28 +18,24 @@ env:
 
 jobs:
   # ============================================================================
-  # Pre-publish: 完整 workspace 测试 + 验证
+  # Pre-publish: 完整 workspace 测试
   # ============================================================================
   test:
     name: Pre-publish test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-
       - name: Run all tests
         run: cargo test --workspace --lib
-
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # ============================================================================
-  # Dry-run: 验证 metadata OK 不真发
+  # Dry-run: 验证 metadata OK
   # ============================================================================
   dry-run:
     name: Publish dry-run
@@ -44,31 +43,26 @@ jobs:
     needs: [test]
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # 只 dry-run 公开的 5 个 crate
-      - name: cargo publish --dry-run (ma-harness-cordis)
+      - name: dry-run (cordis)
         run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty
-
-      - name: cargo publish --dry-run (ma-harness-code)
+      - name: dry-run (code)
         run: cargo publish -p ma-harness-code --dry-run --allow-dirty
-
-      - name: cargo publish --dry-run (ma-harness-core)
+      - name: dry-run (core)
         run: cargo publish -p ma-harness-core --dry-run --allow-dirty
-
-      - name: cargo publish --dry-run (ma-harness-plugin-macro)
+      - name: dry-run (plugin-macro)
         run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty
-
-      - name: cargo publish --dry-run (ma-harness-seam)
+      - name: dry-run (seam)
         run: cargo publish -p ma-harness-seam --dry-run --allow-dirty
+      - name: dry-run (model) [P12-5]
+        run: cargo publish -p ma-harness-model --dry-run --allow-dirty
 
   # ============================================================================
-  # Publish: 真发 (需要 crates.io Trusted Publishing 在 ma-harness repo enable)
+  # Publish: 按依赖顺序发 (cordis → code → core → plugin-macro → seam → model)
   # ============================================================================
   publish:
     name: Publish to crates.io
@@ -77,53 +71,59 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # crates.io Trusted Publishing (OIDC)
-      # 在 https://crates.io/crates/ma-harness-cordis/settings 配 GitHub repo
+      # 1. cordis (leaf, 无内部 ma-harness 依赖)
       - name: Publish ma-harness-cordis
         run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for index update
+      - name: Wait for index
         run: sleep 30
 
+      # 2. code (leaf, 只依赖 wasmtime/wat)
       - name: Publish ma-harness-code
         run: cargo publish -p ma-harness-code --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for index update
+      - name: Wait for index
         run: sleep 30
 
-      # P4-2 (Day 84): 加 3 个新公开 crate, 顺序 core + plugin-macro (并行) → seam
+      # 3. core (依赖 cordis)
       - name: Publish ma-harness-core
         run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
 
+      # 4. plugin-macro (依赖 cordis, 可跟 core 并行, 但保险起见串行)
       - name: Publish ma-harness-plugin-macro
         run: cargo publish -p ma-harness-plugin-macro --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for index update
+      - name: Wait for index
         run: sleep 30
 
-      # seam 依赖 core + macro + cordis, 必须最后发
+      # 5. seam (依赖 cordis + core)
       - name: Publish ma-harness-seam
         run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+
+      # 6. model [P12-5] (依赖 cordis + core, 业务方主用)
+      - name: Publish ma-harness-model
+        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # ============================================================================
-  # GitHub release: 同步发 GitHub Release notes
+  # GitHub release notes
   # ============================================================================
   github-release:
     name: GitHub Release
@@ -134,13 +134,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - name: Extract version from tag
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:

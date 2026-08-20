@@ -6,16 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
-description = "ma-harness LLM model adapters (OpenAI / Anthropic / Stub) (Phase 2.3)"
+publish = true
+homepage = "https://github.com/ma-harness/ma-harness.rs"
+keywords = ["llm", "openai", "anthropic", "deepseek", "model-adapter", "agent"]
+categories = ["api-bindings", "asynchronous", "development-tools"]
+description = "ma-harness LLM model adapters: OpenAI / Anthropic / Deepseek / Stub with streaming, retry, vision, tool-call. Standalone usable without the rest of ma-harness."
 
 [lints]
 workspace = true
 
 [dependencies]
-# 内部
-ma-harness-core = { path = "../ma-harness-core" }
-ma-harness-cordis = { path = "../ma-harness-cordis" }  # P12-8: Context type
+# 内部 (path 本地, version 让 publish 后 crates.io 找得到)
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }  # P12-8: Context type
 
 # 外部
 async-stream = { workspace = true }

@@ -32,8 +32,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://gitee.com/yifenma/ma-harness.rs"
+repository = "https://github.com/ma-harness/ma-harness.rs"
 authors = ["ma-harness contributors"]
+description = "ma-harness.rs: Rust framework for AI agent orchestration, LLM adapters (OpenAI/Anthropic/Deepseek/Stub), plugin registry, and CLI. See README for details. Mirror: https://gitee.com/yifenma/ma-harness.rs"
+homepage = "https://github.com/ma-harness/ma-harness.rs"
 publish = false
 
 [workspace.lints.rust]

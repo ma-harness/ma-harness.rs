@@ -1,0 +1,93 @@
+# Gitee Go release workflow (镜像 .github/workflows/release.yml)
+# 触发: git push tag v*.*.*
+# 流程: test → dry-run → publish (按依赖顺序)
+#
+# Gitee Go 跟 GitHub Actions 95% 兼容, 但 Gitee Go 没有:
+#   - softprops/action-gh-release (GitHub 专属)
+#   - actions/upload-artifact (Gitee 走自身 attachment)
+# Secret: Gitee 仓库 → 设置 → CI/CD → 环境变量 加 CRATES_IO_TOKEN (无 ${{ secrets }} 语法)
+#
+# https://gitee.com/help/articles/4269
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  CRATES_IO_TOKEN: $CRATES_IO_TOKEN  # 来自 Gitee Go 仓库环境变量
+
+jobs:
+  test:
+    name: Pre-publish test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Run all tests
+        run: cargo test --workspace --lib
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  dry-run:
+    name: Publish dry-run
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: dry-run (cordis)
+        run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty
+      - name: dry-run (code)
+        run: cargo publish -p ma-harness-code --dry-run --allow-dirty
+      - name: dry-run (core)
+        run: cargo publish -p ma-harness-core --dry-run --allow-dirty
+      - name: dry-run (plugin-macro)
+        run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty
+      - name: dry-run (seam)
+        run: cargo publish -p ma-harness-seam --dry-run --allow-dirty
+      - name: dry-run (model) [P12-5]
+        run: cargo publish -p ma-harness-model --dry-run --allow-dirty
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [dry-run]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish ma-harness-cordis
+        run: cargo publish -p ma-harness-cordis --token $CRATES_IO_TOKEN
+      - name: Wait
+        run: sleep 30
+      - name: Publish ma-harness-code
+        run: cargo publish -p ma-harness-code --token $CRATES_IO_TOKEN
+      - name: Wait
+        run: sleep 30
+      - name: Publish ma-harness-core
+        run: cargo publish -p ma-harness-core --token $CRATES_IO_TOKEN
+      - name: Wait
+        run: sleep 30
+      - name: Publish ma-harness-plugin-macro
+        run: cargo publish -p ma-harness-plugin-macro --token $CRATES_IO_TOKEN
+      - name: Wait
+        run: sleep 30
+      - name: Publish ma-harness-seam
+        run: cargo publish -p ma-harness-seam --token $CRATES_IO_TOKEN
+      - name: Wait
+        run: sleep 30
+      - name: Publish ma-harness-model
+        run: cargo publish -p ma-harness-model --token $CRATES_IO_TOKEN
