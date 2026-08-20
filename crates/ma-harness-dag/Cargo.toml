@@ -1,0 +1,28 @@
+[package]
+name = "ma-harness-dag"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "ma-harness DAG 任务编排 (P12-9, Day 101+1) — P11-10 推到 P12"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+# 外部
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

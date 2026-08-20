@@ -17,6 +17,7 @@ members = [
     "crates/ma-harness-registry",  # 2026-08-20 (Day 101+1): P11-6 Plugin Registry
     "crates/ma-harness-bundle",  # 2026-08-20 (Day 101+1): P11-8 Bundle 概念
     "crates/ma-harness-artifact",  # 2026-08-20 (Day 101+1): P11-7 Vibe Coding artifact viewer
+    "crates/ma-harness-dag",  # 2026-08-20 (Day 101+1): P12-9 DAG 任务编排
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
