@@ -187,18 +187,21 @@ impl Default for LinuxLandlockEnforcer {
 #[cfg(target_os = "linux")]
 impl Enforcer for LinuxLandlockEnforcer {
     fn enforce(&self, policy: &Policy) -> Result<(), EnforceError> {
-        use landlock::{
-            Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI,
-        };
+        use landlock::{AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI};
 
         // 1. 选定最低 ABI 等级 (V1 = kernel 5.13 引入, 业务方主流生产环境都覆盖)
         //    Ruleset::default() 会自动 probe 当前内核实际 ABI
         let abi = ABI::V1;
 
-        // 2. 构造 ruleset (handle_access 一次性给 V1 全部 FS access rights,
-        //    landlock 0.4.7: from_all 在 `Access` trait 上, 不在 AccessFs 上)
+        // 2. 构造 ruleset (handle_access 一次性给 V1 全部 FS access rights)
+        //    landlock 0.4.7 API:
+        //      - `Access::from_all(abi) -> BitFlags<T>` (在 `Access` trait 上)
+        //      - `AccessFs: Access` (impl)
+        //    直接用 `AccessFs::from_all(abi)` UFCS 调用 trait method, 返回类型
+        //    `BitFlags<AccessFs>` 显式, handle_access 的 generic T 不再需要推断。
+        //    用 `Access::from_all(abi)` 会触发 E0284: cannot infer type of T。
         let mut ruleset = Ruleset::default()
-            .handle_access(Access::from_all(abi))
+            .handle_access(AccessFs::from_all(abi))
             .map_err(|e| EnforceError::ApplyFailed(format!("handle_access from_all: {e}")))?
             .create()
             .map_err(|e| EnforceError::ApplyFailed(format!("create ruleset: {e}")))?;
