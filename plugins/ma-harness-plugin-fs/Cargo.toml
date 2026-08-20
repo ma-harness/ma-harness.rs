@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness first-party plugin 'fs' (文件系统读/写, Week 5-6 实装)"
 
 [lints]

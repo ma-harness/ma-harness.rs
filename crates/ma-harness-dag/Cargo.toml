@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness DAG 任务编排 (P12-9, Day 101+1) — P11-10 推到 P12"
 
 [lints]

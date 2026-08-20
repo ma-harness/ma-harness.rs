@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness OS-level sandbox (landlock on Linux, Seatbelt on macOS, Stub elsewhere)"
 
 [lints]

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness plugin bundle (P11-8, Day 101+1) — 一键装多个 plugin"
 
 [lints]

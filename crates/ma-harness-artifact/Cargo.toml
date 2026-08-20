@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness Vibe Coding artifact viewer (P11-7, Day 101+1) — 业务方 agent 产物实时识别 / 渲染"
 
 [lints]

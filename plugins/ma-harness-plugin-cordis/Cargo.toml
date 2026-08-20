@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness first-party plugin 'cordis' (meta, 暴露 ctx 自身能力, Week 5-6 实装)"
 
 [lints]

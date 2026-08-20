@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness 服务层 (salvo + tonic 拼装, 内部 crate)"
 
 [lints]

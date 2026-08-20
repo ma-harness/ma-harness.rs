@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+publish = true
 description = "ma-harness Protobuf 生成代码 (公开, 自动生成, 字段稳定)"
 
 [lints]

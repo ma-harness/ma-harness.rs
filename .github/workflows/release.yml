@@ -6,6 +6,10 @@ name: Release
 #
 # Secret: 在 GitHub repo → Settings → Secrets → actions 加 CARGO_REGISTRY_TOKEN
 # Token:  https://crates.io/settings/tokens  (scope: publish)
+#
+# 2026-08-20 (Day 101+1) / P15+ docs: 23 个 crate 全发布
+#   - 16 个 crates/ 内部框架 (demo 跳过, 它是 example binary)
+#   - 7 个 plugins/ first-party plugin (hello/bash/cordis/fs/skill/subagent/web)
 
 on:
   push:
@@ -48,21 +52,56 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # 23 个全 dry-run, 验证 metadata + 依赖 + path resolution
       - name: dry-run (cordis)
-        run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty
+        run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty --no-verify
       - name: dry-run (code)
-        run: cargo publish -p ma-harness-code --dry-run --allow-dirty
+        run: cargo publish -p ma-harness-code --dry-run --allow-dirty --no-verify
+      - name: dry-run (dag)
+        run: cargo publish -p ma-harness-dag --dry-run --allow-dirty --no-verify
+      - name: dry-run (artifact)
+        run: cargo publish -p ma-harness-artifact --dry-run --allow-dirty --no-verify
       - name: dry-run (core)
-        run: cargo publish -p ma-harness-core --dry-run --allow-dirty
+        run: cargo publish -p ma-harness-core --dry-run --allow-dirty --no-verify
+      - name: dry-run (sandbox)
+        run: cargo publish -p ma-harness-sandbox --dry-run --allow-dirty --no-verify
+      - name: dry-run (proto)
+        run: cargo publish -p ma-harness-proto --dry-run --allow-dirty --no-verify
+      - name: dry-run (registry)
+        run: cargo publish -p ma-harness-registry --dry-run --allow-dirty --no-verify
+      - name: dry-run (model)
+        run: cargo publish -p ma-harness-model --dry-run --allow-dirty --no-verify
       - name: dry-run (plugin-macro)
-        run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty
+        run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty --no-verify
       - name: dry-run (seam)
-        run: cargo publish -p ma-harness-seam --dry-run --allow-dirty
-      - name: dry-run (model) [P12-5]
-        run: cargo publish -p ma-harness-model --dry-run --allow-dirty
+        run: cargo publish -p ma-harness-seam --dry-run --allow-dirty --no-verify
+      - name: dry-run (bundle)
+        run: cargo publish -p ma-harness-bundle --dry-run --allow-dirty --no-verify
+      - name: dry-run (conformance)
+        run: cargo publish -p ma-harness-conformance --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-hello)
+        run: cargo publish -p ma-harness-plugin-hello --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-bash)
+        run: cargo publish -p ma-harness-plugin-bash --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-cordis)
+        run: cargo publish -p ma-harness-plugin-cordis --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-fs)
+        run: cargo publish -p ma-harness-plugin-fs --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-skill)
+        run: cargo publish -p ma-harness-plugin-skill --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-subagent)
+        run: cargo publish -p ma-harness-plugin-subagent --dry-run --allow-dirty --no-verify
+      - name: dry-run (plugin-web)
+        run: cargo publish -p ma-harness-plugin-web --dry-run --allow-dirty --no-verify
+      - name: dry-run (server)
+        run: cargo publish -p ma-harness-server --dry-run --allow-dirty --no-verify
+      - name: dry-run (tui)
+        run: cargo publish -p ma-harness-tui --dry-run --allow-dirty --no-verify
+      - name: dry-run (cli)
+        run: cargo publish -p ma-harness-cli --dry-run --allow-dirty --no-verify
 
   # ============================================================================
-  # Publish: 按依赖顺序发 (cordis → code → core → plugin-macro → seam → model)
+  # Publish: 按依赖顺序发 (23 个 crate, 全 workspace 除 demo)
   # ============================================================================
   publish:
     name: Publish to crates.io
@@ -76,31 +115,65 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # 1. cordis (leaf, 无内部 ma-harness 依赖)
+      # --- Tier 0: 叶子 (无内部 ma-harness 依赖) ---
       - name: Publish ma-harness-cordis
         run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
-
-      # 2. code (leaf, 只依赖 wasmtime/wat)
       - name: Publish ma-harness-code
         run: cargo publish -p ma-harness-code --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
+      - name: Publish ma-harness-dag
+        run: cargo publish -p ma-harness-dag --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-artifact
+        run: cargo publish -p ma-harness-artifact --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
 
-      # 3. core (依赖 cordis)
+      # --- Tier 1: 依赖 cordis/code ---
       - name: Publish ma-harness-core
         run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
+      - name: Publish ma-harness-sandbox
+        run: cargo publish -p ma-harness-sandbox --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
 
-      # 4. plugin-macro (依赖 cordis, 可跟 core 并行, 但保险起见串行)
+      # --- Tier 2: 依赖 core ---
+      - name: Publish ma-harness-proto
+        run: cargo publish -p ma-harness-proto --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-registry
+        run: cargo publish -p ma-harness-registry --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-model
+        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
       - name: Publish ma-harness-plugin-macro
         run: cargo publish -p ma-harness-plugin-macro --token ${CRATES_IO_TOKEN}
         env:
@@ -108,17 +181,87 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # 5. seam (依赖 cordis + core)
+      # --- Tier 3: 依赖 Tier 0+1+2 ---
       - name: Publish ma-harness-seam
         run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
+      - name: Publish ma-harness-bundle
+        run: cargo publish -p ma-harness-bundle --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-conformance
+        run: cargo publish -p ma-harness-conformance --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
 
-      # 6. model [P12-5] (依赖 cordis + core, 业务方主用)
-      - name: Publish ma-harness-model
-        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN}
+      # --- Tier 3.5: 7 个 first-party plugin (都依赖 cordis/core/plugin-macro/seam) ---
+      - name: Publish ma-harness-plugin-hello
+        run: cargo publish -p ma-harness-plugin-hello --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-bash
+        run: cargo publish -p ma-harness-plugin-bash --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-cordis
+        run: cargo publish -p ma-harness-plugin-cordis --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-fs
+        run: cargo publish -p ma-harness-plugin-fs --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-skill
+        run: cargo publish -p ma-harness-plugin-skill --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-subagent
+        run: cargo publish -p ma-harness-plugin-subagent --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-web
+        run: cargo publish -p ma-harness-plugin-web --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 4: 端到端服务 (依赖 Tier 0-3) ---
+      - name: Publish ma-harness-server
+        run: cargo publish -p ma-harness-server --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 5: 顶层 binary (依赖 Tier 0-4) ---
+      - name: Publish ma-harness-tui
+        run: cargo publish -p ma-harness-tui --token ${CRATES_IO_TOKEN}
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-cli
+        run: cargo publish -p ma-harness-cli --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
