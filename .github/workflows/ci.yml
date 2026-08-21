@@ -22,9 +22,12 @@ jobs:
   # ============================================================================
   # Lint (fmt + clippy) — 最快, 先跑
   # ============================================================================
+  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"验证
+  # 之前 OpenAPI baseline 问题。全 lint+build 过, 重启时改回 if: ${{ ... }}
   lint:
-    name: Lint (fmt + clippy)
+    name: Lint (fmt + clippy) [DISABLED, 只跑 Test]
     runs-on: ubuntu-latest
+    if: false
     steps:
       - uses: actions/checkout@v4
 
@@ -50,9 +53,12 @@ jobs:
   # ============================================================================
   # Build (cross-platform sanity check) — Linux + Windows + macOS
   # ============================================================================
+  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"验证
+  # 之前 OpenAPI baseline 问题。
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.os }}) [DISABLED, 只跑 Test]
     runs-on: ${{ matrix.os }}
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -86,14 +92,13 @@ jobs:
   # ============================================================================
   # Test (Ubuntu + landlock 真测)
   # ============================================================================
-  # 2026-08-21 (Day 101+2): 临时 disable, OpenAPI baseline docs/api/openapi.json
-  # 还没生成, drift check 必 fail。等业务方本地跑 'mah open-api export
-  # --output docs/api/openapi.json' 提交 baseline 后重新打开。
+  # 2026-08-21 (Day 101+2): 临时 enable 跑这一个, 验 OpenAPI baseline 修复
+  # 跟之前修过的 sandbox + creator.rs 等。needs: [] 解除对 lint+build 的依赖,
+  # 因为 lint + build 临时 disable 了。
   test:
-    name: Test (ubuntu + landlock) [DISABLED, 缺 OpenAPI baseline]
+    name: Test (ubuntu + landlock) [ONLY JOB RUNNING]
     runs-on: ubuntu-latest
-    needs: [lint, build]
-    if: false
+    needs: []
     steps:
       - uses: actions/checkout@v4
 
@@ -156,10 +161,12 @@ jobs:
   # ============================================================================
   # Test (Windows) — 验 Windows 也能 build + test
   # ============================================================================
+  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"
   test-windows:
-    name: Test (windows)
+    name: Test (windows) [DISABLED, 只跑 Test]
     runs-on: windows-latest
-    needs: [lint, build]
+    needs: []
+    if: false
     steps:
       - uses: actions/checkout@v4
 
