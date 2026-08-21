@@ -92,7 +92,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-sandbox
-        run: cargo publish -p ma-harness-sandbox --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-sandbox --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
