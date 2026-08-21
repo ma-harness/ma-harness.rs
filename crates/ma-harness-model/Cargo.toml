@@ -8,7 +8,7 @@ repository.workspace = true
 authors.workspace = true
 publish = true
 homepage = "https://github.com/ma-harness/ma-harness.rs"
-keywords = ["llm", "openai", "anthropic", "deepseek", "model-adapter", "agent"]
+keywords = ["llm", "openai", "anthropic", "deepseek", "model-adapter"]
 categories = ["api-bindings", "asynchronous", "development-tools"]
 description = "ma-harness LLM model adapters: OpenAI / Anthropic / Deepseek / Stub with streaming, retry, vision, tool-call. Standalone usable without the rest of ma-harness."
 
