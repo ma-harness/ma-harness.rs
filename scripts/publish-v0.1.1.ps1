@@ -6,9 +6,10 @@
 # 每 crate 后 sleep 30s 等 crates.io index 同步
 #
 # 准备:
-#   1. 装 protoc: choco install -y protoc (需要 admin)
+#   1. 装 protoc: scoop install protobuf (业务方用的是 scoop, 不是 choco)
+#      或: choco install -y protoc (需 admin)
 #   2. cargo login (拿 token from crates.io/settings/tokens, scope: publish)
-#   3. 验证: protoc --version  +  cargo whoami
+#   3. 验证: protoc --version  +  cat ~/.cargo/credentials.toml
 #
 # 用法:
 #   cd D:\workspace\learn\rust\ma-harness.rs
@@ -18,6 +19,28 @@
 
 $ErrorActionPreference = 'Continue'
 $SleepSec = 30
+
+# 2026-08-21 (Day 101+2): 业务方用 scoop 装 protoc, scoop\shims 不在 PATH
+# 自动加 (业务方本机唯一确认装好的路径)
+$scoopShims = 'C:\Users\Administrator\scoop\shims'
+if (Test-Path $scoopShims) {
+  $env:PATH = "$scoopShims;$env:PATH"
+  Write-Host "Added $scoopShims to PATH for this session" -ForegroundColor DarkGray
+}
+$protoc = Get-Command protoc -ErrorAction SilentlyContinue
+if (-not $protoc) {
+  Write-Host "ERROR: protoc not found. Install: scoop install protobuf" -ForegroundColor Red
+  exit 1
+}
+Write-Host "protoc: $(protoc --version)" -ForegroundColor DarkGray
+
+# 2026-08-21 (Day 101+2): 验证 cargo login (有 credentials.toml 才算登录)
+if (-not (Test-Path ~/.cargo/credentials.toml)) {
+  Write-Host "ERROR: cargo not logged in. Run: cargo login <token>" -ForegroundColor Red
+  Write-Host "  Get token from: https://crates.io/settings/tokens (scope: publish)" -ForegroundColor Red
+  exit 1
+}
+Write-Host "cargo credentials: $(Test-Path ~/.cargo/credentials.toml)" -ForegroundColor DarkGray
 $TotalOk = 0
 $TotalFail = 0
 
@@ -57,7 +80,7 @@ foreach ($tier in $Tier.Keys) {
     Write-Host "  $crate : publishing ..." -ForegroundColor White
     # cargo publish: --no-verify 跳过 build verification (test job 已验过)
     #                --allow-dirty 允许 working tree 不干净
-    $output = cargo publish -p $crate --no-verify --allow-dirty 2>&1
+    $output = cargo publish -p $crate --no-verify --allow-dirty --registry crates-io 2>&1
     $exitCode = $LASTEXITCODE
     $output | Select-Object -Last 5 | ForEach-Object { Write-Host "    $_" }
     if ($exitCode -eq 0) {
