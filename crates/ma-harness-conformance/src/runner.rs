@@ -26,12 +26,29 @@ pub struct ConformanceResult {
     pub error: Option<String>,
     /// 跑出的实际事件 (debug 用)
     pub actual_events: Vec<FixtureEvent>,
+    /// Fixture 是否声明 `expect_fail: true` (negative test, 期望 comparer 报 diff)
+    pub expect_fail: bool,
 }
 
 impl ConformanceResult {
     /// 通过 (compare.passed=true, 无 runner error)
+    ///
+    /// 这是**纯 comparer 判定** (没考虑 expect_fail 翻转)。
+    /// 报告/统计用 [`is_pass_expected`] 走"用户期望"判定。
     pub fn is_pass(&self) -> bool {
         self.compare.passed && self.error.is_none()
+    }
+
+    /// 用户视角是否通过:
+    /// - 默认 fixture (`expect_fail=false`): comparer 不报 diff = pass
+    /// - 翻转 fixture (`expect_fail=true`): comparer 报 diff 才算 pass
+    ///   (测"comparer 能否抓 mismatch", 由 fixture 作者保证 compare 真的 fail)
+    pub fn is_pass_expected(&self) -> bool {
+        if self.expect_fail {
+            !self.is_pass() && self.error.is_none()
+        } else {
+            self.is_pass()
+        }
     }
 }
 
@@ -52,6 +69,10 @@ pub struct RunnerStats {
 
 impl RunnerStats {
     /// 从结果列表汇总
+    ///
+    /// `passed` / `failed` 走**用户期望**判定 ([`ConformanceResult::is_pass_expected`]):
+    /// - `expect_fail=false` fixture: comparer 没报 diff 才算 pass
+    /// - `expect_fail=true` fixture: comparer 报 diff 才算 pass (negative test)
     pub fn from_results(results: &[ConformanceResult]) -> Self {
         // clippy 提示: field assignment outside initializer, 用 struct update syntax
         let mut stats = Self {
@@ -61,7 +82,7 @@ impl RunnerStats {
         for r in results {
             if r.error.is_some() {
                 stats.errored += 1;
-            } else if r.is_pass() {
+            } else if r.is_pass_expected() {
                 stats.passed += 1;
             } else {
                 stats.failed += 1;
@@ -141,7 +162,7 @@ impl ConformanceRunner {
     /// 6. compare 实际 vs fixture.output.events
     pub fn run_fixture(&self, fixture: &Fixture) -> ConformanceResult {
         let start = Instant::now();
-        debug!(fixture = %fixture.name, "running fixture");
+        debug!(fixture = %fixture.name, expect_fail = fixture.expect_fail, "running fixture");
 
         // 步骤 1: 创建新 ctx (Phase 2 会用, 现在保留 hook)
         let _ctx = match self.build_ctx(fixture) {
@@ -153,6 +174,7 @@ impl ConformanceRunner {
                     duration_ms: start.elapsed().as_millis() as u64,
                     error: Some(format!("ctx build failed: {e}")),
                     actual_events: Vec::new(),
+                    expect_fail: fixture.expect_fail,
                 };
             }
         };
@@ -167,6 +189,7 @@ impl ConformanceRunner {
                     duration_ms: start.elapsed().as_millis() as u64,
                     error: Some(format!("event log replay failed: {e}")),
                     actual_events: Vec::new(),
+                    expect_fail: fixture.expect_fail,
                 };
             }
         };
@@ -190,6 +213,7 @@ impl ConformanceRunner {
             duration_ms,
             error: None,
             actual_events,
+            expect_fail: fixture.expect_fail,
         }
     }
 
@@ -294,6 +318,7 @@ mod tests {
             name: "sample".to_string(),
             category: FixtureCategory::ToolCall,
             description: Some("sample for test".to_string()),
+            expect_fail: false,
             input: FixtureInput {
                 session_id: "s1".to_string(),
                 plugins: vec!["hello".to_string()],
@@ -358,6 +383,7 @@ mod tests {
             name: "multi_event".to_string(),
             category: FixtureCategory::AgentRun,
             description: Some("Run lifecycle with one tool call".to_string()),
+            expect_fail: false,
             input: FixtureInput {
                 session_id: "session-multi".to_string(),
                 plugins: vec!["bash".to_string()],
@@ -456,5 +482,93 @@ mod tests {
         assert_eq!(r.compare.diffs.len(), 1);
         assert!(r.compare.diffs[0].summary().contains("extra event"));
         assert!(r.compare.diffs[0].summary().contains("RunEnd"));
+    }
+
+    /// 构造一个 by-design fail fixture: input 2 events, expected 3 events
+    /// (期望 RunStart + RunEnd + ToolResult, 实际只 emit RunStart + RunEnd)
+    fn expect_fail_fixture() -> Fixture {
+        let mut f = sample_fixture();
+        f.name = "by_design_fail".to_string();
+        f.description = Some("by-design fail fixture".to_string());
+        f.input = FixtureInput {
+            session_id: "by-design".to_string(),
+            plugins: vec!["bash".to_string()],
+            events: vec![
+                FixtureEvent {
+                    event_type: "RunStart".to_string(),
+                    payload: serde_json::json!({"prompt": "test"}),
+                    timestamp_ms: None,
+                },
+                FixtureEvent {
+                    event_type: "RunEnd".to_string(),
+                    payload: serde_json::json!({"status": "ok"}),
+                    timestamp_ms: None,
+                },
+            ],
+        };
+        f.output = FixtureOutput {
+            events: vec![
+                ExpectedEvent {
+                    event_type: "RunStart".to_string(),
+                    payload_match: BTreeMap::new(),
+                    timestamp_ms: None,
+                },
+                ExpectedEvent {
+                    event_type: "RunEnd".to_string(),
+                    payload_match: BTreeMap::new(),
+                    timestamp_ms: None,
+                },
+                ExpectedEvent {
+                    event_type: "ToolResult".to_string(),
+                    payload_match: BTreeMap::new(),
+                    timestamp_ms: None,
+                },
+            ],
+            final_state: BTreeMap::new(),
+        };
+        f.expect_fail = true;
+        f
+    }
+
+    /// expect_fail fixture + comparer 报 diff: 用户视角 pass (翻转)
+    #[test]
+    fn runner_expect_fail_flip_to_pass_when_diff_present() {
+        let runner = ConformanceRunner::new();
+        let f = expect_fail_fixture();
+        let r = runner.run_fixture(&f);
+        // comparer 视角: fail (input 2 events vs expected 3)
+        assert!(!r.is_pass(), "comparer should report diff");
+        assert_eq!(r.compare.diffs.len(), 1);
+        // 用户视角: pass (翻转)
+        assert!(r.is_pass_expected(), "expect_fail should flip to pass");
+        assert!(r.expect_fail);
+    }
+
+    /// expect_fail fixture + comparer 没报 diff: 用户视角 fail (翻转过来反而不通过)
+    /// 这种"假阴性"说明 fixture 作者标 expect_fail 但实际 comparer 没抓到。
+    #[test]
+    fn runner_expect_fail_flag_without_diff_is_user_fail() {
+        // 复用 sample_fixture (实际 comparer 会 pass), 强行 expect_fail=true
+        let runner = ConformanceRunner::new();
+        let mut f = sample_fixture();
+        f.expect_fail = true;
+        let r = runner.run_fixture(&f);
+        // comparer 视角: pass
+        assert!(r.is_pass());
+        // 用户视角: fail (期望 comparer 报 diff 但没报)
+        assert!(!r.is_pass_expected());
+    }
+
+    /// RunnerStats 走 `is_pass_expected` 翻转: expect_fail fixture 在 stats 里算 passed
+    #[test]
+    fn runner_stats_flip_expect_fail_to_passed() {
+        let runner = ConformanceRunner::new();
+        let f1 = sample_fixture(); // expect_fail=false, comparer 报 pass
+        let f2 = expect_fail_fixture(); // expect_fail=true, comparer 报 fail
+        let results = runner.run_all(&[f1, f2]);
+        let stats = RunnerStats::from_results(&results);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.passed, 2, "both should be user-pass");
+        assert_eq!(stats.failed, 0);
     }
 }

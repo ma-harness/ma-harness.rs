@@ -8,6 +8,13 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use thiserror::Error;
 
+/// `serde(skip_serializing_if)` helper: 字段 = false 时跳过序列化。
+/// 用在 `expect_fail: bool` 上, 避免默认 false 写进 JSONL。
+#[inline]
+pub fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// 一个 fixture = 一个测试场景。
 ///
 /// 描述: 给定 input 事件序列, 期望 output 事件序列。
@@ -20,6 +27,11 @@ pub struct Fixture {
     /// 人类可读描述 (可选)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// 翻转 pass 判定: `true` 时 runner 期望 comparer 报 diff (用
+    /// 于"comparer 能否抓 mismatch"这种 negative test)。
+    /// 默认 `false` (comparer 不报 diff 才算 pass)。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub expect_fail: bool,
     /// 输入 (要 replay 的事件序列)
     pub input: FixtureInput,
     /// 期望输出 (要被比对的)
@@ -241,5 +253,38 @@ mod tests {
         assert!(f.description.is_none());
         assert!(f.input.plugins.is_empty());
         assert!(f.output.final_state.is_empty());
+        // expect_fail 默认 false
+        assert!(!f.expect_fail);
+    }
+
+    /// expect_fail 字段显式 true 时正确反序列化
+    #[test]
+    fn fixture_expect_fail_parses() {
+        let json = r#"{
+            "name": "by_design_fail",
+            "category": "event_ordering",
+            "expect_fail": true,
+            "input": {"session_id": "s", "events": []},
+            "output": {"events": []}
+        }"#;
+        let f: Fixture = serde_json::from_str(json).unwrap();
+        assert!(f.expect_fail);
+    }
+
+    /// expect_fail=false 序列化时 skip (避免默认 false 写出来)
+    #[test]
+    fn fixture_expect_fail_false_skipped_in_serialize() {
+        let json = r#"{
+            "name": "normal",
+            "category": "agent_run",
+            "input": {"session_id": "s", "events": []},
+            "output": {"events": []}
+        }"#;
+        let f: Fixture = serde_json::from_str(json).unwrap();
+        let s = serde_json::to_string(&f).unwrap();
+        assert!(
+            !s.contains("expect_fail"),
+            "expect_fail=false should be skipped: {s}"
+        );
     }
 }

@@ -768,8 +768,9 @@ fn run_conformance(
             summary.pass_rate * 100.0
         );
         // CI gating: 业务方脚本可以靠 exit code 判 conformance 是否通过。
-        // dsh_synthetic 跟 dsh_snap 都 100%, smoke by design 5/8 = 62.5% 也算 by design (3 fixture 测
-        // 比较器抓 mismatch). 业务方可用 `--dsh` flag 跑 dsh 测避免 smoke 干扰, 或改 meets_target 阈值。
+        // P15 (Day 101+2): expect_fail 字段让 negative test (e.g. comparer 抓 extra event)
+        // 在报告里算 pass, 不会拉低 pass rate。dsh_synthetic / dsh_snap 都 100%, smoke 含 1 个
+        // expect_fail=true fixture 翻转后也 100%。
         std::process::exit(1);
     }
 

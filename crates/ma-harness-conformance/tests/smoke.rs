@@ -20,6 +20,7 @@ fn make_passing_fixture(name: &str) -> Fixture {
         name: name.to_string(),
         category: FixtureCategory::ToolCall,
         description: Some("Synthetic passing fixture for smoke test".to_string()),
+        expect_fail: false,
         input: FixtureInput {
             session_id: format!("session-{name}"),
             plugins: vec!["bash".to_string()],
@@ -46,6 +47,7 @@ fn make_failing_fixture(name: &str) -> Fixture {
         name: name.to_string(),
         category: FixtureCategory::EventOrdering,
         description: Some("Synthetic failing fixture (type mismatch)".to_string()),
+        expect_fail: false,
         input: FixtureInput {
             session_id: format!("session-{name}"),
             plugins: vec![],
@@ -202,17 +204,13 @@ fn framework_loads_synthetic_fixtures_from_jsonl() {
     let runner = ConformanceRunner::new();
     let results = runner.run_all(&fixtures);
     let stats = ma_harness_conformance::runner::RunnerStats::from_results(&results);
-    // smoke.jsonl 故意有 1 个 fail (extra event), 其余 pass
-    assert!(
-        stats.passed >= 3,
-        "expected >= 3 pass, got {}",
-        stats.passed
-    );
-    assert!(
-        stats.failed >= 1,
-        "expected >= 1 fail, got {}",
-        stats.failed
-    );
+    // P15 (Day 101+2): smoke.jsonl 8 fixture 全部走 `is_pass_expected` 翻转:
+    // - 7 个正常 fixture (input == expected) 算 pass
+    // - 1 个 #4 synthetic_extra_event_failure 标 `expect_fail: true`, comparer 报 diff
+    //   翻转后也算 pass
+    // 所以总 passed = 8, failed = 0
+    assert_eq!(stats.passed, 8, "expected 8/8 pass, got {}", stats.passed);
+    assert_eq!(stats.failed, 0, "expected 0 fail, got {}", stats.failed);
     assert_eq!(stats.errored, 0);
 }
 
@@ -239,6 +237,7 @@ fn framework_event_log_preserves_order_across_4_events() {
         name: "order_test".to_string(),
         category: FixtureCategory::AgentRun,
         description: None,
+        expect_fail: false,
         input: FixtureInput {
             session_id: "order-test".to_string(),
             plugins: vec![],

@@ -67,6 +67,13 @@ pub struct DshFixture {
     /// 人类描述
     #[serde(default)]
     pub description: Option<String>,
+    /// 翻转 pass 判定 (dsh 风格, alias `expectFail` 兼容驼峰)
+    #[serde(
+        default,
+        alias = "expectFail",
+        skip_serializing_if = "crate::fixture::is_false"
+    )]
+    pub expect_fail: bool,
     /// 输入
     pub input: DshInput,
     /// 期望输出 (dsh 命名)
@@ -130,6 +137,7 @@ pub fn dsh_to_fixture(dsh: DshFixture) -> Fixture {
         name: dsh.name,
         category,
         description: dsh.description,
+        expect_fail: dsh.expect_fail,
         input,
         output,
     }
@@ -637,5 +645,33 @@ mod tests {
             ma.output.events[0].payload_match.get("content").unwrap(),
             "raw_string_response"
         );
+    }
+
+    /// expect_fail 字段从 dsh 风格 (snake_case + camelCase alias) 正确传到 ma Fixture
+    #[test]
+    fn dsh_to_fixture_propagates_expect_fail() {
+        // snake_case
+        let json = r#"{
+            "name": "by_design_fail_snake",
+            "expect_fail": true,
+            "input": {"session_id": "s", "events": []},
+            "expected_output": {"events": []}
+        }"#;
+        let f: DshFixture = serde_json::from_str(json).unwrap();
+        assert!(f.expect_fail);
+        let ma = dsh_to_fixture(f);
+        assert!(ma.expect_fail);
+
+        // camelCase alias (老 dsh fixture 风格)
+        let json = r#"{
+            "name": "by_design_fail_camel",
+            "expectFail": true,
+            "input": {"session_id": "s", "events": []},
+            "expected_output": {"events": []}
+        }"#;
+        let f: DshFixture = serde_json::from_str(json).unwrap();
+        assert!(f.expect_fail);
+        let ma = dsh_to_fixture(f);
+        assert!(ma.expect_fail);
     }
 }

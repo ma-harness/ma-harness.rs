@@ -57,7 +57,12 @@ pub struct ConformanceReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConformanceResultSerde {
     pub fixture_name: String,
+    /// 用户期望视角的 pass 判定 (考虑 expect_fail 翻转)
     pub passed: bool,
+    /// Comparer 纯判定 (没考虑 expect_fail 翻转), 调试用
+    pub compare_passed: bool,
+    /// Fixture 是否声明 `expect_fail: true` (negative test)
+    pub expect_fail: bool,
     pub diffs: Vec<Diff>,
     pub duration_ms: u64,
     pub error: Option<String>,
@@ -69,7 +74,9 @@ impl From<&ConformanceResult> for ConformanceResultSerde {
     fn from(r: &ConformanceResult) -> Self {
         Self {
             fixture_name: r.fixture_name.clone(),
-            passed: r.is_pass(),
+            passed: r.is_pass_expected(),
+            compare_passed: r.is_pass(),
+            expect_fail: r.expect_fail,
             diffs: r.compare.diffs.clone(),
             duration_ms: r.duration_ms,
             error: r.error.clone(),
@@ -152,6 +159,12 @@ impl ReportWriter {
             let _ = writeln!(out, "## Failed fixtures ({})\n", failed.len());
             for r in &failed {
                 let _ = writeln!(out, "### {}\n", r.fixture_name);
+                if r.expect_fail && !r.compare_passed {
+                    // expect_fail + comparer 报 diff = 仍归类 passed (被 is_pass_expected 翻转)
+                    // 不应该进这里, 但保险打印一行
+                    let _ = writeln!(out, "- (expected-to-fail fixture, see Passed section)\n");
+                    continue;
+                }
                 if let Some(err) = &r.error {
                     let _ = writeln!(out, "- **Runner error**: {}\n", err);
                 }
@@ -171,10 +184,15 @@ impl ReportWriter {
         if !passed.is_empty() {
             let _ = writeln!(out, "\n## Passed fixtures ({})\n", passed.len());
             for r in &passed {
+                let marker = if r.expect_fail {
+                    "✅ (expected-to-fail, comparer 抓到 diff) "
+                } else {
+                    "✅ "
+                };
                 let _ = writeln!(
                     out,
-                    "- ✅ {} ({} events, {} ms)\n",
-                    r.fixture_name, r.actual_count, r.duration_ms
+                    "- {}{} ({} events, {} ms)\n",
+                    marker, r.fixture_name, r.actual_count, r.duration_ms
                 );
             }
         }
@@ -210,6 +228,7 @@ mod tests {
             duration_ms: 10,
             error: None,
             actual_events: vec![],
+            expect_fail: false,
         }
     }
 
