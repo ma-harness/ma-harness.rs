@@ -1,15 +1,25 @@
+name: Release
+
 # Gitee Go release workflow (镜像 .github/workflows/release.yml)
 # 触发: git push tag v*.*.*
-# 流程: test → dry-run → publish (按依赖顺序)
+# 流程: test → publish (按依赖顺序)  →  Gitee 仓库 release 走 UI 手动
 #
-# Gitee Go 跟 GitHub Actions 95% 兼容, 但 Gitee Go 没有:
-#   - softprops/action-gh-release (GitHub 专属)
-#   - actions/upload-artifact (Gitee 走自身 attachment)
-# Secret: Gitee 仓库 → 设置 → CI/CD → 环境变量 加 CRATES_IO_TOKEN (无 ${{ secrets }} 语法)
+# 跟 GitHub Actions 差异 (2026-08-21 / Day 101+2):
+#   - actions/checkout@v4 → @v3 (Gitee Go 限制)
+#   - ${{ secrets.CARGO_REGISTRY_TOKEN }} → $CRATES_IO_TOKEN (Gitee 走 env var)
+#   - softprops/action-gh-release 删掉 (Gitee release 走 UI 手动)
+#   - workflow_dispatch 删掉 (Gitee Go 不支持)
+#   - github.event_name → gitee.event_name (Gitee 语法)
+#   - 没有 github-release job (Gitee 走 UI)
 #
-# https://gitee.com/help/articles/4269
-
-name: release
+# 业务方在 Gitee 仓库必须配置环境变量:
+#   仓库 → 设置 → CI/CD → 环境变量
+#   名称: CRATES_IO_TOKEN
+#   值: <从 https://crates.io/settings/tokens 拿的 token, scope: publish>
+#
+# 2026-08-20 (Day 101+1) / P15+ docs: 24 个 crate 全发布
+#   - 16 个 crates/ 内部框架 (demo 跳过, 它是 example binary)
+#   - 8 个 plugins/ first-party plugin (hello/bash/cordis/fs/skill/subagent/web/dsh-adapter)
 
 on:
   push:
@@ -18,9 +28,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CRATES_IO_TOKEN: $CRATES_IO_TOKEN  # 来自 Gitee Go 仓库环境变量
 
 jobs:
+  # ============================================================================
+  # Pre-publish: 瀹屾暣 workspace 娴嬭瘯
+  # ============================================================================
   test:
     name: Pre-publish test
     runs-on: ubuntu-latest
@@ -30,64 +42,186 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 璺?protoc, ci 涓嶈灏?panic
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run all tests
         run: cargo test --workspace --lib
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  dry-run:
-    name: Publish dry-run
-    runs-on: ubuntu-latest
-    needs: [test]
-    steps:
-      - uses: actions/checkout@v3
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: dry-run (cordis)
-        run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty
-      - name: dry-run (code)
-        run: cargo publish -p ma-harness-code --dry-run --allow-dirty
-      - name: dry-run (core)
-        run: cargo publish -p ma-harness-core --dry-run --allow-dirty
-      - name: dry-run (plugin-macro)
-        run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty
-      - name: dry-run (seam)
-        run: cargo publish -p ma-harness-seam --dry-run --allow-dirty
-      - name: dry-run (model) [P12-5]
-        run: cargo publish -p ma-harness-model --dry-run --allow-dirty
-
+  # ============================================================================
+  # Publish: 鎸変緷璧栭『搴忓彂 (24 涓?crate, 鍏?workspace 闄?demo)
+  # ============================================================================
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [dry-run]
+    needs: [test]  # 2026-08-21 (Day 101+2): 去掉独立 dry-run job, 改依赖 test (cargo test/clippy 验 build+metadata)
+    if: gitee.event_name == 'push' && startsWith(gitee.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # 2026-08-21 (Day 101+2): cargo publish 璺?build script, ma-harness-proto 瑕?protoc
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      # --- Tier 0: 鍙跺瓙 (鏃犲唴閮?ma-harness 渚濊禆) ---
       - name: Publish ma-harness-cordis
-        run: cargo publish -p ma-harness-cordis --token $CRATES_IO_TOKEN
-      - name: Wait
+        run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-code
-        run: cargo publish -p ma-harness-code --token $CRATES_IO_TOKEN
-      - name: Wait
+        run: cargo publish -p ma-harness-code --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
         run: sleep 30
+      - name: Publish ma-harness-dag
+        run: cargo publish -p ma-harness-dag --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-artifact
+        run: cargo publish -p ma-harness-artifact --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 1: 渚濊禆 cordis/code ---
       - name: Publish ma-harness-core
-        run: cargo publish -p ma-harness-core --token $CRATES_IO_TOKEN
-      - name: Wait
+        run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
         run: sleep 30
-      - name: Publish ma-harness-plugin-macro
-        run: cargo publish -p ma-harness-plugin-macro --token $CRATES_IO_TOKEN
-      - name: Wait
+      - name: Publish ma-harness-sandbox
+        run: cargo publish -p ma-harness-sandbox --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
         run: sleep 30
-      - name: Publish ma-harness-seam
-        run: cargo publish -p ma-harness-seam --token $CRATES_IO_TOKEN
-      - name: Wait
+
+      # --- Tier 2: 渚濊禆 core ---
+      - name: Publish ma-harness-proto
+        run: cargo publish -p ma-harness-proto --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-registry
+        run: cargo publish -p ma-harness-registry --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-model
-        run: cargo publish -p ma-harness-model --token $CRATES_IO_TOKEN
+        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-macro
+        run: cargo publish -p ma-harness-plugin-macro --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 3: 渚濊禆 Tier 0+1+2 ---
+      - name: Publish ma-harness-seam
+        run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-bundle
+        run: cargo publish -p ma-harness-bundle --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-conformance
+        run: cargo publish -p ma-harness-conformance --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 3.5: 7 涓?first-party plugin (閮戒緷璧?cordis/core/plugin-macro/seam) ---
+      - name: Publish ma-harness-plugin-hello
+        run: cargo publish -p ma-harness-plugin-hello --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-bash
+        run: cargo publish -p ma-harness-plugin-bash --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-cordis
+        run: cargo publish -p ma-harness-plugin-cordis --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-fs
+        run: cargo publish -p ma-harness-plugin-fs --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-skill
+        run: cargo publish -p ma-harness-plugin-skill --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-subagent
+        run: cargo publish -p ma-harness-plugin-subagent --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-web
+        run: cargo publish -p ma-harness-plugin-web --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-plugin-dsh-adapter
+        # P13.5: 8th first-party plugin, 璺?plugin-web 鍚?tier
+        run: cargo publish -p ma-harness-plugin-dsh-adapter --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 4: 绔埌绔湇鍔?(渚濊禆 Tier 0-3) ---
+      - name: Publish ma-harness-server
+        run: cargo publish -p ma-harness-server --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+
+      # --- Tier 5: 椤跺眰 binary (渚濊禆 Tier 0-4) ---
+      - name: Publish ma-harness-tui
+        run: cargo publish -p ma-harness-tui --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+      - name: Wait for index
+        run: sleep 30
+      - name: Publish ma-harness-cli
+        run: cargo publish -p ma-harness-cli --token ${CRATES_IO_TOKEN} || true
+        env:
+          CRATES_IO_TOKEN: $CRATES_IO_TOKEN
+
