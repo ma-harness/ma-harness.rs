@@ -262,9 +262,7 @@ impl DshAdapter {
         let response = client.request(request).await?;
 
         // 解析 response.result -> ServerInfo
-        let result = response
-            .into_result()
-            .map_err(DshError::JsonRpc)?;
+        let result = response.into_result().map_err(DshError::JsonRpc)?;
         let server_info: ServerInfo = serde_json::from_value(result)?;
         *self.server_info.lock().await = Some(server_info.clone());
         Ok(server_info)
@@ -326,9 +324,7 @@ impl DshAdapter {
         {
             let mut guard = self.client.lock().await;
             if let Some(client) = guard.as_mut() {
-                let _ = client
-                    .request(JsonRpcRequest::new("shutdown", None))
-                    .await;
+                let _ = client.request(JsonRpcRequest::new("shutdown", None)).await;
             }
         }
 

@@ -94,7 +94,7 @@ fn p13_4_fixtures() -> Vec<ConformanceFixture> {
         },
         ConformanceFixture {
             name: "p13_4_nonexistent_tool",
-            tool_name: "k8s_pod_status",  // 不存在, P13.1 mock server 只有 echo
+            tool_name: "k8s_pod_status", // 不存在, P13.1 mock server 只有 echo
             args: json!({"namespace": "prod"}),
             expect_error: true,
             expect_substring: None,
@@ -102,7 +102,7 @@ fn p13_4_fixtures() -> Vec<ConformanceFixture> {
         ConformanceFixture {
             name: "p13_4_schema_validation_missing_field",
             tool_name: "echo",
-            args: json!({}),  // 缺 msg 必填字段
+            args: json!({}), // 缺 msg 必填字段
             expect_error: true,
             expect_substring: None,
         },
@@ -167,8 +167,8 @@ async fn p13_4_conformance_9_of_9_pass() {
                     true
                 }
             }
-            (Err(_), true) => true,  // expect error
-            (Ok(_), true) => false,  // expected error but got success
+            (Err(_), true) => true,   // expect error
+            (Ok(_), true) => false,   // expected error but got success
             (Err(_), false) => false, // expected success but got error
         };
 
@@ -208,7 +208,10 @@ async fn p13_4_conformance_9_of_9_pass() {
             .await
             .expect("call after respawn");
         let s = result.to_string();
-        assert!(s.contains("after respawn"), "post-respawn call failed: {result}");
+        assert!(
+            s.contains("after respawn"),
+            "post-respawn call failed: {result}"
+        );
         eprintln!("[ok] resilience after respawn");
     }
 
@@ -230,6 +233,9 @@ async fn p13_4_conformance_9_of_9_pass() {
         .expect("shutdown");
 
     // P13.4 acceptance: 9/9 = 100%
-    assert_eq!(passed, total, "P13.4: 9/9 = 100% required, got {passed}/{total}");
+    assert_eq!(
+        passed, total,
+        "P13.4: 9/9 = 100% required, got {passed}/{total}"
+    );
     eprintln!("\n[ok] P13.4 conformance: 9/9 = 100% pass");
 }

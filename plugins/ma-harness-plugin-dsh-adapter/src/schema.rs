@@ -105,7 +105,10 @@ pub fn dsh_to_ma_schema(dsh: &DshToolSchema) -> ToolSchema {
             parameters.insert("type".to_string(), Value::String("object".to_string()));
             parameters.insert("properties".to_string(), Value::Object(properties));
             if !required.is_empty() {
-                parameters.insert("required".to_string(), Value::Array(required.into_iter().map(Value::String).collect()));
+                parameters.insert(
+                    "required".to_string(),
+                    Value::Array(required.into_iter().map(Value::String).collect()),
+                );
             }
             ToolSchema {
                 name: dsh.name.clone(),

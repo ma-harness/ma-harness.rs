@@ -65,10 +65,14 @@ impl DshAdapter {
 
         let mut child = process::spawn_node(&self.plugin_path, &self.config).await?;
         let stdin = child.stdin.take().ok_or_else(|| {
-            DshError::SpawnFailed(std::io::Error::other("child stdin not captured after respawn"))
+            DshError::SpawnFailed(std::io::Error::other(
+                "child stdin not captured after respawn",
+            ))
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            DshError::SpawnFailed(std::io::Error::other("child stdout not captured after respawn"))
+            DshError::SpawnFailed(std::io::Error::other(
+                "child stdout not captured after respawn",
+            ))
         })?;
         let new_client = JsonRpcClient::new(stdin, stdout);
 
@@ -104,9 +108,7 @@ impl DshAdapter {
 
         match init_result {
             Ok(response) => {
-                let result = response
-                    .into_result()
-                    .map_err(DshError::JsonRpc)?;
+                let result = response.into_result().map_err(DshError::JsonRpc)?;
                 let server_info: ServerInfo = serde_json::from_value(result)?;
                 *self.server_info.lock().await = Some(server_info.clone());
                 self.respawn.count.store(0, Ordering::SeqCst);
@@ -127,9 +129,7 @@ impl DshAdapter {
         {
             let mut guard = self.client.lock().await;
             if let Some(client) = guard.as_mut() {
-                let _ = client
-                    .request(JsonRpcRequest::new("shutdown", None))
-                    .await;
+                let _ = client.request(JsonRpcRequest::new("shutdown", None)).await;
             }
         }
 
@@ -182,9 +182,13 @@ mod tests {
 
     #[test]
     fn needs_respawn_detects_crash() {
-        assert!(DshAdapter::needs_respawn(&DshError::PluginCrashed("test".into())));
+        assert!(DshAdapter::needs_respawn(&DshError::PluginCrashed(
+            "test".into()
+        )));
         let io_err = DshError::Io(std::io::Error::other("pipe closed"));
         assert!(DshAdapter::needs_respawn(&io_err));
-        assert!(!DshAdapter::needs_respawn(&DshError::Timeout(Duration::from_secs(1))));
+        assert!(!DshAdapter::needs_respawn(&DshError::Timeout(
+            Duration::from_secs(1)
+        )));
     }
 }

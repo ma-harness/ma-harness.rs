@@ -42,35 +42,38 @@ impl DshAdapter {
             let adapter_for_closure = Arc::clone(&self);
             let schema_for_validate = ma_schema.clone();
             let name_for_closure = name.clone();
-            let invoke: ToolInvokeFn = Arc::new(move |args: Value, _ctx: &ma_harness_cordis::Context| {
-                let adapter = Arc::clone(&adapter_for_closure);
-                let schema = schema_for_validate.clone();
-                let name = name_for_closure.clone();
-                let timeout = timeout;
-                Box::pin(async move {
-                    // 1. schema 校验 (P13.2 简化版: required field check)
-                    if let Err(e) = validate_args_basic(&schema, &args) {
-                        return Err(anyhow::anyhow!("schema validation failed: {}", e));
-                    }
+            let invoke: ToolInvokeFn =
+                Arc::new(move |args: Value, _ctx: &ma_harness_cordis::Context| {
+                    let adapter = Arc::clone(&adapter_for_closure);
+                    let schema = schema_for_validate.clone();
+                    let name = name_for_closure.clone();
+                    let timeout = timeout;
+                    Box::pin(async move {
+                        // 1. schema 校验 (P13.2 简化版: required field check)
+                        if let Err(e) = validate_args_basic(&schema, &args) {
+                            return Err(anyhow::anyhow!("schema validation failed: {}", e));
+                        }
 
-                    // 2. 调 dsh 工具 (走 JSON-RPC)
-                    match adapter.call_tool(&name, args).await {
-                        Ok(call_result) => tool_result_to_value(call_result),
-                        Err(DshError::JsonRpc(JsonRpcError::Server {
-                            code,
-                            message,
-                            ..
-                        })) => Err(anyhow::anyhow!("dsh server error (code {}): {}", code, message)),
-                        Err(DshError::Timeout(_)) => {
-                            Err(anyhow::anyhow!("tool call timeout after {:?}", timeout))
+                        // 2. 调 dsh 工具 (走 JSON-RPC)
+                        match adapter.call_tool(&name, args).await {
+                            Ok(call_result) => tool_result_to_value(call_result),
+                            Err(DshError::JsonRpc(JsonRpcError::Server {
+                                code, message, ..
+                            })) => Err(anyhow::anyhow!(
+                                "dsh server error (code {}): {}",
+                                code,
+                                message
+                            )),
+                            Err(DshError::Timeout(_)) => {
+                                Err(anyhow::anyhow!("tool call timeout after {:?}", timeout))
+                            }
+                            Err(DshError::PluginCrashed(msg)) => {
+                                Err(anyhow::anyhow!("dsh plugin crashed: {}", msg))
+                            }
+                            Err(e) => Err(anyhow::anyhow!("dsh call failed: {}", e)),
                         }
-                        Err(DshError::PluginCrashed(msg)) => {
-                            Err(anyhow::anyhow!("dsh plugin crashed: {}", msg))
-                        }
-                        Err(e) => Err(anyhow::anyhow!("dsh call failed: {}", e)),
-                    }
-                })
-            });
+                    })
+                });
 
             let config = ToolConfig {
                 timeout: Some(timeout),

@@ -182,7 +182,10 @@ pub async fn spawn_node(plugin_path: &Path, config: &DshConfig) -> Result<Child,
 /// Spawn 后台 task 读子进程 stderr, 桥接到 tracing::warn!
 ///
 /// P13.1 用 warn! 简化, P13.3 解析 dsh 日志格式 (e.g. [dsh] 2026-08-21 ...)
-fn spawn_stderr_bridge(child: &mut Child, _plugin_path: &Path) -> Option<tokio::task::JoinHandle<()>> {
+fn spawn_stderr_bridge(
+    child: &mut Child,
+    _plugin_path: &Path,
+) -> Option<tokio::task::JoinHandle<()>> {
     let stderr = child.stderr.take()?;
     let handle = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();

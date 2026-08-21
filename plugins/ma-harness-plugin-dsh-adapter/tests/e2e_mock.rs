@@ -38,10 +38,9 @@ async fn smoke_spawn_initialize_list_call_shutdown() {
         eprintln!("[skip] node not in PATH");
         return;
     }
-    let adapter =
-        DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
-            .await
-            .expect("spawn");
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
+        .await
+        .expect("spawn");
     let server_info = adapter.initialize().await.expect("initialize");
     assert_eq!(server_info.name, "mock-dsh-server");
     let tools = adapter.list_tools().await.expect("tools/list");
@@ -62,10 +61,9 @@ async fn smoke_register_to_tool_registry_and_invoke() {
         eprintln!("[skip] node not in PATH");
         return;
     }
-    let adapter =
-        DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
-            .await
-            .expect("spawn");
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
+        .await
+        .expect("spawn");
     adapter.initialize().await.expect("initialize");
     let registry = ToolRegistry::new();
     let schemas = adapter
@@ -105,10 +103,9 @@ async fn smoke_initialize_then_list_tools_then_shutdown() {
         eprintln!("[skip] node not in PATH");
         return;
     }
-    let adapter =
-        DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
-            .await
-            .expect("spawn");
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
+        .await
+        .expect("spawn");
     adapter.initialize().await.expect("init");
     let tools = adapter.list_tools().await.expect("list");
     assert!(!tools.is_empty());
@@ -122,10 +119,9 @@ async fn p13_3_graceful_shutdown_completes_quickly() {
         eprintln!("[skip] node not in PATH");
         return;
     }
-    let adapter =
-        DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
-            .await
-            .expect("spawn");
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
+        .await
+        .expect("spawn");
     adapter.initialize().await.expect("init");
 
     // 用 std::time::Instant 测 graceful shutdown 时长
@@ -154,10 +150,9 @@ async fn p13_3_respawn_after_subprocess_crash() {
         eprintln!("[skip] node not in PATH");
         return;
     }
-    let adapter =
-        DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
-            .await
-            .expect("spawn");
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default())
+        .await
+        .expect("spawn");
     adapter.initialize().await.expect("init");
 
     // 模拟子进程 crash: 直接 kill child (绕过 graceful)
@@ -176,9 +171,15 @@ async fn p13_3_respawn_after_subprocess_crash() {
     //
     // 当前 P13.3 实现: respawn 是手动调 (P13.4 conformance 集成时再全自动)
     // 这里手动调 respawn 验 respawn API 工作
-    let respawned_info = adapter.respawn().await.expect("manual respawn should succeed");
+    let respawned_info = adapter
+        .respawn()
+        .await
+        .expect("manual respawn should succeed");
     assert_eq!(respawned_info.name, "mock-dsh-server");
-    eprintln!("[ok] respawned server: {} v{}", respawned_info.name, respawned_info.version);
+    eprintln!(
+        "[ok] respawned server: {} v{}",
+        respawned_info.name, respawned_info.version
+    );
 
     // 重新 list_tools 应该 OK
     let tools = adapter.list_tools().await.expect("list after respawn");
@@ -191,7 +192,10 @@ async fn p13_3_respawn_after_subprocess_crash() {
         .await
         .expect("call after respawn");
     assert!(!result.is_error);
-    eprintln!("[ok] call_tool after respawn: {} content blocks", result.content.len());
+    eprintln!(
+        "[ok] call_tool after respawn: {} content blocks",
+        result.content.len()
+    );
 
     // graceful shutdown 收尾
     adapter
