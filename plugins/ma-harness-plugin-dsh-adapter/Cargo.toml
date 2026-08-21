@@ -1,0 +1,39 @@
+[package]
+name = "ma-harness-plugin-dsh-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness dsh-adapter plugin (P13): 走 dsh JSON-RPC over stdio 直接加载 dsh (DeepSeek Harness) 写的 TS plugin"
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 (P13.5 集成时用, P13.1 留接口位)
+ma-harness-cordis = { path = "../../crates/ma-harness-cordis" }
+ma-harness-seam   = { path = "../../crates/ma-harness-seam" }
+ma-harness-core   = { path = "../../crates/ma-harness-core" }
+
+# 外部
+tokio = { version = "1", features = ["process", "io-util", "sync", "rt-multi-thread", "macros", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+# 不引入 jsonrpc crate, 手写 ~200 行 client (协议简单, 引入依赖不值)
+
+[dev-dependencies]
+# 单测用: 跑 mock node 端到端验 JSON-RPC 通讯
+# 用 tempfile 写 mock dsh server 的 entry .ts, business-side 不需要装 dsh
+# (mock server 是 ~30 行 JS, 直接走 Node.js stdio JSON-RPC)
+tempfile = "3"
+
+# mock node 在测试时跑, business-side 装 Node.js 后能完整跑 e2e
+[features]
+default = []
+# 2026-08-21 (Day 101+2): test-e2e 启用, 跑真 mock Node.js 子进程
+test-e2e = []

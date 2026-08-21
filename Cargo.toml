@@ -25,6 +25,7 @@ members = [
     "plugins/ma-harness-plugin-subagent",
     "plugins/ma-harness-plugin-skill",
     "plugins/ma-harness-plugin-cordis",
+    "plugins/ma-harness-plugin-dsh-adapter",  # 2026-08-21 (Day 101+2): P13 dsh-adapter 骨架
 ]
 
 [workspace.package]
