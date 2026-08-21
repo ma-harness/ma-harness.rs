@@ -167,11 +167,13 @@
         "description": "单 model token 统计",
         "properties": {
           "completion_tokens": {
+            "description": "completion tokens",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
           "prompt_tokens": {
+            "description": "prompt tokens",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -187,24 +189,28 @@
         "description": "单个 session 的 JSON 表示 (跟 proto Session 对齐)",
         "properties": {
           "closed_at": {
+            "description": "关闭时间 (RFC 3339 string, None = 未关闭)",
             "type": [
               "string",
               "null"
             ]
           },
           "created_at": {
+            "description": "创建时间 (RFC 3339 string)",
             "type": [
               "string",
               "null"
             ]
           },
           "enabled_plugins": {
+            "description": "启用的 plugin name 列表",
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "id": {
+            "description": "session UUID v4",
             "type": "string"
           },
           "mode": {
@@ -213,6 +219,7 @@
             "type": "integer"
           },
           "name": {
+            "description": "用户给的名字 (默认 \"session-<timestamp>\")",
             "type": "string"
           },
           "state": {
@@ -221,12 +228,14 @@
             "type": "integer"
           },
           "updated_at": {
+            "description": "最后更新时间 (RFC 3339 string)",
             "type": [
               "string",
               "null"
             ]
           },
           "user_id": {
+            "description": "用户 ID (Phase 2 多用户, 当前固定空字符串)",
             "type": "string"
           }
         },
@@ -310,36 +319,42 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ma_harness_server.http.ModelTokenStats"
             },
-            "description": "P8-2 简化: 按 model 分组 (key = model name)",
+            "description": "P8-2 简化: 按 model 分组 (key = model name)\n单 model 的 token 统计 (key 是 model name)",
             "propertyNames": {
               "type": "string"
             },
             "type": "object"
           },
           "completion_tokens": {
+            "description": "累计 completion tokens (all models)",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
           "prompt_tokens": {
+            "description": "累计 prompt tokens (all models)",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
           "request_count": {
+            "description": "ModelRequest 事件计数",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
           "response_count": {
+            "description": "ModelResponse 事件计数",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
           },
           "session_id": {
+            "description": "session UUID",
             "type": "string"
           },
           "total": {
+            "description": "prompt + completion",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
