@@ -1031,7 +1031,7 @@ async fn run_prompt(prompt: &str, api_key: Option<&str>, model: &str) -> Result<
     let wat = extract_wat_from_llm_response(&resp.content).ok_or_else(|| {
         anyhow::anyhow!(
             "no WAT found in LLM response. Raw content (first 500 chars):\n{}",
-            &resp.content.chars().take(500).collect::<String>()
+            resp.content.chars().take(500).collect::<String>()
         )
     })?;
 
