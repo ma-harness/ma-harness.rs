@@ -39,6 +39,8 @@ desktop.ini
 *.log
 *.tmp
 /.env
+# git commit -F <file> 临时 commit message 草稿 (不跟踪)
+.commit-msg-*.md
 /.env.local
 /.env.*.local
 
