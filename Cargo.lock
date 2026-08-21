@@ -2520,7 +2520,6 @@ dependencies = [
  "clap",
  "ma-harness-cordis",
  "ma-harness-core",
- "ma-harness-seam",
  "proc-macro2",
  "quote",
  "schemars",

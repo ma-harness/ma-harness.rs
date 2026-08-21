@@ -37,9 +37,11 @@ anyhow = { workspace = true }
 [dev-dependencies]
 # 集成测试用 (dsh_tool / dsh_command 生成的代码引用这些)
 ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
-# 2026-08-19 (Day 101 / P7-0.4): 修 pre-existing broken test
-# ctx_key! macro 在 seam (proc-macro crate 不允许 export macro_rules!)
-ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+# 2026-08-21 (Day 101+2): 删 ma-harness-seam dev-dep. cargo publish 1.94 验证
+# dev-dep version 在 index, plugin-macro <-> seam 循环依赖 (seam re-export
+# 来自 plugin-macro). dev-dep seam 触发 "no matching package" 错.
+# 集成测试 (tests/macros_compile.rs 用 ctx_key! 从 seam) 删掉, trybuild fixture
+# 单独保留 (不引用 seam, 见 tests/trybuild.rs 注释).
 # trybuild 编译 fixtures 用 (e.g. dsh_listener async fn 展开需要 tokio)
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 # trybuild: 编译失败 fixture 测试 (Phase 2.4)
