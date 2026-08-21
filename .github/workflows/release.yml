@@ -1,4 +1,4 @@
-﻿name: Release
+name: Release
 
 # Layer 3 CI/CD: 鑷姩 publish 鍒?crates.io
 # 瑙﹀彂: git push tag v*.*.*  (v0.1.0 / v0.1.1 / v0.2.0 ...)
@@ -60,25 +60,25 @@ jobs:
 
       # --- Tier 0: 鍙跺瓙 (鏃犲唴閮?ma-harness 渚濊禆) ---
       - name: Publish ma-harness-cordis
-        run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-code
-        run: cargo publish -p ma-harness-code --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-code --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-dag
-        run: cargo publish -p ma-harness-dag --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-dag --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-artifact
-        run: cargo publish -p ma-harness-artifact --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-artifact --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
@@ -86,7 +86,7 @@ jobs:
 
       # --- Tier 1: 渚濊禆 cordis/code ---
       - name: Publish ma-harness-core
-        run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index

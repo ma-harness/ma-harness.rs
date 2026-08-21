@@ -2229,7 +2229,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "ma-harness-artifact"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-bundle"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2291,7 +2291,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-code"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "parking_lot",
@@ -2303,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-conformance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2332,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-cordis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-dag"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-demo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ma-harness-cordis",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-bash"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-cordis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-dsh-adapter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-fs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-hello"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "inventory",
@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-skill"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ma-harness-cordis",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-subagent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-plugin-web"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "ma-harness-core",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-registry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "landlock",
  "ma-harness-cordis",
@@ -2629,7 +2629,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-seam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2676,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "ma-harness-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
