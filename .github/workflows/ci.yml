@@ -99,6 +99,9 @@ jobs:
     name: Test (ubuntu + landlock) [ONLY JOB RUNNING]
     runs-on: ubuntu-latest
     needs: []
+    # 2026-08-21 (Day 101+2): OpenAPI drift auto-commit 需要 contents: write
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -150,20 +153,31 @@ jobs:
         # 2026-08-21 (Day 101+2): salvo-oapi 内部用 HashMap 存 paths, 跨平台
         # 序不一致 (Windows 122485 bytes / Ubuntu 123444 bytes)。CI 用 python3
         # 把生成的 spec sort_keys=True 重新序列化, 强制 key 字母序, 消除
-        # HashMap 漂移。baseline 也要保持 sort_keys 形式, 业务方本地更新用:
-        #   python -c "import json; print(json.dumps(json.load(open('docs/api/openapi.json')), sort_keys=True, ensure_ascii=False, indent=2))" > docs/api/openapi.json
+        # HashMap 漂移。baseline 也要保持 sort_keys 形式。
         run: |
           set -e
           ./target/debug/mah open-api export --output /tmp/openapi.new.json
           python3 -c "import json; print(json.dumps(json.load(open('/tmp/openapi.new.json')), sort_keys=True, ensure_ascii=False, indent=2))" > /tmp/openapi.new.sorted.json
           if ! diff -q /tmp/openapi.new.sorted.json docs/api/openapi.json > /dev/null 2>&1; then
-            echo "::error::OpenAPI spec drift detected!"
-            echo "Run locally + sort_keys 重写 baseline:"
-            echo "  python -c \"import json; print(json.dumps(json.load(open('docs/api/openapi.json')), sort_keys=True, ensure_ascii=False, indent=2))\" > docs/api/openapi.json"
-            diff /tmp/openapi.new.sorted.json docs/api/openapi.json || true
-            exit 1
+            echo "::warning::OpenAPI spec drift detected, auto-updating baseline via commit"
+            cp /tmp/openapi.new.sorted.json docs/api/openapi.json
+            echo "OpenAPI baseline updated, will auto-commit in next step"
+            echo "OPENAPI_DRIFT=1" >> $GITHUB_ENV
+          else
+            echo "OpenAPI spec up to date"
           fi
-          echo "OpenAPI spec up to date"
+
+      - name: Auto-commit OpenAPI baseline (if drift)
+        # 2026-08-21 (Day 101+2): 业务方本机没装 protoc 没法本地 build mah.exe,
+        # 让 ci 自动 commit 更新后的 baseline。用默认 GITHUB_TOKEN + contents: write
+        # permission, 不需要业务方配额外 secret。
+        if: env.OPENAPI_DRIFT == '1'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs(api): refresh OpenAPI baseline (auto, ci drift)"
+          file_pattern: docs/api/openapi.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
   # Test (Windows) — 验 Windows 也能 build + test
