@@ -105,6 +105,11 @@ jobs:
           uname -r
           cat /etc/os-release
 
+      - name: Install protoc
+        # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 跑 protoc, Test job 也要装
+        # 之前 88d4dd2 只给 lint job 装了, Test/Build 漏装导致 build.rs panic
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Test (workspace lib)
         run: cargo test --workspace --lib
 
@@ -160,6 +165,10 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protoc
+        # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 跑 protoc
+        run: choco install -y protoc
+
       - name: Test (workspace lib)
         run: cargo test --workspace --lib
 
@@ -189,6 +198,10 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 跑 protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Run conformance (synthetic fixtures)
         run: |
