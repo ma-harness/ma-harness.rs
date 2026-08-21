@@ -294,3 +294,4 @@ Tasks allocated by arch map for Week 1-2:
 |------------|--------|
 | 2026-08-18 | Initial version, finalized before Week 1-2 |
 | 2026-08-20 | P11+ updates: PTC shipped in P2.6, Creator in P10, Anthropic adapter in P11-5, vision in P11-5/9, dsh conformance 9/9 in P11-2 |
+| 2026-08-21 | P13 dsh-adapter design complete: §13 added, design/dsh-adapter.md 16628 bytes, 5 phases × 1 week, reuse dsh JSON-RPC server, lock dsh 0.1.0-rc.5 |

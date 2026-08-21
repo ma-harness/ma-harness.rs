@@ -317,7 +317,45 @@ AI agent orchestrator 从 Node.js/TypeScript 重写到 Rust,目标:
 | Decision log 条目 | 42 (§ 1-42) |
 | 公开 API 锁定 | `ma-harness-seam` (5 trait + 5 macro) |
 
-## 下一步: Phase 13+ (post-101+1)
+---
+
+### Phase 13 — P13 dsh-adapter (Day 101+2, 设计中)
+
+**目标**: 让 ma-harness 可以直接加载并运行 dsh (DeepSeek Harness) 写的 TS plugin, 走 dsh 自家 JSON-RPC over stdio 协议。
+
+**状态**: 📋 设计完成, 待实施 (5 phase × 1 周 = 5-6 周总)
+
+**详细设计**: [`design/dsh-adapter.md`](design/dsh-adapter.md) (中英双语, 17572 bytes)
+
+**产出** (计划):
+- **P13.1 骨架** (1 周): `plugins/ma-harness-plugin-dsh-adapter/` crate + JSON-RPC client + Node.js 子进程 spawn + mock 测
+- **P13.2 工具桥接** (1 周): dsh `defineTool` → ma-harness `ToolSchema` + invoke 转发
+- **P13.3 lifecycle** (1 周): shutdown / respawn / cancel / stderr / 配置加载
+- **P13.4 conformance** (1 周): `mah conformance --dsh-adapter` 跑 9/9 dsh-snap = 100%
+- **P13.5 e2e + 文档** (1 周): 真 dsh 插件 (k8s_pod_status) + `mah dsh info/doctor` + CI + 中英文档
+
+**关键决策**:
+- **复用 dsh `@deepseek-ai/dsh-sdk-jsonrpc-server`**, 不造协议
+- 锁 dsh 版本 `0.1.0-rc.5` (官方 preview, 升级走 minor)
+- 不引入 `jsonrpc` crate, 手写 ~200 行 client (协议简单)
+- Node.js 子进程 30s timeout + 3 次 respawn 兜底
+
+**Out-of-Scope (P14+)**:
+- dsh 全 78 行 plugin 桥接 (沙箱/approval/持久会话等)
+- PTC (Code mode) `run_code` tool 桥接
+- dylib ↔ dsh 互操作
+- dsh-web ↔ ma-harness-tui Web UI 桥接
+- Cordis 事件 hook (`tools/pre-execute` 等) 桥接
+
+**新 crate**: 1 (`plugins/ma-harness-plugin-dsh-adapter/`, publish=true, 第 8 个 first-party plugin)
+
+**测试目标**: 累计 660+ (+20 from dsh-adapter + conformance)
+
+**风险**: dsh 0.1.0-rc.5 协议不稳定 / Node.js 业务方本机未装 / Windows Node.js 路径差异 (见 design doc §5)
+
+---
+
+## 下一步: Phase 13+ (post-101+2)
 
 ### P15+ — 生产硬化 (计划)
 

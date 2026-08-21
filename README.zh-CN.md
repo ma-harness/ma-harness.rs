@@ -18,6 +18,7 @@
 - **OpenAI / Anthropic / Deepseek / Stub** LLM adapter, 支持 streaming、retry (P12-2)、vision (P11-5)、tool-call
 - **Cordis 风格 DI**: Context / Service / Plugin / TypedKey / Disposable 框架 (P7)
 - **ACP 协议** (JSON-RPC 2.0 over stdio) — 跟 dsh `dsh-jsonrpc-agent` 互通 (P11-4)
+- **dsh-adapter** — 走 JSON-RPC over stdio 直接加载 dsh (DeepSeek Harness) TS plugin (P13, 进行中)
 - **Plugin Registry + Bundle** — 分布式 plugin 发现 + lockfile 锁定安装 (P11-6/8, P12-5/7)
 - **DAG 任务编排** — 拓扑排序、依赖校验、失败短路 (P12-9)
 - **Vibe Coding artifact viewer** — 自动识别 + 渲染 10 种产物 (HTML/SVG/JSON 等) (P11-7)
@@ -81,7 +82,7 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 | **Terminal Bench 2.1** 等价 | P11-2.5+ | 需要真 LLM API key + dataset (87.9% baseline) | 外部 (Deepseek API key + dataset access) | 业务方驱动, P11-2.5 文档在 `docs/dsh-benchmark-report.md` |
 | **Toolathlon-Verified** 等价 | P11-2.5+ | 同上 (74.1% baseline) | 外部 | 业务方驱动 |
 | **DSBench-FullStack** 等价 | P11-2.5+ | 同上 (71.1% baseline) | 外部 | 业务方驱动 |
-| **dsh → ma-harness 迁移工具** | P13 | 自动转换 dsh plugins/fixtures | 需要决定先转什么 | P13 业务方驱动 |
+| **dsh → ma-harness 迁移工具** | P13 | ~~自动转换 dsh plugins/fixtures~~ | 改为 P13 **dsh-adapter** (直接加载 dsh 现有 plugin, 不需转换) | 见 [docs/zh-CN/design/dsh-adapter.md](docs/zh-CN/design/dsh-adapter.md) |
 | **Cargo workspaces** 集成 | P13 | `cargo install cargo-workspaces` 没做 (临时手撸 script) | install + verify | P13, 10 分钟 |
 | **PyO3 v2** (替换 subprocess) | P13+ | v1 (subprocess) 已能用, v2 (PyO3) 提速 10-100x | 需重设计 mah-py API | P13+, 低优先 |
 | **WASI preview2** 支持 | P13+ | wasmtime 27 还没完整 WASI preview2, 需要升 28+ | wasmtime 28+ 发布 | P13+, 低优先 |
@@ -90,6 +91,7 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 | **crates.io 0.1.0 发版** | P12-5 | workflow + secrets 配好, 等 token | `CRATES_IO_TOKEN` (GH + Gitee) | 首次 push tag `v0.1.0` |
 | **mah-py 0.1.1 → pypi.org 生产** | P12-4 | 当前在 test.pypi.org | pypi.org token (跟 test.pypi 独立) | 业务方先验 test.pypi.org |
 | **跨平台 binary 发版** (Windows / macOS / Linux) | P13+ | mah.exe 本地 build OK, 缺 cross-compile + GH release workflow | cross-compile toolchain (cargo-cross / GH Actions matrix) | P13 |
+| **dsh-adapter P13** (走 JSON-RPC 直接加载 dsh TS plugin) | **P13 (当前)** | 设计完成, 5 phase × 1 周实施 | 业务方排期 | 6 周冲刺, 见 [docs/zh-CN/design/dsh-adapter.md](docs/zh-CN/design/dsh-adapter.md) |
 
 ### 测试覆盖
 

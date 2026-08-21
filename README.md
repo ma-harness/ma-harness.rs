@@ -18,6 +18,7 @@
 - **OpenAI / Anthropic / Deepseek / Stub** LLM adapters with streaming, retry (P12-2), vision (P11-5), tool-call
 - **Cordis-style DI**: Context / Service / Plugin / TypedKey / Disposable framework (P7)
 - **ACP protocol** (JSON-RPC 2.0 over stdio) — interoperable with dsh's `dsh-jsonrpc-agent` (P11-4)
+- **dsh-adapter** — load dsh (DeepSeek Harness) TS plugins directly via JSON-RPC over stdio (P13, in progress)
 - **Plugin Registry + Bundle** for distributed plugin discovery and reproducible installs (P11-6/8, P12-5/7)
 - **DAG task orchestration** with topological sort, dependency validation, short-circuit on failure (P12-9)
 - **Vibe Coding artifact viewer** — auto-detect and render 10 artifact kinds (HTML, SVG, JSON, etc.) (P11-7)
@@ -81,7 +82,7 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 | **Terminal Bench 2.1** parity | P11-2.5+ | Needs real LLM API key + dataset (87.9% baseline target) | external (Deepseek API key + dataset access) | business-driven, P11-2.5 docs in `docs/dsh-benchmark-report.md` |
 | **Toolathlon-Verified** parity | P11-2.5+ | Same as above (74.1% baseline target) | external | business-driven |
 | **DSBench-FullStack** parity | P11-2.5+ | Same as above (71.1% baseline target) | external | business-driven |
-| **dsh → ma-harness migration tool** | P13 | Tool to convert dsh plugins/fixtures automatically | needs decision on what to convert first | P13 business-driven |
+| **dsh → ma-harness migration tool** | P13 | ~~Tool to convert dsh plugins/fixtures~~ | replaced by P13 **dsh-adapter** (load dsh plugins directly, no conversion needed) | see [design/dsh-adapter.md](docs/en/design/dsh-adapter.md) |
 | **Cargo workspaces** integration | P13 | `cargo install cargo-workspaces` not done yet (manual script used) | install + verify | P13, 10-min task |
 | **PyO3 v2** (replace subprocess) | P13+ | v1 (subprocess) works, v2 (PyO3) gives 10-100x speedup | needs re-design of mah-py API | P13+, low priority |
 | **WASI preview2** support | P13+ | wasmtime 27 has partial WASI, full preview2 needs upgrade | wasmtime 28+ release | P13+, low priority |
@@ -90,6 +91,7 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 | **crates.io 0.1.0 release** | P12-5 | workflow + secrets in place, waiting for token | `CRATES_IO_TOKEN` for GH + Gitee | first push tag `v0.1.0` |
 | **mah-py 0.1.1 → pypi.org production** | P12-4 | Currently on test.pypi.org only | pypi.org token (separate from test.pypi.org) | business verifies test.pypi.org first |
 | **Cross-platform binary releases** (Windows / macOS / Linux) | P13+ | mah.exe builds locally; need cross-compile + GH release workflow | cross-compile toolchain (cargo-cross / GitHub Actions matrix) | P13 |
+| **dsh-adapter P13** (load dsh TS plugins via JSON-RPC) | **P13 (current)** | design done, 5 phases × 1 week to implement | business schedule | 6-week sprint, see [docs/en/design/dsh-adapter.md](docs/en/design/dsh-adapter.md) |
 
 ### Test coverage
 

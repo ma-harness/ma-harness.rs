@@ -35,14 +35,15 @@ ma-harness.rs/
 │   ├── ma_harness_proto/    ← Protobuf 定义 + Prost codegen
 │   ├── ma_harness_cli/      ← `mah` 二进制入口
 │   └── ma_harness_server/   ← axum + tonic 起的服务
-├── plugins/                 ← first-party 插件 (6 个) + hello demo
+├── plugins/                 ← first-party 插件 (7 个) + hello demo + (P13: dsh-adapter)
 │   ├── ma_harness_plugin_hello/   ← 端到端 demo (Week 1 Day 4, 验证 cordis 链路)
 │   ├── ma_harness_plugin_bash/
 │   ├── ma_harness_plugin_fs/
 │   ├── ma_harness_plugin_web/
 │   ├── ma_harness_plugin_subagent/
 │   ├── ma_harness_plugin_skill/
-│   └── ma_harness_plugin_cordis/
+│   ├── ma_harness_plugin_cordis/
+│   └── ma_harness_plugin_dsh_adapter/   ← P13 计划新增: 走 dsh JSON-RPC 加载 dsh TS plugin
 ├── ma_harness_plugin_macro/ ← proc-macro crate (#[dsh_tool] 等)
 ├── tests/                   ← 集成测试 + conformance
 │   ├── fixtures/            ← 复用 dsh 的 JSONL fixtures

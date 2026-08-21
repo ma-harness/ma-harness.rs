@@ -317,6 +317,46 @@ orchestrator from Node.js/TypeScript to Rust, with these goals:
 | Commits | 50+ |
 | Weekly reports | 8 (Day 0 / Week 1-2 / 3-4 / 5-6 / 7-9 / 10 / 11 / 12-final) |
 | Decision log entries | 42 (§ 1-42) |
+
+---
+
+### Phase 13 — P13 dsh-adapter (Day 101+2, designing)
+
+**Goal**: Let ma-harness load and run dsh (DeepSeek Harness) TS plugins directly, via dsh's native JSON-RPC over stdio protocol.
+
+**Status**: 📋 Design complete, awaiting implementation (5 phases × 1 week = 5-6 weeks total)
+
+**Detailed design**: [`design/dsh-adapter.md`](design/dsh-adapter.md) (bilingual, 16628 bytes)
+
+**Deliverables (planned)**:
+- **P13.1 Skeleton** (1 week): `plugins/ma-harness-plugin-dsh-adapter/` crate + JSON-RPC client + Node.js subprocess spawn + mock tests
+- **P13.2 Tool bridge** (1 week): dsh `defineTool` → ma-harness `ToolSchema` + invoke forwarding
+- **P13.3 Lifecycle** (1 week): shutdown / respawn / cancel / stderr / config load
+- **P13.4 Conformance** (1 week): `mah conformance --dsh-adapter` runs 9/9 dsh-snap = 100%
+- **P13.5 E2E + docs** (1 week): real dsh plugin (k8s_pod_status) + `mah dsh info/doctor` + CI + bilingual docs
+
+**Key decisions**:
+- **Reuse dsh's `@deepseek-ai/dsh-sdk-jsonrpc-server`**, no new protocol
+- Lock dsh version `0.1.0-rc.5` (official preview, upgrade via minor)
+- No `jsonrpc` crate, hand-write ~200 line client (protocol simple)
+- Node.js subprocess 30s timeout + 3 respawn fallback
+
+**Out-of-Scope (P14+)**:
+- Bridge dsh's 78 plugins (sandbox / approval / persistence)
+- PTC (Code mode) `run_code` tool bridge
+- dylib ↔ dsh interop
+- dsh-web ↔ ma-harness-tui Web UI bridge
+- Cordis event hook (`tools/pre-execute` etc.) bridge
+
+**New crate**: 1 (`plugins/ma-harness-plugin-dsh-adapter/`, publish=true, 8th first-party plugin)
+
+**Test target**: 660+ cumulative (+20 from dsh-adapter + conformance)
+
+**Risks**: dsh 0.1.0-rc.5 protocol unstable / Node.js not installed on user machine / Windows Node.js path differences (see design doc §5)
+
+---
+
+## Next: Phase 14+ (post-101+2)
 | Public API locked | `ma-harness-seam` (5 traits + 5 macros) |
 
 ## Next: Phase 13+ (post-101+1)

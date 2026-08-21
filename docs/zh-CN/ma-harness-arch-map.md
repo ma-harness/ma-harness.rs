@@ -265,9 +265,117 @@ ma-harness 行为:**完全一致**。但加 2 项扩展:
 
 ---
 
+## 13. dsh-adapter 架构 (P13)
+
+**目标**: 让 ma-harness 加载并运行 dsh (DeepSeek Harness) 写的 TS plugin, 走 dsh 自家 JSON-RPC over stdio。
+
+**详细设计**: [`design/dsh-adapter.md`](design/dsh-adapter.md) (中英双语)
+
+### 13.1 总体架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ ma-harness host (Rust)                                   │
+│                                                          │
+│  ┌────────────┐   ┌─────────────┐   ┌───────────────┐   │
+│  │ ToolReg.   │   │ PluginLoader│   │ Conformance   │   │
+│  │ (cordis)   │   │             │   │               │   │
+│  └─────┬──────┘   └──────┬──────┘   └───────────────┘   │
+│        │                 │                              │
+│        │ schema/invoke   │ install("dsh::/path")        │
+│        ▼                 ▼                              │
+│  ┌─────────────────────────────────────┐                │
+│  │ DshAdapter (新 plugin)               │                │
+│  │  - JSON-RPC client (Rust)            │                │
+│  │  - schema cache                      │                │
+│  │  - invoke → JSON-RPC call            │                │
+│  └────────────┬────────────────────────┘                │
+│               │ JSON-RPC 2.0 over stdio                 │
+└───────────────┼──────────────────────────────────────────┘
+                │
+                ▼ (子进程)
+┌─────────────────────────────────────────────────────────┐
+│ node child process                                        │
+│                                                          │
+│  ┌─────────────────────────────────────┐                │
+│  │ @deepseek-ai/dsh-sdk-jsonrpc-server │ (reused)     │
+│  │  - bootstrap dsh Cordis ctx          │                │
+│  │  - load user plugin (TS)            │                │
+│  │  - tools/register via Cordis        │                │
+│  └────────────┬────────────────────────┘                │
+│               ▼                                           │
+│  ┌─────────────────────────────────────┐                │
+│  │ user dsh plugin (TS, e.g. k8s)      │                │
+│  │  - defineTool({...})                │                │
+│  │  - async execute(args, exec)         │                │
+│  └─────────────────────────────────────┘                │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 13.2 跟现有 plugin 体系的关系
+
+| 维度 | Rust dylib plugin | dsh TS plugin (P13) |
+|---|---|---|
+| Plugin 形态 | Rust 共享库 (.so/.dll/.dylib) | TS source + Node.js 解释 |
+| 加载方式 | `libloading::Library::new` | `tokio::process::Command` spawn `node` |
+| Lifecycle | `Plugin::install(ctx)` C-ABI extern "C" | `tools/list` 一次性 + invoke 走 JSON-RPC |
+| Wire protocol | C-ABI `extern "C" fn` + JSON 字符串 | JSON-RPC 2.0 over stdio (dsh 自家) |
+| 共享 | 都注册到 `ToolRegistry` | 都注册到 `ToolRegistry` (通过 `ma_harness_seam::Tool` trait) |
+| Conformance | 跟 dsh_format 走 `mah conformance --dsh` | 走 `mah conformance --dsh-adapter` (新增 flag) |
+| 互操作 | 单独 load | 单独 load, P14+ 支持 mix |
+
+### 13.3 Wire Protocol (复用 dsh JSON-RPC)
+
+| Method | Request | Response | 用途 |
+|---|---|---|---|
+| `initialize` | `{ protocolVersion, clientInfo }` | `{ serverInfo, capabilities }` | 握手 |
+| `tools/list` | `{}` | `{ tools: ToolSchema[] }` | 拿 schema (install 时一次) |
+| `tools/call` | `{ name, arguments, callId }` | `{ content: ContentBlock[], isError }` | 调工具 |
+| `tools/cancel` | `{ callId, jobId? }` | `{}` | 取消 |
+| `shutdown` | `{}` | `{}` | 退出子进程 |
+
+不实现 (P13 out-of-scope): `session/*`, `approval/*`, `sandbox/*`, `files/*`, `ui/*`
+
+协议版本: 锁 dsh `0.1.0-rc.5`, 升级走 minor release
+
+### 13.4 dsh plugin 加载示例
+
+```bash
+# 安装 dsh 自家 plugin (e.g. k8s_pod_status)
+mah load-plugin dsh::./plugins/ma-harness-plugin-dsh-adapter/examples/k8s_pod_status.ts
+
+# 调 (跟 dylib plugin 一样)
+mah run-prompt "Check production k8s pod status"
+# → model 调 k8s_pod_status tool → ma-harness → JSON-RPC → dsh 子进程 → tool.execute()
+```
+
+### 13.5 配置 (cordis yaml 子集)
+
+```yaml
+# ~/.ma-harness/plugins.dsh-adapter.yaml
+dsh:
+  runtime: "node"  # or "deno" (P14+)
+  node_path: "/usr/bin/node"  # auto-detect via `which node`
+  timeout_secs: 30
+  max_respawn: 3
+  dsh_env:
+    DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY}"
+```
+
+### 13.6 Out-of-Scope (后续 P14+)
+
+- dsh 全 78 行 plugin 桥接 (沙箱/approval/持久会话)
+- PTC (Code mode) `run_code` tool 桥接
+- dylib ↔ dsh 互操作 (一个 host 混用两种 plugin)
+- dsh-web ↔ ma-harness-tui Web UI 桥接
+- Cordis 事件 hook (`tools/pre-execute` permission gate) 桥接
+
+---
+
 ## 12. 变更记录
 
 | 日期 | 变更 |
 |---|---|
 | 2026-08-18 | 初版,Week 1-2 起步前定稿 |
 | 2026-08-20 | P11+ 更新: PTC 在 P2.6 出货, Creator 在 P10, Anthropic adapter 在 P11-5, vision 在 P11-5/9, dsh conformance 9/9 在 P11-2 |
+| 2026-08-21 | P13 dsh-adapter 设计完成: §13 全文, design/dsh-adapter.md 17572 bytes, 5 phase × 1 周, 复用 dsh JSON-RPC server, 锁 dsh 0.1.0-rc.5 |
