@@ -35,9 +35,9 @@ async-stream = "0.3"
 
 [dev-dependencies]
 # 测试用 first-party plugin (验证 framework 自身)
-ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
-ma-harness-plugin-bash = { path = "../../plugins/ma-harness-plugin-bash" }
-ma-harness-plugin-cordis = { path = "../../plugins/ma-harness-plugin-cordis" }
+ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello", version = "0.1.1" }
+ma-harness-plugin-bash = { path = "../../plugins/ma-harness-plugin-bash", version = "0.1.1" }
+ma-harness-plugin-cordis = { path = "../../plugins/ma-harness-plugin-cordis", version = "0.1.1" }
 pretty_assertions = { workspace = true }
 tokio-test = { workspace = true }
 insta = { workspace = true }

@@ -21,7 +21,7 @@ ma-harness-server = { path = "../ma-harness-server", version = "0.1.0" }  # P4-3
 # P4-3: 拿 proto SessionState enum 转 state name
 ma-harness-proto = { path = "../ma-harness-proto", version = "0.1.0" }
 # Phase 3.9: inventory 走 hello plugin 验证
-ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
+ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello", version = "0.1.1" }
 # 外部
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
