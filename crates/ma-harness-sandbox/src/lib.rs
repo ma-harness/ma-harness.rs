@@ -188,7 +188,8 @@ impl Default for LinuxLandlockEnforcer {
 impl Enforcer for LinuxLandlockEnforcer {
     fn enforce(&self, policy: &Policy) -> Result<(), EnforceError> {
         use landlock::{
-            Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI,
+            make_bitflags, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr,
+            RulesetCreatedAttr, ABI,
         };
 
         // 1. 选定最低 ABI 等级 (V1 = kernel 5.13 引入, 业务方主流生产环境都覆盖)
@@ -208,7 +209,12 @@ impl Enforcer for LinuxLandlockEnforcer {
             .create()
             .map_err(|e| EnforceError::ApplyFailed(format!("create ruleset: {e}")))?;
 
-        // 3. 添加 read 规则 (read_paths 内每条 path 加 read file + read dir 两条)
+        // 3. 添加 read 规则 (每条 path 一次性 add_rule ReadFile + ReadDir)
+        //    landlock 0.4.7: PathFd 不 impl Copy, 不能在两个 PathBeneath::new 里复用。
+        //    用 make_bitflags!(AccessFs::{ReadFile | ReadDir}) 合并两个 flag 成一个
+        //    BitFlags<AccessFs>, 一次 add_rule 搞定 (BitFlags 自身 impl Copy)。
+        //    docs: docs.rs/landlock/0.4.7/macro.make_bitflags.html
+        let read_access = make_bitflags!(AccessFs::{ReadFile | ReadDir});
         for rule in &policy.read_paths {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
@@ -219,15 +225,7 @@ impl Enforcer for LinuxLandlockEnforcer {
                     )),
                 })?;
                 ruleset = ruleset
-                    .add_rule(PathBeneath::new(fd, AccessFs::ReadFile))
-                    .map_err(|e| EnforceError::RuleAddFailed {
-                        path: path.clone(),
-                        source: Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("{e:?}"),
-                        )),
-                    })?
-                    .add_rule(PathBeneath::new(fd, AccessFs::ReadDir))
+                    .add_rule(PathBeneath::new(fd, read_access))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
                         source: Box::new(std::io::Error::new(
