@@ -22,12 +22,9 @@ jobs:
   # ============================================================================
   # Lint (fmt + clippy) — 最快, 先跑
   # ============================================================================
-  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"验证
-  # 之前 OpenAPI baseline 问题。全 lint+build 过, 重启时改回 if: ${{ ... }}
   lint:
-    name: Lint (fmt + clippy) [DISABLED, 只跑 Test]
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
-    if: false
     steps:
       - uses: actions/checkout@v4
 
@@ -53,12 +50,9 @@ jobs:
   # ============================================================================
   # Build (cross-platform sanity check) — Linux + Windows + macOS
   # ============================================================================
-  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"验证
-  # 之前 OpenAPI baseline 问题。
   build:
-    name: Build (${{ matrix.os }}) [DISABLED, 只跑 Test]
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -92,13 +86,10 @@ jobs:
   # ============================================================================
   # Test (Ubuntu + landlock 真测)
   # ============================================================================
-  # 2026-08-21 (Day 101+2): 临时 enable 跑这一个, 验 OpenAPI baseline 修复
-  # 跟之前修过的 sandbox + creator.rs 等。needs: [] 解除对 lint+build 的依赖,
-  # 因为 lint + build 临时 disable 了。
   test:
-    name: Test (ubuntu + landlock) [ONLY JOB RUNNING]
+    name: Test (ubuntu + landlock)
     runs-on: ubuntu-latest
-    needs: []
+    needs: [lint, build]
     # 2026-08-21 (Day 101+2): OpenAPI drift auto-commit 需要 contents: write
     permissions:
       contents: write
@@ -182,12 +173,10 @@ jobs:
   # ============================================================================
   # Test (Windows) — 验 Windows 也能 build + test
   # ============================================================================
-  # 2026-08-21 (Day 101+2): 临时 disable, 业务方要求"只跑 Test (ubuntu+landlock)"
   test-windows:
-    name: Test (windows) [DISABLED, 只跑 Test]
+    name: Test (windows)
     runs-on: windows-latest
-    needs: []
-    if: false
+    needs: [lint, build]
     steps:
       - uses: actions/checkout@v4
 
@@ -218,9 +207,9 @@ jobs:
   # Conformance report (Nightly only, 防止 daily 跑太慢)
   # ============================================================================
   conformance:
-    name: Conformance (nightly) [DISABLED, 等 Test 恢复后开启]
+    name: Conformance (nightly)
     runs-on: ubuntu-latest
-    if: false
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test]
     steps:
       - uses: actions/checkout@v4
