@@ -169,6 +169,15 @@ enum Commands {
         #[command(subcommand)]
         action: OpenApiAction,
     },
+    /// **P13.5 / Day 101+2**: dsh-adapter 健康检查 + 版本信息
+    ///
+    /// 例子:
+    ///   mah dsh info    # 显示 dsh runtime / Node.js / JSON-RPC 协议版本
+    ///   mah dsh doctor  # Node.js 装没 / 子进程能起 / mock plugin 跑通
+    Dsh {
+        #[command(subcommand)]
+        action: DshAction,
+    },
     /// **P6-1 / Day 99**: 走 gRPC RunStream RPC, 实时打印 token (跟 stub/真 LLM 都能跑)
     ///
     /// 例子:
@@ -262,6 +271,14 @@ enum OpenApiAction {
         #[arg(long, default_value = "openapi.json")]
         output: std::path::PathBuf,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum DshAction {
+    /// 显示 dsh-adapter 运行时信息 (Node.js / JSON-RPC 协议版本 / ma-harness 版本)
+    Info,
+    /// 健康检查: Node.js 装没 / 子进程能起 / 简化 mock plugin 跑通
+    Doctor,
 }
 
 #[derive(Subcommand, Debug)]
@@ -375,6 +392,10 @@ async fn main() -> Result<()> {
         } => run_prompt(&prompt, api_key.as_deref(), &model).await,
         Commands::OpenApi { action } => match action {
             OpenApiAction::Export { output } => export_openapi(&output),
+        },
+        Commands::Dsh { action } => match action {
+            DshAction::Info => dsh_info(),
+            DshAction::Doctor => dsh_doctor().await,
         },
         Commands::Sandbox { action } => match action {
             SandboxAction::Apply {
@@ -1150,6 +1171,113 @@ fn export_openapi(output: &std::path::Path) -> Result<()> {
 
 /// **Phase 3.7 / T3.7**: Enforce landlock (Linux) / seatbelt (Mac) / stub (其他) 沙箱
 ///
+/// **P13.5 / Day 101+2**: `mah dsh info` — 显示 dsh-adapter 运行时信息
+fn dsh_info() -> Result<()> {
+    println!("=== ma-harness dsh-adapter info ===");
+    println!("ma-harness version: {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "dsh protocol version: {} (P13.1 锁定)",
+        ma_harness_plugin_dsh_adapter::DSH_PROTOCOL_VERSION
+    );
+
+    // 探测 Node.js
+    let node = detect_node();
+    println!("Node.js: {}", node.display());
+
+    // 探测试图跑
+    println!("\ndsh-adapter crate: ma-harness-plugin-dsh-adapter");
+    println!("Plugin path format: dsh::/path/to/plugin.ts");
+    println!("Usage:");
+    println!("  mah load-plugin dsh::./examples/k8s_pod_status.ts");
+    println!("  mah dsh doctor   # 健康检查");
+    Ok(())
+}
+
+/// **P13.5 / Day 101+2**: `mah dsh doctor` — 健康检查
+async fn dsh_doctor() -> Result<()> {
+    println!("=== ma-harness dsh-adapter doctor ===");
+    let mut all_ok = true;
+
+    // 1. Node.js 在 PATH?
+    let node = detect_node();
+    if node.is_file() {
+        println!("[ok] Node.js found: {}", node.display());
+    } else {
+        println!("[FAIL] Node.js not found in PATH");
+        println!("       Install Node.js 22.19+ (or 24+) from https://nodejs.org/");
+        all_ok = false;
+    }
+
+    // 2. dsh-adapter crate compile OK (这步是 build 触发的, run 阶段跳过)
+    println!("[ok] dsh-adapter crate compiled (P13.1-P13.4 5 commits)");
+
+    // 3. 模拟 spawn node + JSON-RPC echo (in-process test)
+    println!("[..]  spawn node mock dsh server + JSON-RPC initialize + tools/list + tools/call...");
+    match dsh_doctor_subprocess_test().await {
+        Ok(report) => {
+            println!("[ok]  mock dsh server responded: {}", report);
+        }
+        Err(e) => {
+            println!("[FAIL] mock dsh server test failed: {e}");
+            all_ok = false;
+        }
+    }
+
+    println!();
+    if all_ok {
+        println!("[ok] All checks passed. dsh-adapter is ready.");
+    } else {
+        println!("[FAIL] Some checks failed. See messages above.");
+    }
+    Ok(())
+}
+
+/// `mah dsh doctor` 用: 跑 mock dsh server, 验 JSON-RPC 跑通
+async fn dsh_doctor_subprocess_test() -> Result<String> {
+    use std::path::Path;
+    use ma_harness_plugin_dsh_adapter::{DshAdapter, DshConfig};
+
+    let adapter = DshAdapter::spawn(Path::new("mock://inline"), DshConfig::default()).await?;
+    let server_info = adapter.initialize().await?;
+    let tools = adapter.list_tools().await?;
+    let _ = adapter
+        .call_tool("echo", serde_json::json!({"msg": "doctor"}))
+        .await?;
+    adapter.shutdown().await?;
+    Ok(format!(
+        "server={} v{}, tools={}",
+        server_info.name,
+        server_info.version,
+        tools.len()
+    ))
+}
+
+/// 探测 node 可执行文件路径 (跨平台 PATH 搜)
+fn detect_node() -> std::path::PathBuf {
+    let path_env = match std::env::var("PATH") {
+        Ok(p) => p,
+        Err(_) => return std::path::PathBuf::from("node"),
+    };
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    for dir in path_env.split(sep) {
+        if dir.is_empty() {
+            continue;
+        }
+        for ext in exts {
+            let candidate = std::path::PathBuf::from(dir).join(format!("node{ext}"));
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    std::path::PathBuf::from("node")
+}
+
 /// 警告: 一旦 enforce 是全进程 (不可逆). 业务方决定要不要跑.
 ///
 /// 流程:
@@ -1158,6 +1286,7 @@ fn export_openapi(output: &std::path::Path) -> Result<()> {
 /// 3. enforce(&policy)
 /// 4. 成功: 进程 fs 受限, 后续操作严格走白名单
 fn apply_sandbox(
+    read_paths: Vec<std::path::PathBuf>,
     read_paths: Vec<std::path::PathBuf>,
     write_paths: Vec<std::path::PathBuf>,
     exec_paths: Vec<std::path::PathBuf>,
