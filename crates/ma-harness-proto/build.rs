@@ -21,31 +21,49 @@
 
 #![allow(unsafe_code)] // std::env::set_var 1.83+ 是 unsafe
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Walk up from `start` until finding a directory whose Cargo.toml contains
+/// `[workspace]`. Works for both normal cargo build (manifest at
+/// `crates/ma-harness-proto/`) and cargo publish (manifest copied to
+/// `target/package/ma-harness-proto-<ver>/`).
+fn find_workspace_root(start: &Path) -> PathBuf {
+    let mut p = start.to_path_buf();
+    loop {
+        let cargo_toml = p.join("Cargo.toml");
+        if cargo_toml.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                if content.contains("[workspace]") {
+                    return p;
+                }
+            }
+        }
+        match p.parent() {
+            Some(pp) => p = pp.to_path_buf(),
+            None => panic!(
+                "workspace root not found from {} (no Cargo.toml with [workspace] in any parent)",
+                start.display()
+            ),
+        }
+    }
+}
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // 2026-08-21 (Day 101+2): cargo publish 把 crate 复制到
-    //   target/package/ma-harness-proto-<ver>/
-    // 然后 build.rs 在那里跑, manifest_dir.parent().parent() 算出来是
-    //   target/package/
-    // 找不到 workspace 根的 proto/ 目录。
+    // 2026-08-21 (Day 101+2): 找 workspace 根 (含 [workspace] 的 Cargo.toml)。
     //
-    // cargo 1.64+ 提供 CARGO_WORKSPACE_DIR env, 在所有 cargo 子命令
-    // (build/test/publish) 都指向真正的 workspace 根, 用它最稳。
-    // Fallback: 老 cargo 或非 workspace context, 向上走 2 层 (manifest
-    //   dir 永远是 crates/ma-harness-proto/, parent.parent 是 workspace 根)。
-    let workspace_root = std::env::var("CARGO_WORKSPACE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            manifest_dir
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf()
-        });
+    // 三种 cargo 子命令 build.rs 跑在不同位置:
+    //   cargo build  : crates/ma-harness-proto/             -> 2 层上
+    //   cargo test   : crates/ma-harness-proto/             -> 2 层上
+    //   cargo publish: target/package/ma-harness-proto-0.1.1/  -> 3 层上
+    //
+    // 之前用 CARGO_WORKSPACE_DIR env (cargo 1.64+), 但发现 cargo publish
+    // 时这个 env 指向 target/ 而非真正 workspace 根, tonic-build 报
+    // "Could not make proto path relative: target/proto/..."。
+    //
+    // 最稳: walk-up 找含 [workspace] 的 Cargo.toml 目录, 所有 cargo 子命令都准。
+    let workspace_root = find_workspace_root(&manifest_dir);
     let proto_dir = workspace_root.join("proto").join("ma_harness").join("v1");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
