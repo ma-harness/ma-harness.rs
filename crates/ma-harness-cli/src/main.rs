@@ -1287,7 +1287,6 @@ fn detect_node() -> std::path::PathBuf {
 /// 4. 成功: 进程 fs 受限, 后续操作严格走白名单
 fn apply_sandbox(
     read_paths: Vec<std::path::PathBuf>,
-    read_paths: Vec<std::path::PathBuf>,
     write_paths: Vec<std::path::PathBuf>,
     exec_paths: Vec<std::path::PathBuf>,
     temp_dir: bool,
