@@ -26,7 +26,26 @@ use std::process::Command;
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
+    // 2026-08-21 (Day 101+2): cargo publish 把 crate 复制到
+    //   target/package/ma-harness-proto-<ver>/
+    // 然后 build.rs 在那里跑, manifest_dir.parent().parent() 算出来是
+    //   target/package/
+    // 找不到 workspace 根的 proto/ 目录。
+    //
+    // cargo 1.64+ 提供 CARGO_WORKSPACE_DIR env, 在所有 cargo 子命令
+    // (build/test/publish) 都指向真正的 workspace 根, 用它最稳。
+    // Fallback: 老 cargo 或非 workspace context, 向上走 2 层 (manifest
+    //   dir 永远是 crates/ma-harness-proto/, parent.parent 是 workspace 根)。
+    let workspace_root = std::env::var("CARGO_WORKSPACE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            manifest_dir
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf()
+        });
     let proto_dir = workspace_root.join("proto").join("ma_harness").join("v1");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
