@@ -14,10 +14,10 @@ workspace = true
 
 [dependencies]
 # ma-harness crates
-ma-harness-cordis = { path = "../ma-harness-cordis" }
-ma-harness-core = { path = "../ma-harness-core" }
-ma-harness-seam = { path = "../ma-harness-seam" }
-ma-harness-proto = { path = "../ma-harness-proto" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+ma-harness-proto = { path = "../ma-harness-proto", version = "0.1.0" }
 
 # 通用依赖 (从 workspace 继承)
 serde = { workspace = true }

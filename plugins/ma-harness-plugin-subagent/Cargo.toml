@@ -13,10 +13,10 @@ description = "ma-harness first-party plugin 'subagent' (派生 ctx 跑子 agent
 workspace = true
 
 [dependencies]
-ma-harness-seam = { path = "../../crates/ma-harness-seam" }
-ma-harness-cordis = { path = "../../crates/ma-harness-cordis" }
+ma-harness-seam = { path = "../../crates/ma-harness-seam", version = "0.1.0" }
+ma-harness-cordis = { path = "../../crates/ma-harness-cordis", version = "0.1.0" }
 ma-harness-plugin-macro = { path = "../../crates/ma-harness-plugin-macro" }
-ma-harness-core = { path = "../../crates/ma-harness-core" }
+ma-harness-core = { path = "../../crates/ma-harness-core", version = "0.1.0" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

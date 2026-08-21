@@ -14,8 +14,8 @@ workspace = true
 
 [dependencies]
 # 用公开 seam API, 不直接用 cordis (内部)
-ma-harness-seam = { path = "../../crates/ma-harness-seam" }
-ma-harness-cordis = { path = "../../crates/ma-harness-cordis" }
+ma-harness-seam = { path = "../../crates/ma-harness-seam", version = "0.1.0" }
+ma-harness-cordis = { path = "../../crates/ma-harness-cordis", version = "0.1.0" }
 ma-harness-plugin-macro = { path = "../../crates/ma-harness-plugin-macro" }
 anyhow = { workspace = true }
 # Phase 2.2 (T2.2): inventory 分布式注册

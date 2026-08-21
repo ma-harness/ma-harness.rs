@@ -24,7 +24,7 @@ tonic = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 # convert module 用
-ma-harness-core = { path = "../ma-harness-core" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

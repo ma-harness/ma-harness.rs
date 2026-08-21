@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 # 内部 (P13.5 集成时用, P13.1 留接口位)
-ma-harness-cordis = { path = "../../crates/ma-harness-cordis" }
-ma-harness-seam   = { path = "../../crates/ma-harness-seam" }
-ma-harness-core   = { path = "../../crates/ma-harness-core" }
+ma-harness-cordis = { path = "../../crates/ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam   = { path = "../../crates/ma-harness-seam", version = "0.1.0" }
+ma-harness-core   = { path = "../../crates/ma-harness-core", version = "0.1.0" }
 
 # 外部
 tokio = { version = "1", features = ["process", "io-util", "sync", "rt-multi-thread", "macros", "time", "fs"] }

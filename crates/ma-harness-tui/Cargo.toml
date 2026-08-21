@@ -14,12 +14,12 @@ workspace = true
 
 [dependencies]
 # 内部
-ma-harness-cordis = { path = "../ma-harness-cordis" }
-ma-harness-core = { path = "../ma-harness-core" }
-ma-harness-seam = { path = "../ma-harness-seam" }
-ma-harness-server = { path = "../ma-harness-server" }  # P4-3: SessionStore trait
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+ma-harness-server = { path = "../ma-harness-server", version = "0.1.0" }  # P4-3: SessionStore trait
 # P4-3: 拿 proto SessionState enum 转 state name
-ma-harness-proto = { path = "../ma-harness-proto" }
+ma-harness-proto = { path = "../ma-harness-proto", version = "0.1.0" }
 # Phase 3.9: inventory 走 hello plugin 验证
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
 # 外部

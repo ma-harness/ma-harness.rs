@@ -18,17 +18,17 @@ path = "src/main.rs"
 
 [dependencies]
 # 内部
-ma-harness-cordis = { path = "../ma-harness-cordis" }
-ma-harness-core = { path = "../ma-harness-core" }
-ma-harness-seam = { path = "../ma-harness-seam" }
-ma-harness-proto = { path = "../ma-harness-proto" }  # 2026-08-18 (Day 52): 恢复
-ma-harness-server = { path = "../ma-harness-server" }  # 2026-08-18 (Day 52): 恢复
-ma-harness-conformance = { path = "../ma-harness-conformance" }
-ma-harness-code = { path = "../ma-harness-code" }  # 2026-08-19 (Day 68): Phase 2.6 Code Mode
-ma-harness-model = { path = "../ma-harness-model" }  # 2026-08-19 (Day 73): Phase 3.3 LLM↔Code Mode 端到端
-ma-harness-sandbox = { path = "../ma-harness-sandbox" }  # 2026-08-19 (Day 78): Phase 3.7 landlock 集成
-ma-harness-tui = { path = "../ma-harness-tui" }  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard
-ma-harness-registry = { path = "../ma-harness-registry" }  # 2026-08-20 (P14): P12-5 export 集成到 CLI
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+ma-harness-proto = { path = "../ma-harness-proto", version = "0.1.0" }  # 2026-08-18 (Day 52): 恢复
+ma-harness-server = { path = "../ma-harness-server", version = "0.1.0" }  # 2026-08-18 (Day 52): 恢复
+ma-harness-conformance = { path = "../ma-harness-conformance", version = "0.1.0" }
+ma-harness-code = { path = "../ma-harness-code", version = "0.1.0" }  # 2026-08-19 (Day 68): Phase 2.6 Code Mode
+ma-harness-model = { path = "../ma-harness-model", version = "0.1.0" }  # 2026-08-19 (Day 73): Phase 3.3 LLM↔Code Mode 端到端
+ma-harness-sandbox = { path = "../ma-harness-sandbox", version = "0.1.0" }  # 2026-08-19 (Day 78): Phase 3.7 landlock 集成
+ma-harness-tui = { path = "../ma-harness-tui", version = "0.1.0" }  # 2026-08-19 (Day 80): Phase 3.9 TUI dashboard
+ma-harness-registry = { path = "../ma-harness-registry", version = "0.1.0" }  # 2026-08-20 (P14): P12-5 export 集成到 CLI
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello" }
 ma-harness-plugin-dsh-adapter = { path = "../../plugins/ma-harness-plugin-dsh-adapter" }  # 2026-08-21 (P13.5): mah dsh info/doctor 命令
 # 外部

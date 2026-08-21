@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 # 内部
-ma-harness-cordis = { path = "../ma-harness-cordis" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
 
 # 外部
 serde = { workspace = true }
