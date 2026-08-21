@@ -599,12 +599,10 @@ impl TuiApp {
                     Panel::Events => self.scroll_events(-1i64),
                 }
             }
-            crossterm::event::KeyCode::Enter => {
-                // P6-5 A: Enter 仅在 Sessions focus 有效
-                if *self.focus.lock() == Panel::Sessions {
-                    self.enter_detail();
-                    self.persist_state();
-                }
+            // P6-5 A: Enter 仅在 Sessions focus 有效
+            crossterm::event::KeyCode::Enter if *self.focus.lock() == Panel::Sessions => {
+                self.enter_detail();
+                self.persist_state();
             }
             _ => {}
         }
