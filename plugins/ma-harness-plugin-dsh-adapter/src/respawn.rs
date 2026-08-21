@@ -26,6 +26,7 @@ pub struct RespawnState {
 }
 
 impl RespawnState {
+    /// 构造新 respawn 状态 (count=0, last_respawn=None)
     pub fn new() -> Self {
         Self {
             count: AtomicUsize::new(0),
