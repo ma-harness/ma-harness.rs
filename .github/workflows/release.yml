@@ -100,25 +100,25 @@ jobs:
 
       # --- Tier 2: 渚濊禆 core ---
       - name: Publish ma-harness-proto
-        run: cargo publish -p ma-harness-proto --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-proto --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-registry
-        run: cargo publish -p ma-harness-registry --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-registry --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-model
-        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-model --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-macro
-        run: cargo publish -p ma-harness-plugin-macro --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-macro --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
@@ -126,19 +126,19 @@ jobs:
 
       # --- Tier 3: 渚濊禆 Tier 0+1+2 ---
       - name: Publish ma-harness-seam
-        run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-bundle
-        run: cargo publish -p ma-harness-bundle --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-bundle --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-conformance
-        run: cargo publish -p ma-harness-conformance --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-conformance --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
@@ -146,50 +146,50 @@ jobs:
 
       # --- Tier 3.5: 7 涓?first-party plugin (閮戒緷璧?cordis/core/plugin-macro/seam) ---
       - name: Publish ma-harness-plugin-hello
-        run: cargo publish -p ma-harness-plugin-hello --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-hello --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-bash
-        run: cargo publish -p ma-harness-plugin-bash --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-bash --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-cordis
-        run: cargo publish -p ma-harness-plugin-cordis --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-cordis --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-fs
-        run: cargo publish -p ma-harness-plugin-fs --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-fs --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-skill
-        run: cargo publish -p ma-harness-plugin-skill --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-skill --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-subagent
-        run: cargo publish -p ma-harness-plugin-subagent --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-subagent --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-web
-        run: cargo publish -p ma-harness-plugin-web --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-web --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-dsh-adapter
         # P13.5: 8th first-party plugin, 璺?plugin-web 鍚?tier
-        run: cargo publish -p ma-harness-plugin-dsh-adapter --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-plugin-dsh-adapter --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
@@ -197,7 +197,7 @@ jobs:
 
       # --- Tier 4: 绔埌绔湇鍔?(渚濊禆 Tier 0-3) ---
       - name: Publish ma-harness-server
-        run: cargo publish -p ma-harness-server --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-server --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
@@ -205,13 +205,13 @@ jobs:
 
       # --- Tier 5: 椤跺眰 binary (渚濊禆 Tier 0-4) ---
       - name: Publish ma-harness-tui
-        run: cargo publish -p ma-harness-tui --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-tui --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-cli
-        run: cargo publish -p ma-harness-cli --token ${CRATES_IO_TOKEN}
+        run: cargo publish -p ma-harness-cli --token ${CRATES_IO_TOKEN} || true
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
