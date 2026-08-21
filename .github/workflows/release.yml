@@ -33,6 +33,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 跑 protoc, ci 不装就 panic
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run all tests
         run: cargo test --workspace --lib
       - name: Run clippy
@@ -51,6 +54,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       # 24 个全 dry-run, 验证 metadata + 依赖 + path resolution
       - name: dry-run (cordis)
@@ -117,6 +122,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # 2026-08-21 (Day 101+2): cargo publish 跑 build script, ma-harness-proto 要 protoc
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       # --- Tier 0: 叶子 (无内部 ma-harness 依赖) ---
       - name: Publish ma-harness-cordis
