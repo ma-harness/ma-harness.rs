@@ -219,19 +219,13 @@ impl Enforcer for LinuxLandlockEnforcer {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
                     path: path.clone(),
-                    source: Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("{e:?}"),
-                    )),
+                    source: Box::new(std::io::Error::other(format!("{e:?}"))),
                 })?;
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(fd, read_access))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
-                        source: Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("{e:?}"),
-                        )),
+                        source: Box::new(std::io::Error::other(format!("{e:?}"))),
                     })?;
             }
         }
@@ -241,19 +235,13 @@ impl Enforcer for LinuxLandlockEnforcer {
             if let Some(path) = rule_to_path(rule) {
                 let fd = PathFd::new(&path).map_err(|e| EnforceError::RuleAddFailed {
                     path: path.clone(),
-                    source: Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("{e:?}"),
-                    )),
+                    source: Box::new(std::io::Error::other(format!("{e:?}"))),
                 })?;
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(fd, AccessFs::WriteFile))
                     .map_err(|e| EnforceError::RuleAddFailed {
                         path: path.clone(),
-                        source: Box::new(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("{e:?}"),
-                        )),
+                        source: Box::new(std::io::Error::other(format!("{e:?}"))),
                     })?;
             }
         }
