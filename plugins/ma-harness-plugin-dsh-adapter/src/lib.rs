@@ -48,6 +48,7 @@ use tokio::sync::Mutex;
 pub mod jsonrpc;
 pub mod process;
 pub mod registry;
+pub mod respawn;
 pub mod schema;
 
 pub use jsonrpc::{JsonRpcClient, JsonRpcError, JsonRpcRequest, JsonRpcResponse};
@@ -193,6 +194,9 @@ pub struct DshAdapter {
 
     /// server info (initialize 拿到)
     server_info: Mutex<Option<ServerInfo>>,
+
+    /// P13.3: respawn 状态 (count + last_respawn)
+    respawn: respawn::RespawnState,
 }
 
 impl DshAdapter {
@@ -223,6 +227,7 @@ impl DshAdapter {
             client: Mutex::new(Some(client)),
             child: Mutex::new(Some(child)),
             server_info: Mutex::new(None),
+            respawn: respawn::RespawnState::new(),
         }))
     }
 
