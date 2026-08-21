@@ -116,6 +116,106 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 
 ---
 
+## 📋 环境要求
+
+安装 `ma-harness` 前, 请先确认系统装了以下依赖。
+
+### 必装
+
+| 工具 | 最低版本 | 用途 |
+|------|---------|------|
+| **Rust** (stable) | 1.83+ (edition 2024) | 编译 workspace (`cargo install ma-harness-cli`) |
+| **Protocol Buffers 编译器 `protoc`** | libprotoc 3.21+ | `ma-harness-proto` build.rs 用它生成 gRPC stub |
+| **C 编译器 + 链接器** | MSVC / gcc / clang | 部分 Rust 依赖 (salvo / tokio / openssl-sys) 需要 C 编译 |
+
+### 可选 (按 plugin / SDK)
+
+| 工具 | 最低版本 | 何时需要 |
+|------|---------|---------|
+| **Node.js** (LTS) | v18+ | `ma-harness-plugin-dsh-adapter` (P13) — 走 JSON-RPC over stdio 直接加载 dsh (DeepSeek Harness) 写的 TS plugin |
+| **Python** | 3.8+ | `mah-py` Python SDK (`pip install mah-py`) |
+| **pkg-config + OpenSSL dev headers** | 任意 | 仅 Linux — 部分 Rust 依赖查找 OpenSSL 用 |
+
+### Linux (Ubuntu / Debian)
+
+```bash
+# 1. Rust (用 rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. protoc + C 编译工具 + OpenSSL dev 头文件
+sudo apt-get update
+sudo apt-get install -y protobuf-compiler build-essential pkg-config libssl-dev
+
+# 3. Node.js 20 LTS (用 NodeSource — apt 官方源版本太旧)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+### Linux (Fedora / RHEL / Rocky)
+
+```bash
+# 1. Rust (用 rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. protoc + C 编译工具 + OpenSSL dev 头文件
+sudo dnf install -y protobuf-compiler gcc gcc-c++ make pkg-config openssl-devel
+
+# 3. Node.js 20 LTS
+sudo dnf install -y nodejs
+```
+
+### macOS
+
+```bash
+# 1. Xcode Command Line Tools (C 编译器 + git)
+xcode-select --install
+
+# 2. Homebrew (macOS 没自带包管理器)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 3. Rust (用 rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 4. protoc + Node.js + OpenSSL
+brew install protobuf node@20 openssl
+echo 'export PATH="/opt/homebrew/opt/node@20/bin:$PATH"' >> ~/.zshrc
+```
+
+### Windows
+
+```powershell
+# 1. Rust: 官网下 rustup-init.exe (https://rustup.rs/)
+#    勾选 "Add rustc to PATH" + host triple x86_64-pc-windows-msvc
+
+# 2. Visual Studio Build Tools (C++ workload) — C 编译需要
+#    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#    选 "Desktop development with C++" workload (含 MSVC + Windows SDK)
+
+# 3a. 用 choco 装 protoc + Node.js (推荐, 一条命令搞定)
+choco install -y protoc nodejs
+
+# 3b. 或用 scoop
+scoop install protobuf nodejs
+```
+
+> **WSL 提示**: 在 WSL2 里开发, 跟着 **Linux (Ubuntu)** 的步骤走 (在 WSL 发行版里, 不在 Windows 宿主)。protoc / Node.js / cargo 全跑在 Linux 侧。
+
+### 验证安装
+
+```bash
+rustc --version    # rustc 1.83.x (edition 2024)  — 必装
+protoc --version   # libprotoc 3.21.x              — 必装
+node --version     # v18+ (推荐 LTS)                — 可选 (dsh-adapter)
+python3 --version  # 3.8+                           — 可选 (mah-py)
+```
+
+如果看到 `command not found`, 重开终端 (加载 `~/.cargo/env`) 再验。
+
+---
+
 ## 🚀 快速开始
 
 ### Python SDK (推荐)

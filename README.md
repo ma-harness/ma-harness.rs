@@ -116,6 +116,106 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 
 ---
 
+## 📋 Prerequisites
+
+Before installing `ma-harness`, make sure your system has the following dependencies.
+
+### Required
+
+| Tool | Min version | Why |
+|------|-------------|-----|
+| **Rust** (stable) | 1.83+ (edition 2024) | Build the workspace (`cargo install ma-harness-cli`) |
+| **Protocol Buffers compiler `protoc`** | libprotoc 3.21+ | `ma-harness-proto` build.rs uses it for gRPC stubs |
+| **C compiler + linker** | MSVC / gcc / clang | Required by Rust crates with C deps (salvo, tokio, openssl-sys) |
+
+### Optional (per plugin / SDK)
+
+| Tool | Min version | When you need it |
+|------|-------------|------------------|
+| **Node.js** (LTS) | v18+ | `ma-harness-plugin-dsh-adapter` (P13) — loads dsh (DeepSeek Harness) TS plugins via JSON-RPC over stdio |
+| **Python** | 3.8+ | `mah-py` Python SDK (`pip install mah-py`) |
+| **pkg-config + OpenSSL dev headers** | any | Linux only — needed by some Rust deps to find OpenSSL |
+
+### Linux (Ubuntu / Debian)
+
+```bash
+# 1. Rust (via rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. protoc + C build tools + OpenSSL dev headers
+sudo apt-get update
+sudo apt-get install -y protobuf-compiler build-essential pkg-config libssl-dev
+
+# 3. Node.js 20 LTS (via NodeSource — apt 官方源版本太旧)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+### Linux (Fedora / RHEL / Rocky)
+
+```bash
+# 1. Rust (via rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. protoc + C build tools + OpenSSL dev headers
+sudo dnf install -y protobuf-compiler gcc gcc-c++ make pkg-config openssl-devel
+
+# 3. Node.js 20 LTS
+sudo dnf install -y nodejs
+```
+
+### macOS
+
+```bash
+# 1. Xcode Command Line Tools (C compiler + git)
+xcode-select --install
+
+# 2. Homebrew (macOS doesn't have a built-in package manager)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 3. Rust (via rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 4. protoc + Node.js + OpenSSL
+brew install protobuf node@20 openssl
+echo 'export PATH="/opt/homebrew/opt/node@20/bin:$PATH"' >> ~/.zshrc
+```
+
+### Windows
+
+```powershell
+# 1. Rust: download rustup-init.exe from https://rustup.rs/
+#    (勾选 "Add rustc to PATH" + host triple x86_64-pc-windows-msvc)
+
+# 2. Visual Studio Build Tools (C++ workload) — required for C compilation
+#    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#    选 "Desktop development with C++" workload (包含 MSVC + Windows SDK)
+
+# 3a. 用 choco 装 protoc + Node.js (推荐, 一条命令搞定)
+choco install -y protoc nodejs
+
+# 3b. 或用 scoop
+scoop install protobuf nodejs
+```
+
+> **WSL note**: if you develop inside WSL2, follow the **Linux (Ubuntu)** steps inside the WSL distro (not on the Windows host). protoc / Node.js / cargo all run inside the Linux side.
+
+### Verify install
+
+```bash
+rustc --version    # rustc 1.83.x (edition 2024)  — Required
+protoc --version   # libprotoc 3.21.x              — Required
+node --version      # v18+ (LTS recommended)        — Optional (dsh-adapter)
+python3 --version  # 3.8+                          — Optional (mah-py)
+```
+
+If any `command not found` shows up, re-open the shell (to load `~/.cargo/env`) and re-check.
+
+---
+
 ## 🚀 Quick start
 
 ### Python SDK (recommended for most users)
