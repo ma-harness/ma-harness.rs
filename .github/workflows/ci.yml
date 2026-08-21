@@ -147,13 +147,20 @@ jobs:
 
       - name: OpenAPI drift check
         # Phase 3.5 / T3.5: 生成 spec 跟 docs/api/openapi.json diff, 不一致 fail
+        # 2026-08-21 (Day 101+2): salvo-oapi 内部用 HashMap 存 paths, 跨平台
+        # 序不一致 (Windows 122485 bytes / Ubuntu 123444 bytes)。CI 用 python3
+        # 把生成的 spec sort_keys=True 重新序列化, 强制 key 字母序, 消除
+        # HashMap 漂移。baseline 也要保持 sort_keys 形式, 业务方本地更新用:
+        #   python -c "import json; print(json.dumps(json.load(open('docs/api/openapi.json')), sort_keys=True, ensure_ascii=False, indent=2))" > docs/api/openapi.json
         run: |
           set -e
           ./target/debug/mah open-api export --output /tmp/openapi.new.json
-          if ! diff -q /tmp/openapi.new.json docs/api/openapi.json > /dev/null 2>&1; then
+          python3 -c "import json; print(json.dumps(json.load(open('/tmp/openapi.new.json')), sort_keys=True, ensure_ascii=False, indent=2))" > /tmp/openapi.new.sorted.json
+          if ! diff -q /tmp/openapi.new.sorted.json docs/api/openapi.json > /dev/null 2>&1; then
             echo "::error::OpenAPI spec drift detected!"
-            echo "Run 'mah open-api export --output docs/api/openapi.json' locally and commit."
-            diff /tmp/openapi.new.json docs/api/openapi.json || true
+            echo "Run locally + sort_keys 重写 baseline:"
+            echo "  python -c \"import json; print(json.dumps(json.load(open('docs/api/openapi.json')), sort_keys=True, ensure_ascii=False, indent=2))\" > docs/api/openapi.json"
+            diff /tmp/openapi.new.sorted.json docs/api/openapi.json || true
             exit 1
           fi
           echo "OpenAPI spec up to date"
