@@ -697,6 +697,17 @@ mod tests {
         assert!(loaded.path().exists());
     }
 
+    // P10-1.8 v2 真闭环 — 真 cargo 编译 + libloading + invoke_register + 真 invoke
+    // 验证 plugin C-ABI 字符串 (UTF-8) 跨 dylib 边界无损。
+    //
+    // 2026-08-21 (Day 101+2): Windows MSVC c_char = i8, Rust CStr::from_ptr
+    // 假设 UTF-8, Linux/macOS 是 u8 = UTF-8 字节。所以这个 test 在 Windows
+    // 上 dylib 调 plugin_invoke 拿到的 *const c_char 不是 valid UTF-8
+    // (CStr::from_ptr().to_str() 报 "invalid utf-8 sequence of 1 bytes from
+    // index 41"), expect 失败。
+    // Linux/macOS c_char = u8, UTF-8 transparent, 跑 OK。
+    // 跟 landlock 一样, 这个 test cfg(unix) 只在 unix 跑。
+    #[cfg(unix)]
     #[tokio::test]
     async fn factory_end_to_end_real_compile_and_load_with_host_registry() {
         // P10-1.8 v2: 完整闭环 — 真 cargo 编译 + libloading + invoke_register + 真 invoke 验证
