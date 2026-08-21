@@ -1,28 +1,27 @@
-name: Release
+﻿name: Release
 
-# Layer 3 CI/CD: 自动 publish 到 crates.io
-# 触发: git push tag v*.*.*  (v0.1.0 / v0.1.1 / v0.2.0 ...)
-# 流程: test → dry-run → publish (按依赖顺序) → GitHub release notes
+# Layer 3 CI/CD: 鑷姩 publish 鍒?crates.io
+# 瑙﹀彂: git push tag v*.*.*  (v0.1.0 / v0.1.1 / v0.2.0 ...)
+# 娴佺▼: test 鈫?dry-run 鈫?publish (鎸変緷璧栭『搴? 鈫?GitHub release notes
 #
-# Secret: 在 GitHub repo → Settings → Secrets → actions 加 CARGO_REGISTRY_TOKEN
+# Secret: 鍦?GitHub repo 鈫?Settings 鈫?Secrets 鈫?actions 鍔?CARGO_REGISTRY_TOKEN
 # Token:  https://crates.io/settings/tokens  (scope: publish)
 #
-# 2026-08-20 (Day 101+1) / P15+ docs: 24 个 crate 全发布
-#   - 16 个 crates/ 内部框架 (demo 跳过, 它是 example binary)
-#   - 8 个 plugins/ first-party plugin (hello/bash/cordis/fs/skill/subagent/web/dsh-adapter)
+# 2026-08-20 (Day 101+1) / P15+ docs: 24 涓?crate 鍏ㄥ彂甯?#   - 16 涓?crates/ 鍐呴儴妗嗘灦 (demo 璺宠繃, 瀹冩槸 example binary)
+#   - 8 涓?plugins/ first-party plugin (hello/bash/cordis/fs/skill/subagent/web/dsh-adapter)
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # 业务方手动触发 (调试用)
+  workflow_dispatch:  # 涓氬姟鏂规墜鍔ㄨЕ鍙?(璋冭瘯鐢?
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   # ============================================================================
-  # Pre-publish: 完整 workspace 测试
+  # Pre-publish: 瀹屾暣 workspace 娴嬭瘯
   # ============================================================================
   test:
     name: Pre-publish test
@@ -33,7 +32,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 跑 protoc, ci 不装就 panic
+      # 2026-08-21 (Day 101+2): ma-harness-proto build.rs 璺?protoc, ci 涓嶈灏?panic
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run all tests
@@ -42,79 +41,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # ============================================================================
-  # Dry-run: 验证 metadata OK
-  # ============================================================================
-  dry-run:
-    name: Publish dry-run
-    runs-on: ubuntu-latest
-    needs: [test]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      # 24 个全 dry-run, 验证 metadata + 依赖 + path resolution
-      - name: dry-run (cordis)
-        run: cargo publish -p ma-harness-cordis --dry-run --allow-dirty --no-verify
-      - name: dry-run (code)
-        run: cargo publish -p ma-harness-code --dry-run --allow-dirty --no-verify
-      - name: dry-run (dag)
-        run: cargo publish -p ma-harness-dag --dry-run --allow-dirty --no-verify
-      - name: dry-run (artifact)
-        run: cargo publish -p ma-harness-artifact --dry-run --allow-dirty --no-verify
-      - name: dry-run (core)
-        run: cargo publish -p ma-harness-core --dry-run --allow-dirty --no-verify
-      - name: dry-run (sandbox)
-        run: cargo publish -p ma-harness-sandbox --dry-run --allow-dirty --no-verify
-      - name: dry-run (proto)
-        run: cargo publish -p ma-harness-proto --dry-run --allow-dirty --no-verify
-      - name: dry-run (registry)
-        run: cargo publish -p ma-harness-registry --dry-run --allow-dirty --no-verify
-      - name: dry-run (model)
-        run: cargo publish -p ma-harness-model --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-macro)
-        run: cargo publish -p ma-harness-plugin-macro --dry-run --allow-dirty --no-verify
-      - name: dry-run (seam)
-        run: cargo publish -p ma-harness-seam --dry-run --allow-dirty --no-verify
-      - name: dry-run (bundle)
-        run: cargo publish -p ma-harness-bundle --dry-run --allow-dirty --no-verify
-      - name: dry-run (conformance)
-        run: cargo publish -p ma-harness-conformance --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-hello)
-        run: cargo publish -p ma-harness-plugin-hello --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-bash)
-        run: cargo publish -p ma-harness-plugin-bash --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-cordis)
-        run: cargo publish -p ma-harness-plugin-cordis --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-fs)
-        run: cargo publish -p ma-harness-plugin-fs --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-skill)
-        run: cargo publish -p ma-harness-plugin-skill --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-subagent)
-        run: cargo publish -p ma-harness-plugin-subagent --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-web)
-        run: cargo publish -p ma-harness-plugin-web --dry-run --allow-dirty --no-verify
-      - name: dry-run (plugin-dsh-adapter)
-        # P13.5: 走 dsh JSON-RPC over stdio, 业务方装 dsh 后直接加载 TS plugin
-        run: cargo publish -p ma-harness-plugin-dsh-adapter --dry-run --allow-dirty --no-verify
-      - name: dry-run (server)
-        run: cargo publish -p ma-harness-server --dry-run --allow-dirty --no-verify
-      - name: dry-run (tui)
-        run: cargo publish -p ma-harness-tui --dry-run --allow-dirty --no-verify
-      - name: dry-run (cli)
-        run: cargo publish -p ma-harness-cli --dry-run --allow-dirty --no-verify
-
-  # ============================================================================
-  # Publish: 按依赖顺序发 (24 个 crate, 全 workspace 除 demo)
+  # Publish: 鎸変緷璧栭『搴忓彂 (24 涓?crate, 鍏?workspace 闄?demo)
   # ============================================================================
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [dry-run]
+    needs: [test]  # 2026-08-21 (Day 101+2): 去掉独立 dry-run job, 改依赖 test (cargo test/clippy 验 build+metadata)
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
@@ -122,11 +54,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # 2026-08-21 (Day 101+2): cargo publish 跑 build script, ma-harness-proto 要 protoc
+      # 2026-08-21 (Day 101+2): cargo publish 璺?build script, ma-harness-proto 瑕?protoc
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      # --- Tier 0: 叶子 (无内部 ma-harness 依赖) ---
+      # --- Tier 0: 鍙跺瓙 (鏃犲唴閮?ma-harness 渚濊禆) ---
       - name: Publish ma-harness-cordis
         run: cargo publish -p ma-harness-cordis --token ${CRATES_IO_TOKEN}
         env:
@@ -152,7 +84,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 1: 依赖 cordis/code ---
+      # --- Tier 1: 渚濊禆 cordis/code ---
       - name: Publish ma-harness-core
         run: cargo publish -p ma-harness-core --token ${CRATES_IO_TOKEN}
         env:
@@ -166,7 +98,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 2: 依赖 core ---
+      # --- Tier 2: 渚濊禆 core ---
       - name: Publish ma-harness-proto
         run: cargo publish -p ma-harness-proto --token ${CRATES_IO_TOKEN}
         env:
@@ -192,7 +124,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 3: 依赖 Tier 0+1+2 ---
+      # --- Tier 3: 渚濊禆 Tier 0+1+2 ---
       - name: Publish ma-harness-seam
         run: cargo publish -p ma-harness-seam --token ${CRATES_IO_TOKEN}
         env:
@@ -212,7 +144,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 3.5: 7 个 first-party plugin (都依赖 cordis/core/plugin-macro/seam) ---
+      # --- Tier 3.5: 7 涓?first-party plugin (閮戒緷璧?cordis/core/plugin-macro/seam) ---
       - name: Publish ma-harness-plugin-hello
         run: cargo publish -p ma-harness-plugin-hello --token ${CRATES_IO_TOKEN}
         env:
@@ -256,14 +188,14 @@ jobs:
       - name: Wait for index
         run: sleep 30
       - name: Publish ma-harness-plugin-dsh-adapter
-        # P13.5: 8th first-party plugin, 跟 plugin-web 同 tier
+        # P13.5: 8th first-party plugin, 璺?plugin-web 鍚?tier
         run: cargo publish -p ma-harness-plugin-dsh-adapter --token ${CRATES_IO_TOKEN}
         env:
           CRATES_IO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 4: 端到端服务 (依赖 Tier 0-3) ---
+      # --- Tier 4: 绔埌绔湇鍔?(渚濊禆 Tier 0-3) ---
       - name: Publish ma-harness-server
         run: cargo publish -p ma-harness-server --token ${CRATES_IO_TOKEN}
         env:
@@ -271,7 +203,7 @@ jobs:
       - name: Wait for index
         run: sleep 30
 
-      # --- Tier 5: 顶层 binary (依赖 Tier 0-4) ---
+      # --- Tier 5: 椤跺眰 binary (渚濊禆 Tier 0-4) ---
       - name: Publish ma-harness-tui
         run: cargo publish -p ma-harness-tui --token ${CRATES_IO_TOKEN}
         env:
