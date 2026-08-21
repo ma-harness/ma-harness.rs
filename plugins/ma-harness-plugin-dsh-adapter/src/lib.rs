@@ -37,6 +37,7 @@
 #![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,8 @@ use tokio::sync::Mutex;
 
 pub mod jsonrpc;
 pub mod process;
+pub mod registry;
+pub mod schema;
 
 pub use jsonrpc::{JsonRpcClient, JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
@@ -197,7 +200,10 @@ impl DshAdapter {
     ///
     /// `plugin_path` 指向 dsh plugin entry 脚本 (e.g. `path/to/plugin.ts` 或 .js)
     /// `config` 配置 dsh runtime (node path / timeout / env)
-    pub async fn spawn(plugin_path: &Path, config: DshConfig) -> Result<Self, DshError> {
+    ///
+    /// **返回 `Arc<Self>`** (P13.2 优化): 让 `ToolInvokeFn` 静态 closure 能 clone Arc 共享 adapter,
+    /// 多 tool 注册到 ma-harness `ToolRegistry` 时共享同一子进程。
+    pub async fn spawn(plugin_path: &Path, config: DshConfig) -> Result<Arc<Self>, DshError> {
         // 1. spawn node 子进程 (P13.1 用 inline script 跑 JSON-RPC echo, P13.2+ 改 plugin entry)
         let mut child = process::spawn_node(plugin_path, &config).await?;
 
@@ -211,13 +217,13 @@ impl DshAdapter {
 
         let client = JsonRpcClient::new(stdin, stdout);
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             config,
             plugin_path: plugin_path.to_path_buf(),
             client: Mutex::new(Some(client)),
             child: Mutex::new(Some(child)),
             server_info: Mutex::new(None),
-        })
+        }))
     }
 
     /// 拿 plugin path 引用
@@ -308,7 +314,9 @@ impl DshAdapter {
 
     /// Shutdown (JSON-RPC shutdown + kill child if alive)
     /// P13.1 跑通, P13.3 加 graceful shutdown 跟 SIGTERM wait
-    pub async fn shutdown(self) -> Result<(), DshError> {
+    ///
+    /// 接受 `Arc<Self>`: 业务方持 Arc clone, 调 shutdown 时 move Arc 进 self
+    pub async fn shutdown(self: Arc<Self>) -> Result<(), DshError> {
         // 1. 发 shutdown RPC (P13.1 失败也不影响, P13.3 graceful)
         {
             let mut guard = self.client.lock().await;
