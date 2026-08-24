@@ -43,6 +43,12 @@ desktop.ini
 .commit-msg-*.md
 /.env.local
 /.env.*.local
+# ad-hoc Python check 脚本 (charset / encoding scan)
+check-*.py
+# cargo publish 临时 cargo home override
+.cargo-home-tmp/
+# cargo publish 临时 --config override
+.cargo-config-tmp.toml
 
 # 工具链
 /.rustup/
