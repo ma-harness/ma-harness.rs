@@ -81,6 +81,8 @@
 ### Roadmap
 
 - **[Development plan (single-source)](development-plan.md)** — P0–P12 phases, totals, P15+ future (recommended entry)
+- **[dsh feature parity](dsh-feature-parity.md)** — full dsh ↔ ma-harness comparison (8 dsh core packages, 14 capability seams, 5 profiles, conformance, P13+ plans)
+- **[dsh feature parity table](dsh-feature-parity-table.md)** — markdown table form with status column, gap analysis vs dsh
 - [Roadmap Phase 7](../zh-CN/reports/roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
 - [Roadmap Phase 11](../zh-CN/reports/roadmap-phase-11.md) — P11 (dsh parity)
 - [P11 baseline report](../zh-CN/reports/p11-baseline-report.md)

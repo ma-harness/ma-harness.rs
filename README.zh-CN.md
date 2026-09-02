@@ -34,6 +34,11 @@
 
 ma-harness.rs 是 dsh v0.1 的 Rust from-scratch 重写, 在 snapshot/fixture 层面追求 100% 行为等价, 外加生产级扩展。最新验证: 2026-08-20。
 
+> **📖 [完整 dsh ↔ ma-harness 功能对比 →](docs/zh-CN/dsh-feature-parity.md)**
+> 详尽对比: 8 个 dsh 核心包, 14 个 capability seams, 3 个事件域, 13 步 turn flow,
+> 5 个 shipped profiles, 工具执行管道, 分发面, conformance 对齐,
+> ma-harness 扩展, P13+ 计划。25KB 文档含 dsh 文档链接 + ma-harness crate 链接。
+
 ### 行为等价性 (P11-1 / P11-2)
 
 | 测试集 | dsh v0.1 | ma-harness.rs | 状态 |
@@ -303,6 +308,8 @@ crates/
 
 - **[文档总索引](docs/README.md)** — 18 个 markdown 文档入口
 - **[架构总览](docs/ma-harness-arch-map.md)** — 14 crate 依赖图
+- **[dsh 功能对等](docs/zh-CN/dsh-feature-parity.md)** — 完整 dsh ↔ ma-harness 对比 (8 个 dsh 核心包, 14 个能力缝, 5 个 profile, conformance, P13+ 计划)
+- **[dsh 功能对等表](docs/zh-CN/dsh-feature-parity-table.md)** — markdown 表格形式 + 状态列, 跟 dsh 的差距分析
 - **[决策日志](docs/decision-log.md)** — 38 次 design 决策 (P1-P12)
 - **[P11 全收官报告](docs/p11-final-report.md)** — dsh 等价达成
 - **[P12 全收官报告](docs/p12-final-report.md)** — 全功能收官

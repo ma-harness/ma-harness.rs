@@ -81,6 +81,8 @@
 ### Roadmap / 路线
 
 - **[开发计划 (单源)](development-plan.md)** — P0-P12 phases + 累计 + P15+ 未来 (推荐入口)
+- **[dsh 功能对等](dsh-feature-parity.md)** — 完整 dsh ↔ ma-harness 对比 (8 个 dsh 核心包, 14 个能力缝, 5 个 profile, conformance, P13+ 计划)
+- **[dsh 功能对等表](dsh-feature-parity-table.md)** — markdown 表格形式 + 状态列, 跟 dsh 的差距分析
 - [Roadmap Phase 7](reports/roadmap-phase-7.md) — Phase 7-10 (Code Mode / TUI / ACP / Vision)
 - [Roadmap Phase 11](reports/roadmap-phase-11.md) — P11 (跟 dsh 对齐)
 - [P11 baseline 报告](reports/p11-baseline-report.md)

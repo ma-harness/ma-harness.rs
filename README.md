@@ -34,6 +34,11 @@
 
 ma-harness.rs is a from-scratch Rust rewrite of dsh v0.1, targeting 100% behavioral parity at the snapshot/fixture level, plus production extensions. Last verified 2026-08-20.
 
+> **📖 [Full dsh ↔ ma-harness Feature Parity →](docs/en/dsh-feature-parity.md)**
+> Complete comparison: 8 dsh core packages, 14 capability seams, 3 event domains, 13-step turn flow,
+> 5 shipped profiles, tool execution pipeline, distribution surfaces, conformance parity,
+> ma-harness extensions, and P13+ plans. 25KB doc with dsh doc links + ma-harness crate links.
+
 ### Behavioral equivalence (P11-1 / P11-2)
 
 | Test suite | dsh v0.1 | ma-harness.rs | Status |
@@ -303,6 +308,8 @@ See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full de
 
 - **[Docs index](docs/README.md)** — entry point for all 18 markdown docs
 - **[Architecture overview](docs/ma-harness-arch-map.md)** — 14-crate dependency map
+- **[dsh feature parity](docs/en/dsh-feature-parity.md)** — full dsh ↔ ma-harness comparison (8 dsh core packages, 14 capability seams, 5 profiles, conformance, P13+ plans)
+- **[dsh feature parity table](docs/en/dsh-feature-parity-table.md)** — markdown table form with status column, gap analysis vs dsh
 - **[Decision log](docs/decision-log.md)** — 38 design decisions (P1-P12)
 - **[P11 final report](docs/p11-final-report.md)** — dsh parity achievement
 - **[P12 final report](docs/p12-final-report.md)** — full feature completion

@@ -62,6 +62,11 @@ check-*.py
 # vendor (本地 protoc 镜像)
 vendor/
 
+# 本地规划 / 开发计划 (不入仓, 业务方单独维护)
+# - dsh-development-plan.md (中英) 放 _local/dsh-planning/
+# - 跟 dsh 对比 / 未来计划 / 业务方内部讨论
+_local/
+
 # filter-repo 备份 (author 改写时生成, 内容跟 .git 一样, 不需要 commit)
 /.git.bad/
 /.git.broken/
