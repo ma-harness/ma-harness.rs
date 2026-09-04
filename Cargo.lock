@@ -2302,6 +2302,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-compaction"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-seam",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ma-harness-conformance"
 version = "0.1.1"
 dependencies = [

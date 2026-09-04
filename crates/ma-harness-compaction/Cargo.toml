@@ -1,0 +1,32 @@
+[package]
+name = "ma-harness-compaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness context compaction (P14.4): CompactionStrategy trait + BasicCompactionProvider + LlmCompactionProvider stub. Auto-summarize long sessions."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 — 复用 SessionEvent 跟 EventType
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -21,6 +21,7 @@ members = [
     "crates/ma-harness-subprocess",  # 2026-09-04 (Day 101+32): P14.1 ctx.subprocess 能力缝
     "crates/ma-harness-shell",  # 2026-09-04 (Day 101+32): P14.2.1 ctx.shell 能力缝 (Service Def)
     "crates/ma-harness-skill",  # 2026-09-04 (Day 101+32): P14.3.1 ctx.skill 能力缝 (Service Def)
+    "crates/ma-harness-compaction",  # 2026-09-04 (Day 101+32): P14.4.1 context compaction
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
