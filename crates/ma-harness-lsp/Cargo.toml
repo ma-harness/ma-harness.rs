@@ -1,0 +1,34 @@
+[package]
+name = "ma-harness-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness LSP client capability (ctx.lsp): self-rolled JSON-RPC 2.0 over stdio + LocalLspProvider. P14.5 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 — 委托 subprocess spawn language server
+ma-harness-subprocess = { path = "../ma-harness-subprocess", version = "0.1.0" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "io-util"] }

@@ -22,6 +22,7 @@ members = [
     "crates/ma-harness-shell",  # 2026-09-04 (Day 101+32): P14.2.1 ctx.shell 能力缝 (Service Def)
     "crates/ma-harness-skill",  # 2026-09-04 (Day 101+32): P14.3.1 ctx.skill 能力缝 (Service Def)
     "crates/ma-harness-compaction",  # 2026-09-04 (Day 101+32): P14.4.1 context compaction
+    "crates/ma-harness-lsp",  # 2026-09-04 (Day 101+32): P14.5.1 ctx.lsp 能力缝 (JSON-RPC client)
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",

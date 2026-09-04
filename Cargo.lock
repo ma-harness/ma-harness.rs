@@ -2427,6 +2427,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-lsp"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "futures",
+ "ma-harness-cordis",
+ "ma-harness-seam",
+ "ma-harness-subprocess",
+ "parking_lot",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ma-harness-model"
 version = "0.1.1"
 dependencies = [
