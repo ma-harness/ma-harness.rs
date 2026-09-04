@@ -1,0 +1,30 @@
+[package]
+name = "ma-harness-subprocess"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness subprocess capability (ctx.subprocess): local tokio-based provider + sandbox-aware stub. P14.1 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 (依赖 cordis 是为未来 P14.2 / P14.5 接入 ctx service 容器做准备; P14.1 仅用到锁原语)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+
+# 外部
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }

@@ -2674,6 +2674,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-subprocess"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "futures",
+ "ma-harness-cordis",
+ "parking_lot",
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
 name = "ma-harness-tui"
 version = "0.1.1"
 dependencies = [

@@ -18,6 +18,7 @@ members = [
     "crates/ma-harness-bundle",  # 2026-08-20 (Day 101+1): P11-8 Bundle 概念
     "crates/ma-harness-artifact",  # 2026-08-20 (Day 101+1): P11-7 Vibe Coding artifact viewer
     "crates/ma-harness-dag",  # 2026-08-20 (Day 101+1): P12-9 DAG 任务编排
+    "crates/ma-harness-subprocess",  # 2026-09-04 (Day 101+32): P14.1 ctx.subprocess 能力缝
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
