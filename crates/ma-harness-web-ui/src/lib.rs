@@ -13,9 +13,19 @@
 //! ```
 //!
 //! ```ignore
-//! use ma_harness_web_ui::{LocalWebUiServer, WebUiServer, SseEvent};
+//! use ma_harness_web_ui::{LocalWebUiServer, WebUiServer, SseEvent, UserInput};
 //!
 //! let server = LocalWebUiServer::bind("127.0.0.1:3080").await?;
+//!
+//! // 1. 订阅 user input (业务方 agent loop)
+//! let mut input_rx = server.subscribe_user_input();
+//! tokio::spawn(async move {
+//!     while let Some(input) = input_rx.recv().await {
+//!         println!("user: {}", input.text);
+//!     }
+//! });
+//!
+//! // 2. 启动 server
 //! let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
 //! tx.send(SseEvent::SessionEvent(json!({"id": "1"}))).unwrap();
 //! server.run(tx).await?;
@@ -24,41 +34,44 @@
 //! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
 //! [crates.io]: https://crates.io/crates/ma-harness-web-ui
 //!
-//! # 设计 (Design) — P15.1.1
+//! # 设计 (Design) — P15.1.1+
 //!
 //! **目标**: 抽象 `ctx.web_ui` (跟 dsh `:3080` browser app 对等), 业务方
 //! - 跑 `mah web` 打开浏览器
 //! - 看 live session (events via SSE)
-//! - 接受 user input (P15.1.2+)
+//! - 接受 user input (P15.1.4+)
 //!
 //! **P15.1 大工程** (8-12 周): Rust + WASM (Leptos/Yew) or React + REST API.
-//! **P15.1.1 骨架** (本次): crate 脚手架, WebUiServer trait, std+tokio HTTP server,
-//! SSE endpoint, HTML shell (placeholder, 业务方后续 P15.1.2+ 加 Leptos/React).
+//! **P15.1.1 骨架**: crate 脚手架, WebUiServer trait, std+tokio HTTP server, SSE.
+//! **P15.1.2**: SSE 多 channel + query filter (?session=xxx), SessionStart/End events.
+//! **P15.1.3**: /api/version + /api/sessions endpoints.
+//! **P15.1.4** (本次): POST /api/input 接 user input, UserInput 转发给 subscribers.
 //!
 //! **设计决策**: 不引 salvo/axum, 用 `tokio::net::TcpListener` + 手写 minimal HTTP
-//! (P15.1.1 只需要 1 个 GET / + 1 个 GET /api/sse, 完整 framework 过度设计).
+//! (P15.1.x 只需要几个 endpoint, 完整 framework 过度设计).
 //! 业务方 P15.1.5+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
 //!
 //! **核心抽象**:
-//! - [`SseEvent`] enum (SessionEvent / Message / Heartbeat / Done)
-//! - [`WebUiServer`] trait (bind / run / port / stop)
-//! - [`LocalWebUiServer`] (P15.1.1 主交付, std + tokio)
-//! - [`html_shell`] (业务方 `include_str!("shell.html")` 或运行时 inline)
+//! - [`SseEvent`] enum (SessionEvent / SessionStart/End / Message / Heartbeat / Done)
+//! - [`UserInput`] struct (P15.1.4: browser → server, session + text + ts)
+//! - [`WebUiServer`] trait (bind / run / port)
+//! - [`LocalWebUiServer`] (主交付, std + tokio)
+//! - [`html_shell`] (P15.1.4: 含 input form, 业务方 P15.1.5+ 替换为 Leptos / React)
 //!
 //! **6 质量属性**:
 //! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud)
-//! - 可维护: 模块化分块, server / sse / html / error 集中 lib.rs
-//! - 鲁棒: 错误归一化 (Bind / IO), keep-alive 防止 SSE timeout
-//! - 安全: 不 eval user input, SSE events 静态 string
-//! - 可测: 7+ 测试覆盖 bind / HTTP / SSE / HTML / concurrent
-//! - 可扩展: SSE channel 抽象, 业务方可接 ma-harness-core event log
+//! - 可维护: 模块化分块, server / sse / http / html / error 集中 lib.rs
+//! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读
+//! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client
+//! - 可测: 12+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 并发
+//! - 可扩展: user_input_subs Vec<Sender>, 业务方可多 subscriber
 //!
-//! # 限制 (Limitations) — P15.1.1
+//! # 限制 (Limitations) — P15.1.4
 //!
-//! - placeholder HTML shell (业务方 P15.1.2 加 Leptos / React)
-//! - 单 SSE channel 简化版 (P15.1.2 多 channel / topic filter)
-//! - 不接 ma-harness-server OpenAPI (P15.1.3 集成)
-//! - 不接 ctx.user input (P15.1.4+)
+//! - placeholder HTML shell (业务方 P15.1.5 加 Leptos / React)
+//! - 单 active_sse channel 简化版 (P15.1.2+ 多 SSE connection 共享会有 race)
+//! - 不接 ma-harness-server OpenAPI (P15.1.5+ 集成)
+//! - 不接 ctx.user 全链路 (P15.2 集成 ma-harness-core Context)
 //!
 //! [dsh-feature-parity-table §8]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#8-distribution-surfaces
 
@@ -160,6 +173,46 @@ impl SseEvent {
 }
 
 // ============================================================================
+// UserInput (P15.1.4: browser → server, via POST /api/input)
+// ============================================================================
+
+/// 用户输入 (浏览器 → server, 透过 `POST /api/input`).
+///
+/// **流向** (P15.1.4):
+/// - 浏览器 fetch POST 上来, body 是 `{"session": "...", "text": "..."}`
+/// - server 解析 → 构 `UserInput` → 转发给所有 `subscribe_user_input()` 的 subscribers
+/// - 业务方 agent loop 拿 receiver, 喂给 LLM
+///
+/// **设计决策**:
+/// - 用 `mpsc::unbounded` 简化 (P15.1.4 阶段)
+/// - 多 subscriber 支持 (Vec<Sender>) — 业务方可能有多个 agent 监听
+/// - 时间戳 server 端盖 (不信任 client 时钟)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInput {
+    /// 业务方 session id (e.g. "demo-session")
+    pub session_id: String,
+    /// 用户输入文本
+    pub text: String,
+    /// server 接收时间戳 (ms since epoch)
+    pub received_at_ms: i64,
+}
+
+impl UserInput {
+    /// 构一个新 UserInput, 自动盖 `received_at_ms = now`
+    pub fn now(session_id: impl Into<String>, text: impl Into<String>) -> Self {
+        let received_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        Self {
+            session_id: session_id.into(),
+            text: text.into(),
+            received_at_ms,
+        }
+    }
+}
+
+// ============================================================================
 // WebUiServer trait
 // ============================================================================
 
@@ -195,7 +248,8 @@ pub trait WebUiServer: Send + Sync + 'static {
 /// 本地 Web UI server (P15.1.1 骨架).
 ///
 /// **实现**: `tokio::net::TcpListener` + 手写 minimal HTTP request parser.
-/// 接受 `GET /` 返 HTML shell, `GET /api/sse` 返 SSE stream.
+/// 接受 `GET /` 返 HTML shell, `GET /api/sse` 返 SSE stream,
+/// `POST /api/input` 接 user input (P15.1.4 新增).
 /// 不引 salvo/axum (P15.1.5+ 改用真 framework).
 #[derive(Debug)]
 pub struct LocalWebUiServer {
@@ -203,6 +257,8 @@ pub struct LocalWebUiServer {
     port: u16,
     /// 当前活跃的 SSE sender (P15.1.2 多 channel 时改成 Vec)
     active_sse: Arc<Mutex<Option<mpsc::UnboundedSender<SseEvent>>>>,
+    /// 订阅 user input 的 receivers (P15.1.4 新增, std::sync::Mutex 因为 subscribe_user_input 是 sync)
+    user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
     /// Server 启动状态
     running: Arc<Mutex<bool>>,
 }
@@ -214,6 +270,7 @@ impl LocalWebUiServer {
             addr: addr.into(),
             port: 0,
             active_sse: Arc::new(Mutex::new(None)),
+            user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
         }
     }
@@ -221,6 +278,39 @@ impl LocalWebUiServer {
     /// 拿监听地址
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// 订阅 user input channel (P15.1.4 新增).
+    ///
+    /// **业务方用法** (agent loop):
+    /// ```ignore
+    /// let server = LocalWebUiServer::bind("127.0.0.1:3080").await?;
+    /// let mut input_rx = server.subscribe_user_input();
+    /// while let Some(input) = input_rx.recv().await {
+    ///     // 喂给 LLM
+    ///     agent.handle_user_input(&input.text).await?;
+    /// }
+    /// ```
+    ///
+    /// **多 subscriber 支持**: 业务方可以调多次, 每个拿独立 receiver,
+    /// 每次 `POST /api/input` 都会被 fan-out 给所有 subscribers.
+    ///
+    /// **注**: 返回的 receiver drop 后, 该 subscriber 就不收消息了
+    /// (但其他 subscribers 不受影响).
+    pub fn subscribe_user_input(&self) -> mpsc::UnboundedReceiver<UserInput> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut subs) = self.user_input_subs.lock() {
+            subs.push(tx);
+        }
+        // 注: lock 失败 (poisoned) 时 subscriber 收不到消息, 但不 panic
+        // — 业务方通常启动期 subscribe, 不会遇到
+        rx
+    }
+
+    /// 拿当前 user input subscriber 数 (测试用)
+    #[cfg(test)]
+    pub(crate) fn user_input_sub_count(&self) -> usize {
+        self.user_input_subs.lock().map(|s| s.len()).unwrap_or(0)
     }
 }
 
@@ -243,6 +333,7 @@ impl WebUiServer for LocalWebUiServer {
             addr: addr.to_string(),
             port,
             active_sse: Arc::new(Mutex::new(None)),
+            user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
         })
     }
@@ -267,8 +358,10 @@ impl WebUiServer for LocalWebUiServer {
             };
             let sse_tx = events.clone();
             let active_sse = Arc::clone(&self.active_sse);
+            let user_input_subs = Arc::clone(&self.user_input_subs);
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, sse_tx, active_sse).await {
+                if let Err(e) = handle_connection(stream, sse_tx, active_sse, user_input_subs).await
+                {
                     tracing::debug!(error = %e, "connection handler error");
                 }
             });
@@ -285,32 +378,29 @@ async fn handle_connection(
     mut stream: TcpStream,
     sse_tx: mpsc::UnboundedSender<SseEvent>,
     active_sse: Arc<Mutex<Option<mpsc::UnboundedSender<SseEvent>>>>,
+    user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
 ) -> Result<(), WebUiError> {
-    // 读 HTTP request line (在独立 BufReader, 不 borrow stream 持久)
-    let mut request_line = String::new();
-    {
+    // 读 HTTP request (method + path + query + headers + body)
+    // 用独立 BufReader, 不 borrow stream 持久
+    let req = {
         let mut reader = BufReader::new(&mut stream);
-        reader.read_line(&mut request_line).await?;
-    }
-    let request_line = request_line.trim_end_matches(['\r', '\n']);
+        parse_http_request(&mut reader).await?
+    };
 
-    // 简单 parse: "GET /path HTTP/1.1"
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let raw_path = parts.next().unwrap_or("");
+    // 路由: (method, path) -> handler
+    // 405 vs 404 区分: 已知 path 用错 method -> 405, 未知 path -> 404
+    const KNOWN_PATHS: &[&str] = &[
+        "/",
+        "/index.html",
+        "/api/health",
+        "/api/version",
+        "/api/sessions",
+        "/api/sse",
+        "/api/input",
+    ];
 
-    if method != "GET" {
-        let response = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n";
-        stream.write_all(response.as_bytes()).await?;
-        return Ok(());
-    }
-
-    // P15.1.2: 拆 path + query string
-    let (path, query) = split_path_query(raw_path);
-    let query_params = parse_query(query);
-
-    match path {
-        "/" | "/index.html" => {
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/") | ("GET", "/index.html") => {
             let body = html_shell();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -319,7 +409,7 @@ async fn handle_connection(
             );
             stream.write_all(response.as_bytes()).await?;
         }
-        "/api/health" => {
+        ("GET", "/api/health") => {
             // P15.1.2: health check endpoint
             let body = serde_json::json!({
                 "status": "ok",
@@ -333,7 +423,7 @@ async fn handle_connection(
             );
             stream.write_all(response.as_bytes()).await?;
         }
-        "/api/version" => {
+        ("GET", "/api/version") => {
             // P15.1.3 新增: version meta (crate + rustc + features)
             let body = serde_json::json!({
                 "crate_version": env!("CARGO_PKG_VERSION"),
@@ -349,7 +439,7 @@ async fn handle_connection(
             );
             stream.write_all(response.as_bytes()).await?;
         }
-        "/api/sessions" => {
+        ("GET", "/api/sessions") => {
             // P15.1.3 新增: 列出 active sessions (stub: 返 1 个 demo session)
             // P15.1.5+ 业务方接 ma-harness-server EventLog 真实列 session
             let started_at = std::time::SystemTime::now()
@@ -375,9 +465,9 @@ async fn handle_connection(
             );
             stream.write_all(response.as_bytes()).await?;
         }
-        "/api/sse" => {
+        ("GET", "/api/sse") => {
             // P15.1.2: 支持 ?session=xxx query filter
-            let session_filter = query_params.get("session").cloned();
+            let session_filter = req.query.get("session").cloned();
 
             // Split stream: reader 独立, writer 独立 (避免 borrow 冲突)
             let (read_half, mut write_half) = stream.split();
@@ -437,7 +527,23 @@ async fn handle_connection(
             // 注: sse_tx 没在此函数用 (per-connection filter_tx 替代), 保留参数兼容性
             let _ = sse_tx;
         }
+        ("POST", "/api/input") => {
+            // P15.1.4: 接收 user input, 转发给所有 subscribers
+            handle_post_api_input(&mut stream, &req.body, &user_input_subs).await?;
+        }
+        (method, path) if KNOWN_PATHS.contains(&path) => {
+            // 已知 path 但 method 不对 (e.g. GET /api/input)
+            // 405 Method Not Allowed
+            let allowed = if path == "/api/input" { "POST" } else { "GET" };
+            let response = format!(
+                "HTTP/1.1 405 Method Not Allowed\r\nAllow: {allowed}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await?;
+            // 防止未用 method 警告
+            let _ = method;
+        }
         _ => {
+            // 未知 path
             let body = "Not Found";
             let response = format!(
                 "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -448,6 +554,177 @@ async fn handle_connection(
         }
     }
     Ok(())
+}
+
+/// 处理 `POST /api/input` (P15.1.4).
+///
+/// **Body 格式** (JSON):
+/// ```json
+/// {"session": "xxx", "text": "user message"}
+/// ```
+///
+/// **响应**:
+/// - 200: `{"ok": true, "session": "xxx", "received_at_ms": 1234}`
+/// - 400: `{"error": "invalid_json", "message": "..."}`
+/// - 400: `{"error": "missing_field", "message": "session and text are required"}`
+async fn handle_post_api_input(
+    stream: &mut TcpStream,
+    body: &[u8],
+    user_input_subs: &Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
+) -> Result<(), WebUiError> {
+    // 1. 解析 JSON
+    let json: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            let resp_body = serde_json::json!({
+                "error": "invalid_json",
+                "message": e.to_string(),
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+    };
+
+    // 2. 提取必填字段
+    let session_id = json
+        .get("session")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let text = json
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if session_id.is_empty() || text.is_empty() {
+        let resp_body = serde_json::json!({
+            "error": "missing_field",
+            "message": "session and text are required",
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            resp_body.len(),
+            resp_body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    // 3. 构 UserInput (server 端盖 timestamp)
+    let user_input = UserInput::now(session_id.clone(), text.clone());
+
+    // 4. 转发给所有 subscribers (lock 拿到 sender 列表后立即 drop lock, 然后 send)
+    let senders: Vec<mpsc::UnboundedSender<UserInput>> = {
+        let subs = user_input_subs.lock().map_err(|e| {
+            tracing::error!(error = %e, "user_input_subs mutex poisoned");
+            WebUiError::ChannelClosed
+        })?;
+        subs.iter().cloned().collect()
+    };
+    let delivered = senders.len();
+    for tx in senders {
+        // 忽略 send 失败 (subscriber 已 drop receiver) — 不影响其他 subscribers
+        let _ = tx.send(user_input.clone());
+    }
+
+    // 5. 返 200 OK
+    let resp_body = serde_json::json!({
+        "ok": true,
+        "session": user_input.session_id,
+        "received_at_ms": user_input.received_at_ms,
+        "delivered_to": delivered,
+    })
+    .to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        resp_body.len(),
+        resp_body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    Ok(())
+}
+
+/// 解析 1 个完整 HTTP request (P15.1.4 helper, 给 POST body 准备)
+///
+/// **解析范围**:
+/// - Request line: `METHOD /path?query HTTP/1.1`
+/// - Headers: 到空行 (\r\n\r\n)
+/// - Body: 按 Content-Length 读 N bytes
+///
+/// **不支持** (P15.1.4 简化):
+/// - Transfer-Encoding: chunked
+/// - Content-Encoding: gzip
+/// - 多值 header
+async fn parse_http_request<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<ParsedRequest, WebUiError> {
+    // Request line
+    let mut line = String::new();
+    reader.read_line(&mut line).await.map_err(WebUiError::Io)?;
+    let line = line.trim_end_matches(['\r', '\n']);
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let raw_path = parts.next().unwrap_or("").to_string();
+    let (path, query_str) = split_path_query(&raw_path);
+    let query = parse_query(query_str);
+
+    // Headers
+    let mut content_length: usize = 0;
+    loop {
+        let mut header_line = String::new();
+        reader
+            .read_line(&mut header_line)
+            .await
+            .map_err(WebUiError::Io)?;
+        let trimmed = header_line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    // Body (按 Content-Length 读 N bytes)
+    let mut body = Vec::with_capacity(content_length);
+    if content_length > 0 {
+        use tokio::io::AsyncReadExt;
+        let mut limited = reader.take(content_length as u64);
+        limited
+            .read_to_end(&mut body)
+            .await
+            .map_err(WebUiError::Io)?;
+    }
+
+    Ok(ParsedRequest {
+        method,
+        path: path.to_string(),
+        query,
+        body,
+    })
+}
+
+/// Parsed HTTP request (P15.1.4 helper)
+#[derive(Debug, Default, Clone)]
+struct ParsedRequest {
+    /// HTTP method (e.g. "GET", "POST")
+    method: String,
+    /// Path (e.g. "/api/input")
+    path: String,
+    /// Query params (e.g. "session" -> "xxx")
+    query: std::collections::HashMap<String, String>,
+    /// Body bytes (按 Content-Length 读)
+    body: Vec<u8>,
 }
 
 /// 拆 path 和 query string (P15.1.2 helper)
@@ -495,57 +772,81 @@ async fn read_with_timeout<R: tokio::io::AsyncBufRead + Unpin + Send>(
 /// **特性**:
 /// - 内嵌 CSS (极简 dark mode)
 /// - 内嵌 JS EventSource 客户端 (连接 /api/sse, 显示 events)
+/// - P15.1.4: 内嵌 user input form (POST /api/input)
 /// - 兼容 P15.1.2+ React mount point (`<div id="root">`)
 pub fn html_shell() -> String {
     r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>ma-harness Web UI (P15.1.1 skeleton)</title>
+  <title>ma-harness Web UI (P15.1.4 input form)</title>
   <style>
     body { background: #1a1a1a; color: #e0e0e0; font-family: monospace; margin: 0; padding: 1rem; }
     h1 { color: #4fc3f7; font-size: 1.2rem; }
-    #log { background: #0d0d0d; border: 1px solid #333; padding: 0.5rem; height: 80vh; overflow-y: auto; }
+    #input-form { background: #0d0d0d; border: 1px solid #333; padding: 0.5rem; margin-bottom: 0.5rem; }
+    #input-form input { background: #1a1a1a; color: #e0e0e0; border: 1px solid #555; padding: 0.25rem; }
+    #input-form button { background: #4fc3f7; color: #1a1a1a; border: none; padding: 0.25rem 0.5rem; cursor: pointer; }
+    #log { background: #0d0d0d; border: 1px solid #333; padding: 0.5rem; height: 70vh; overflow-y: auto; }
     .event { padding: 0.25rem 0; border-bottom: 1px solid #222; font-size: 0.9rem; }
     .session { color: #81c784; }
     .message { color: #ffb74d; }
     .heartbeat { color: #555; font-style: italic; }
     .done { color: #e57373; font-weight: bold; }
+    .user-input { color: #ce93d8; }
   </style>
 </head>
 <body>
-  <h1>ma-harness Web UI (P15.1.1 skeleton)</h1>
-  <p>Live session event stream (Server-Sent Events). P15.1.2+ will add Leptos/React UI.</p>
+  <h1>ma-harness Web UI (P15.1.4 input form)</h1>
+  <p>Live session event stream (Server-Sent Events) + user input form (POST /api/input).</p>
   <div id="root"></div>
+  <div id="input-form">
+    <label>Session: <input id="session-id" value="demo-session" /></label>
+    <label>Message: <input id="user-text" placeholder="type a message" /></label>
+    <button id="send-btn">Send</button>
+  </div>
   <div id="log"></div>
   <script>
     const log = document.getElementById('log');
     const es = new EventSource('/api/sse');
-    es.addEventListener('session', (e) => {
+    function appendEvent(cls, text) {
       const div = document.createElement('div');
-      div.className = 'event session';
-      div.textContent = '[session] ' + e.data;
+      div.className = 'event ' + cls;
+      div.textContent = text;
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
+    }
+    es.addEventListener('session', (e) => appendEvent('session', '[session] ' + e.data));
+    es.addEventListener('session_start', (e) => appendEvent('session', '[session_start] ' + e.data));
+    es.addEventListener('session_end', (e) => appendEvent('session', '[session_end] ' + e.data));
+    es.addEventListener('message', (e) => appendEvent('message', '[message] ' + e.data));
+    es.addEventListener('done', () => appendEvent('done', '[done] stream ended'));
+    es.onerror = () => appendEvent('heartbeat', '[error] SSE connection lost');
+
+    // P15.1.4: POST /api/input 发送 user input
+    document.getElementById('send-btn').addEventListener('click', async () => {
+      const session = document.getElementById('session-id').value;
+      const text = document.getElementById('user-text').value;
+      if (!text) return;
+      try {
+        const resp = await fetch('/api/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session, text })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          appendEvent('user-input', '[input] sent to ' + data.session + ' (ack ' + data.received_at_ms + ', delivered to ' + data.delivered_to + ' subscribers)');
+        } else {
+          appendEvent('message', '[input error] ' + (data.error || resp.status) + ': ' + (data.message || ''));
+        }
+      } catch (err) {
+        appendEvent('message', '[input error] ' + err);
+      }
+      document.getElementById('user-text').value = '';
     });
-    es.addEventListener('message', (e) => {
-      const div = document.createElement('div');
-      div.className = 'event message';
-      div.textContent = '[message] ' + e.data;
-      log.appendChild(div);
+    document.getElementById('user-text').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') document.getElementById('send-btn').click();
     });
-    es.addEventListener('done', () => {
-      const div = document.createElement('div');
-      div.className = 'event done';
-      div.textContent = '[done] stream ended';
-      log.appendChild(div);
-    });
-    es.onerror = () => {
-      const div = document.createElement('div');
-      div.className = 'event heartbeat';
-      div.textContent = '[error] SSE connection lost';
-      log.appendChild(div);
-    };
   </script>
 </body>
 </html>"#
@@ -764,5 +1065,256 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["id"], "demo-session");
         assert_eq!(sessions[0]["status"], "active");
+    }
+
+    // ========================================================================
+    // P15.1.4 tests: POST /api/input (user input)
+    // ========================================================================
+
+    /// 启 server + subscribe_user_input, 返 (addr, client, rx)
+    async fn start_test_server_with_input()
+    -> (String, reqwest::Client, mpsc::UnboundedReceiver<UserInput>) {
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+        let input_rx = server.subscribe_user_input();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (addr, reqwest::Client::new(), input_rx)
+    }
+
+    #[tokio::test]
+    async fn user_input_now_constructor_sets_timestamp() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let input = UserInput::now("s1", "hello");
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        assert_eq!(input.session_id, "s1");
+        assert_eq!(input.text, "hello");
+        assert!(input.received_at_ms >= before);
+        assert!(input.received_at_ms <= after);
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_with_valid_json_returns_200_and_delivers_to_subscriber() {
+        let (addr, client, mut input_rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/input");
+        let body = serde_json::json!({
+            "session": "demo-session",
+            "text": "hello from test"
+        });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST /api/input");
+        assert_eq!(resp.status(), 200);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.contains("application/json"));
+        let resp_body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(resp_body["ok"], true);
+        assert_eq!(resp_body["session"], "demo-session");
+        assert!(resp_body["received_at_ms"].is_number());
+        assert_eq!(resp_body["delivered_to"], 1);
+
+        // 验证 subscriber 收到 UserInput
+        let received = input_rx.recv().await.expect("subscriber should receive");
+        assert_eq!(received.session_id, "demo-session");
+        assert_eq!(received.text, "hello from test");
+        assert!(received.received_at_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_with_invalid_json_returns_400() {
+        let (addr, client, mut input_rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/input");
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body("{not valid json")
+            .send()
+            .await
+            .expect("POST /api/input");
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["error"], "invalid_json");
+        // subscriber 不应收到任何东西
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_missing_session_returns_400() {
+        let (addr, client, mut input_rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/input");
+        let body = serde_json::json!({ "text": "no session" });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST /api/input");
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["error"], "missing_field");
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_missing_text_returns_400() {
+        let (addr, client, mut input_rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/input");
+        let body = serde_json::json!({ "session": "s1" });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST /api/input");
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["error"], "missing_field");
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn http_get_api_input_returns_405() {
+        // GET /api/input 是已知 path, 但 method 不允许 -> 405
+        let (addr, client, _rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/input");
+        let resp = client.get(&url).send().await.expect("GET /api/input");
+        assert_eq!(resp.status(), 405);
+        // Allow header 应该告诉 client 应该用 POST
+        let allow = resp
+            .headers()
+            .get("allow")
+            .map(|h| h.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        assert_eq!(allow, "POST");
+    }
+
+    #[tokio::test]
+    async fn http_post_unknown_path_returns_404() {
+        let (addr, client, _rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/nonexistent");
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .expect("POST /api/nonexistent");
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_with_multiple_subscribers_delivers_to_all() {
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+        // 启 3 个 subscribers
+        let mut rx1 = server.subscribe_user_input();
+        let mut rx2 = server.subscribe_user_input();
+        let mut rx3 = server.subscribe_user_input();
+        assert_eq!(server.user_input_sub_count(), 3);
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let url = format!("http://{addr}/api/input");
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "session": "fanout-test",
+            "text": "broadcast me"
+        });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 200);
+        let resp_body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(resp_body["delivered_to"], 3);
+
+        // 3 个 subscriber 都收到
+        let i1 = rx1.recv().await.expect("rx1");
+        let i2 = rx2.recv().await.expect("rx2");
+        let i3 = rx3.recv().await.expect("rx3");
+        assert_eq!(i1.text, "broadcast me");
+        assert_eq!(i2.text, "broadcast me");
+        assert_eq!(i3.text, "broadcast me");
+        assert_eq!(i1.session_id, "fanout-test");
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_with_no_subscribers_still_returns_200() {
+        // 业务方可能没 subscribe (e.g. CLI mode), POST 不应 panic
+        // 注意: 单独启 server, 不调 subscribe_user_input(), 这样 user_input_subs Vec 真的空
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+        assert_eq!(server.user_input_sub_count(), 0);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let url = format!("http://{addr}/api/input");
+        let body = serde_json::json!({
+            "session": "no-subs",
+            "text": "into the void"
+        });
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 200);
+        let resp_body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(resp_body["ok"], true);
+        assert_eq!(resp_body["delivered_to"], 0);
+    }
+
+    #[tokio::test]
+    async fn http_html_shell_contains_input_form_for_p15_1_4() {
+        // P15.1.4: HTML shell 应包含 input form
+        let html = html_shell();
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("EventSource"));
+        assert!(html.contains("/api/sse"));
+        assert!(html.contains("/api/input"));
+        assert!(html.contains("send-btn"));
+        assert!(html.contains("user-text"));
     }
 }
