@@ -28,6 +28,7 @@ members = [
     "crates/ma-harness-session",  # 2026-09-04 (Day 101+32): P14.8.1 ctx.sessions fork + ctx.goals + ctx.sessionTitle
     "crates/ma-harness-profile",  # 2026-09-04 (Day 101+32): P14.9.1 profile system (5 default profiles)
     "crates/ma-harness-context",  # 2026-09-04 (Day 101+32): P14.10.1 request-context plugin (RequestContext + Middleware)
+    "crates/ma-harness-guard",  # 2026-09-04 (Day 101+32): P14.11.1 loop-hygiene (MaxSteps + RepeatedArgs)
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
