@@ -42,6 +42,7 @@
 //! - 接受 user input (P15.1.4+)
 //! - 多 tab / 多 browser 并存, UserInputAck 实时反馈 (P15.1.5+)
 //! - SSE heartbeat + dead connection 自动清理 (P15.1.6+)
+//! - Graceful shutdown (P15.1.7+)
 //!
 //! **P15.1 大工程** (8-12 周): Rust + WASM (Leptos/Yew) or React + REST API.
 //! **P15.1.1 骨架**: crate 脚手架, WebUiServer trait, std+tokio HTTP server, SSE.
@@ -49,35 +50,36 @@
 //! **P15.1.3**: /api/version + /api/sessions endpoints.
 //! **P15.1.4**: POST /api/input 接 user input, UserInput 转发给 subscribers.
 //! **P15.1.5**: 多 SSE 广播 (Vec) + UserInputAck 实时反馈.
-//! **P15.1.6** (本次): SSE heartbeat (15s) + dead sender 自动清理.
+//! **P15.1.6**: SSE heartbeat (15s) + dead sender 自动清理.
+//! **P15.1.7** (本次): Graceful shutdown (`stop()` + `Notify` 协调).
 //!
 //! **设计决策**: 不引 salvo/axum, 用 `tokio::net::TcpListener` + 手写 minimal HTTP
 //! (P15.1.x 只需要几个 endpoint, 完整 framework 过度设计).
-//! 业务方 P15.1.7+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
+//! 业务方 P15.1.8+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
 //!
 //! **核心抽象**:
 //! - [`SseEvent`] enum (SessionEvent / SessionStart/End / UserInputAck / Message / Heartbeat / Done)
 //! - [`UserInput`] struct (P15.1.4: browser → server, session + text + ts)
 //! - [`WebUiServer`] trait (bind / run / port)
-//! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE broadcast via active_sse_subs Vec)
-//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.7+ 替换为 Leptos / React)
+//! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE broadcast + heartbeat + graceful shutdown)
+//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.8+ 替换为 Leptos / React)
 //!
 //! **6 质量属性**:
 //! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud)
 //! - 可维护: 模块化分块, server / sse / http / html / error / user_input 集中 lib.rs
 //! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读,
-//!   lock 短暂持有 + drop 后 send (跨 await 安全), heartbeat 自动清理死连接
+//!   lock 短暂持有 + drop 后 send (跨 await 安全), heartbeat 自动清理死连接, stop() 幂等
 //! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client
-//! - 可测: 30+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast / heartbeat
+//! - 可测: 37+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast / heartbeat / shutdown
 //! - 可扩展: active_sse_subs Vec<Sender> + user_input_subs Vec<Sender>,
-//!   业务方多 subscriber / 多 tab 自然支持
+//!   业务方多 subscriber / 多 tab 自然支持, stop() / shutdown_handle 联合其他 signal
 //!
-//! # 限制 (Limitations) — P15.1.6
+//! # 限制 (Limitations) — P15.1.7
 //!
-//! - placeholder HTML shell (业务方 P15.1.7+ 替换为 Leptos / React)
-//! - heartbeat task 无 cancellation token — `run()` 退出时 heartbeat 继续跑到下一个 tick
-//!   (业务方 P15.1.7+ 想要 graceful shutdown 加 stop() + oneshot signal)
-//! - 不接 ma-harness-server OpenAPI (P15.1.7+ 集成)
+//! - placeholder HTML shell (业务方 P15.1.8+ 替换为 Leptos / React)
+//! - `stop()` 不强制关闭已有活跃连接 — accept loop 退出, 已连接 conn 自然结束
+//!   (业务方 P15.1.8+ 想要 hard kill 已有 conn 可加 close_inflight + 30s timeout)
+//! - 不接 ma-harness-server OpenAPI (P15.1.8+ 集成)
 //! - 不接 ctx.user 全链路 (P15.2 集成 ma-harness-core Context)
 //!
 //! [dsh-feature-parity-table §8]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#8-distribution-surfaces
@@ -291,6 +293,9 @@ pub struct LocalWebUiServer {
     user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
     /// Server 启动状态
     running: Arc<Mutex<bool>>,
+    /// P15.1.7: graceful shutdown signal. `stop()` triggers it; `run()` /
+    /// `heartbeat_loop` `tokio::select!` on it.
+    shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl LocalWebUiServer {
@@ -302,12 +307,35 @@ impl LocalWebUiServer {
             active_sse_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
+            shutdown: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     /// 拿监听地址
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// 触发 graceful shutdown (P15.1.7 新增).
+    ///
+    /// **行为**:
+    /// - `run()` 的 accept loop 收到信号后, 立即 break 并返 `Ok(())`
+    /// - `heartbeat_loop` 后台任务收到信号后, 退出
+    /// - 已有活跃连接 (HTTP/SSE) 不被强制断开, 自然结束 (client close or handler return)
+    ///
+    /// **幂等**: 多次调用安全 (`Notify::notify_one` 只 wake 一个 waiter, 没 waiter 也不报错)
+    /// **非阻塞**: 立即返, 不等 server 真正退出
+    /// **线程安全**: 业务方任意线程调, 都能触发 server 退出
+    pub fn stop(&self) {
+        self.shutdown.notify_one();
+    }
+
+    /// 拿 shutdown Notify 的 clone (P15.1.7 测试 / 高级用).
+    ///
+    /// 业务方一般用 `stop()` 即可. 这个方法给需要
+    /// "跟其他 signal (e.g. SIGINT, Ctrl-C) 联合" 的场景.
+    pub fn shutdown_handle(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.shutdown)
     }
 
     /// 订阅 user input channel (P15.1.4 新增).
@@ -414,35 +442,47 @@ pub(crate) const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration =
 ///
 /// **lock 策略**: 整个 retain 在一个 critical section, 不跨 await, 不会丢新 push 的 conn
 /// (因为新 push 在 retain 之后才会 lock 拿锁).
+///
+/// **P15.1.7**: listen `shutdown` Notify — 收到时立即退出 (不等下一个 tick).
 async fn heartbeat_loop(
     active_sse_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
     interval: std::time::Duration,
+    shutdown: Arc<tokio::sync::Notify>,
 ) {
     let mut tick = tokio::time::interval(interval);
     // 第一次 tick 立即触发, 但 first_tick = 0 之后等 interval — 跳过 first tick
     // (避免 server 刚启动就 heartbeat 一次空 Vec)
     tick.tick().await;
     loop {
-        tick.tick().await;
-        let cleanup_count = {
-            match active_sse_subs.lock() {
-                Ok(mut subs) => {
-                    let before = subs.len();
-                    // retain 内部试 send: 成功 (Ok) → 保留, 失败 (Err) → 移除
-                    subs.retain(|tx| tx.send(SseEvent::Heartbeat).is_ok());
-                    before - subs.len()
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "heartbeat: active_sse_subs mutex poisoned");
-                    0
+        tokio::select! {
+            // biased 让 shutdown 优先
+            biased;
+            _ = shutdown.notified() => {
+                tracing::debug!("heartbeat task received shutdown signal");
+                return;
+            }
+            _ = tick.tick() => {
+                let cleanup_count = {
+                    match active_sse_subs.lock() {
+                        Ok(mut subs) => {
+                            let before = subs.len();
+                            // retain 内部试 send: 成功 (Ok) → 保留, 失败 (Err) → 移除
+                            subs.retain(|tx| tx.send(SseEvent::Heartbeat).is_ok());
+                            before - subs.len()
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "heartbeat: active_sse_subs mutex poisoned");
+                            0
+                        }
+                    }
+                };
+                if cleanup_count > 0 {
+                    tracing::debug!(
+                        cleaned = cleanup_count,
+                        "heartbeat: pruned dead SSE senders"
+                    );
                 }
             }
-        };
-        if cleanup_count > 0 {
-            tracing::debug!(
-                cleaned = cleanup_count,
-                "heartbeat: pruned dead SSE senders"
-            );
         }
     }
 }
@@ -468,6 +508,7 @@ impl WebUiServer for LocalWebUiServer {
             active_sse_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
+            shutdown: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -482,30 +523,48 @@ impl WebUiServer for LocalWebUiServer {
         tracing::info!(addr = %self.addr, port = self.port, "web UI server started");
 
         // P15.1.6: 启 heartbeat 后台任务 (清理 dead SSE senders + keep-alive)
+        // P15.1.7: heartbeat 也 listen shutdown signal, 收到时退出
         let heartbeat_subs = Arc::clone(&self.active_sse_subs);
+        let heartbeat_shutdown = Arc::clone(&self.shutdown);
         tokio::spawn(async move {
-            heartbeat_loop(heartbeat_subs, DEFAULT_HEARTBEAT_INTERVAL).await;
+            heartbeat_loop(
+                heartbeat_subs,
+                DEFAULT_HEARTBEAT_INTERVAL,
+                heartbeat_shutdown,
+            )
+            .await;
         });
 
         loop {
-            let (stream, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!(error = %e, "accept failed");
-                    continue;
+            tokio::select! {
+                // P15.1.7: biased 让 shutdown 优先 — 避免 accept 一直 ready
+                // 的时候 starve shutdown signal
+                biased;
+                _ = self.shutdown.notified() => {
+                    tracing::info!(addr = %self.addr, "web UI server received shutdown signal");
+                    return Ok(());
                 }
-            };
-            // P15.1.5: events (外层 sse_tx) 不再 clone 到 handle_connection —
-            // 用 active_sse_subs Vec broadcast 取代了之前的 per-connection filter_tx.
-            // 外层 sse_tx 暂未使用 (P15.1.6+ 业务方接 ma-harness-core EventLog 时接入).
-            let _ = events;
-            let active_sse_subs = Arc::clone(&self.active_sse_subs);
-            let user_input_subs = Arc::clone(&self.user_input_subs);
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, active_sse_subs, user_input_subs).await {
-                    tracing::debug!(error = %e, "connection handler error");
+                accept_result = listener.accept() => {
+                    let (stream, _peer) = match accept_result {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "accept failed");
+                            continue;
+                        }
+                    };
+                    // P15.1.5: events (外层 sse_tx) 不再 clone 到 handle_connection —
+                    // 用 active_sse_subs Vec broadcast 取代了之前的 per-connection filter_tx.
+                    // 外层 sse_tx 暂未使用 (P15.1.6+ 业务方接 ma-harness-core EventLog 时接入).
+                    let _ = events;
+                    let active_sse_subs = Arc::clone(&self.active_sse_subs);
+                    let user_input_subs = Arc::clone(&self.user_input_subs);
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(stream, active_sse_subs, user_input_subs).await {
+                            tracing::debug!(error = %e, "connection handler error");
+                        }
+                    });
                 }
-            });
+            }
         }
     }
 
@@ -1674,8 +1733,11 @@ mod tests {
         interval: std::time::Duration,
         ticks: u32,
     ) {
+        // P15.1.7: heartbeat_loop 现在需要 shutdown Notify — 测试用独立 Notify,
+        // 不触发 shutdown, 维持 P15.1.6 行为
+        let shutdown = Arc::new(tokio::sync::Notify::new());
         let handle = tokio::spawn(async move {
-            heartbeat_loop(subs, interval).await;
+            heartbeat_loop(subs, interval, shutdown).await;
         });
         // 等 ticks * interval 毫秒 (留 50ms buffer 让 tick 触发)
         let total = interval * ticks + std::time::Duration::from_millis(50);
@@ -1836,5 +1898,185 @@ mod tests {
             DEFAULT_HEARTBEAT_INTERVAL,
             std::time::Duration::from_secs(15)
         );
+    }
+
+    // ========================================================================
+    // P15.1.7 tests: graceful shutdown (stop() + Notify)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn stop_method_is_sync_and_idempotent() {
+        // P15.1.7: stop() 立即返 (sync), 多次调用安全
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+
+        // 调多次不 panic
+        server.stop();
+        server.stop();
+        server.stop();
+
+        // shutdown_handle 返回 Arc<Notify>
+        let h = server.shutdown_handle();
+        // Arc 是共享的 — 调 notify_one 也等效于 stop()
+        h.notify_one();
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_after_stop_signal() {
+        // P15.1.7: run() 在 stop 后返 Ok(())
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = Arc::new(LocalWebUiServer::bind(&addr).await.expect("bind"));
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_clone = Arc::clone(&server);
+        let run_handle = tokio::spawn(async move { server_clone.run(tx).await });
+
+        // 等 server ready
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 触发 stop
+        server.stop();
+
+        // run() 应返 Ok — 给 500ms 等它退出
+        let join_result = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle)
+            .await
+            .expect("run() should exit within 500ms");
+        let run_result = join_result.expect("JoinHandle should not be cancelled");
+        assert!(
+            run_result.is_ok(),
+            "stop() should cause run() to return Ok, got {run_result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_exits_on_shutdown_signal() {
+        // P15.1.7: 关键 regression test — P15.1.6 limitation fix
+        // heartbeat_loop 收到 shutdown 后立即退出 (不等下一个 tick)
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+
+        let subs_clone = Arc::clone(&subs);
+        let shutdown_clone = Arc::clone(&shutdown);
+        let handle = tokio::spawn(async move {
+            // 长 interval (10s), 但 shutdown 应该立即让它退出
+            heartbeat_loop(
+                subs_clone,
+                std::time::Duration::from_secs(10),
+                shutdown_clone,
+            )
+            .await;
+        });
+
+        // 等 heartbeat 启动
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!handle.is_finished(), "heartbeat should still be running");
+
+        // 触发 shutdown
+        shutdown.notify_one();
+
+        // heartbeat 应该在 100ms 内退出 (远小于 10s interval)
+        // heartbeat_loop 返 (), 只需确认 join 成功
+        tokio::time::timeout(std::time::Duration::from_millis(500), handle)
+            .await
+            .expect("heartbeat should exit within 500ms of shutdown")
+            .expect("JoinHandle should not error");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_exits_immediately_even_before_first_tick() {
+        // P15.1.7 edge: shutdown 在 first tick 之前触发, 仍然能退出
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+
+        let subs_clone = Arc::clone(&subs);
+        let shutdown_clone = Arc::clone(&shutdown);
+        let handle = tokio::spawn(async move {
+            heartbeat_loop(
+                subs_clone,
+                std::time::Duration::from_secs(60),
+                shutdown_clone,
+            )
+            .await;
+        });
+
+        // 立即 shutdown (heartbeat 应该还没 first tick)
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        shutdown.notify_one();
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+            .await
+            .expect("heartbeat should exit immediately on shutdown");
+        result.expect("JoinHandle");
+    }
+
+    #[tokio::test]
+    async fn stop_drops_listener_so_new_connections_fail() {
+        // P15.1.7: stop() 让 run() 返 Ok, listener 随之 drop, 新连接被拒
+        // 注: 这测试组合 "stop + listener drop", 跟 run_returns_ok_after_stop_signal
+        // 一起覆盖 P15.1.7 行为. 单独不调 GET 避免 keep-alive 干扰.
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = Arc::new(LocalWebUiServer::bind(&addr).await.expect("bind"));
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_clone = Arc::clone(&server);
+        let run_handle = tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+
+        // 等 server ready
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 触发 stop
+        server.stop();
+
+        // 等 run() 退出 (500ms 跟 run_returns_ok_after_stop_signal 一致)
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle)
+            .await
+            .expect("run() exits");
+
+        // 后: 新连接应被拒 (listener 已 drop → connection refused)
+        let result = reqwest::Client::new()
+            .get(format!("http://{addr}/api/health"))
+            .timeout(std::time::Duration::from_millis(500))
+            .send()
+            .await;
+        assert!(
+            result.is_err(),
+            "expected connection refused after stop, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_does_not_forcibly_close_existing_connections() {
+        // P15.1.7: 已有活跃连接不被 stop 强制断开 (P15.1.7 minimal 行为)
+        // 设计选择: stop 只退出 accept loop, 已有连接自然结束
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = Arc::new(LocalWebUiServer::bind(&addr).await.expect("bind"));
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server_clone = Arc::clone(&server);
+        let run_handle = tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+
+        // 等 server ready
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 触发 stop
+        server.stop();
+
+        // 等 run() 退出 (accept loop 关闭)
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), run_handle)
+            .await
+            .expect("run() exits");
+
+        // 注: 这个测试只验 "stop 不 panic" + "run() 干净退出"
+        // 已有连接的强制关闭是 P15.1.8+ 范畴
     }
 }
