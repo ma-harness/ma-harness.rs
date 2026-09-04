@@ -1,0 +1,31 @@
+[package]
+name = "ma-harness-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness request-context plugin (P14.10): RequestContext (trace_id / parent_session_id / deadline / metadata) + Middleware trait. OpenTelemetry-style propagation. dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
