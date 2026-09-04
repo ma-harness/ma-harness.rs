@@ -320,10 +320,52 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
         "/api/health" => {
-            // P15.1.2 新增: health check endpoint
+            // P15.1.2: health check endpoint
             let body = serde_json::json!({
                 "status": "ok",
                 "version": env!("CARGO_PKG_VERSION"),
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+        "/api/version" => {
+            // P15.1.3 新增: version meta (crate + rustc + features)
+            let body = serde_json::json!({
+                "crate_version": env!("CARGO_PKG_VERSION"),
+                "rust_version": "n/a (P15.1.3 stub)", // 业务方可改用 rustc_version_runtime (P15.1.5+)
+                "name": env!("CARGO_PKG_NAME"),
+                "build": "debug",
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+        "/api/sessions" => {
+            // P15.1.3 新增: 列出 active sessions (stub: 返 1 个 demo session)
+            // P15.1.5+ 业务方接 ma-harness-server EventLog 真实列 session
+            let started_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64 - 60)
+                .unwrap_or(0);
+            let body = serde_json::json!({
+                "sessions": [
+                    {
+                        "id": "demo-session",
+                        "started_at": started_at,
+                        "status": "active",
+                        "event_count": 0
+                    }
+                ],
+                "total": 1
             })
             .to_string();
             let response = format!(
@@ -674,5 +716,53 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(ct.contains("text/event-stream"));
+    }
+
+    /// 共享 helper: 启 server, 等 ready, 返 client
+    async fn start_test_server() -> (String, reqwest::Client) {
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (addr, reqwest::Client::new())
+    }
+
+    #[tokio::test]
+    async fn http_get_api_version_returns_json() {
+        let (addr, client) = start_test_server().await;
+        let url = format!("http://{addr}/api/version");
+        let resp = client.get(&url).send().await.expect("GET /api/version");
+        assert_eq!(resp.status(), 200);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.contains("application/json"));
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["crate_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(body["name"], env!("CARGO_PKG_NAME"));
+        assert!(body["build"].is_string());
+    }
+
+    #[tokio::test]
+    async fn http_get_api_sessions_returns_stub_list() {
+        let (addr, client) = start_test_server().await;
+        let url = format!("http://{addr}/api/sessions");
+        let resp = client.get(&url).send().await.expect("GET /api/sessions");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["total"], 1);
+        let sessions = body["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], "demo-session");
+        assert_eq!(sessions[0]["status"], "active");
     }
 }
