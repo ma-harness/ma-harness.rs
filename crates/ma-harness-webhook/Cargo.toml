@@ -16,6 +16,7 @@ workspace = true
 # 内部 (跟 subprocess / shell / terminal 模式一致)
 ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
 ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }  # ctx_key! macro
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }  # P15.3.3 SessionEvent conversion
 
 # 外部
 tokio = { workspace = true }

@@ -456,6 +456,53 @@ pub static WEBHOOK_SERVICE: ma_harness_cordis::CtxKey<Arc<dyn WebhookService>> =
 pub type DefaultWebhookProvider = LocalWebhookProvider;
 
 // ============================================================================
+// P15.3.3: Webhook → SessionEvent 转换 (session creator 基础)
+// ============================================================================
+
+/// 把 WebhookEvent 转换成 ma-harness-core 的 SessionEvent (P15.3.3).
+///
+/// **设计**:
+/// - `session_id` = WebhookEvent.id (1:1 映射, 后续 trace 简单)
+/// - `event_type` = `UserInput` (model_visible=true, 业务方把 webhook body
+///   当作 "user-provided content" 喂 LLM, 跟 dsh 把 webhook 当 input 流一致)
+/// - `payload_json` = body 字符串 (binary body 走 base64 包装; P15.3.4
+///   持久化时跟 P15.1.8 EventLog 集成)
+/// - `severity` = `Info` (默认; P15.3.5 rate limit 拒收时改 `Warn`)
+/// - `plugin_name` = "webhook" (标识事件来源, 跟 event_type 配对用于
+///   业务方 trace / metrics)
+///
+/// **返回**:
+/// - `Ok(SessionEvent)` — 可直接 `event_log.append(session_event)` 入库
+/// - `Err(WebhookError::Internal)` — payload 序列化失败 (极少见)
+///
+/// **P15.3.4 集成**: 业务方在 `WebhookService::take()` 拿到 event 后调这个
+/// 函数, 然后 `event_log.append(event)` 就建立了 webhook → session 的
+/// 完整链路 (跟 P15.1.8 /api/sessions/<id>/events 接上).
+///
+/// **P15.3.3 限制**: 转换是 1:1, 没考虑 multi-event sessions (e.g. 一个 webhook
+/// 触发的 session 可能先有 SessionStart, 才有 UserInput). P15.3.5+
+/// 改返 `Vec<SessionEvent>` 包含完整 lifecycle.
+pub fn webhook_to_session_event(
+    event: &WebhookEvent,
+) -> Result<ma_harness_core::SessionEvent, WebhookError> {
+    use ma_harness_core::{EventType, Severity};
+
+    let session_id = event.id.clone();
+    let body_str = event.body_str(); // UTF-8 lossy fallback for binary
+
+    let mut session_event = ma_harness_core::SessionEvent::new(&session_id, EventType::UserInput)
+        .with_severity(Severity::Info)
+        .with_plugin("webhook");
+    // 直接设 payload_json (不经过 with_payload 的 serde_json::to_string,
+    // 那样会 JSON 字符串再 stringify 一次, 把 body 包成 "...").
+    // 我们要的是 raw body 存进 payload_json 字段 — 业务方 query 时拿到
+    // 原始 body (GitHub webhook 是 JSON, 直接 parse 即可).
+    session_event.payload_json = Some(body_str);
+
+    Ok(session_event)
+}
+
+// ============================================================================
 // P15.3.2: HTTP server (POST /webhook/{route})
 // ============================================================================
 
@@ -1288,5 +1335,92 @@ mod tests {
             .await
             .expect("GET");
         assert_eq!(resp.status(), 405);
+    }
+
+    // ========================================================================
+    // P15.3.3 tests: webhook_to_session_event conversion
+    // ========================================================================
+
+    #[test]
+    fn webhook_to_session_event_basic_mapping() {
+        use ma_harness_core::{EventType, Severity};
+
+        let event = WebhookEvent::new("/webhook/git", br#"{"action":"opened"}"#.to_vec());
+        let session = webhook_to_session_event(&event).expect("convert");
+        // session_id = event.id
+        assert_eq!(session.session_id, event.id);
+        // event_type = UserInput
+        assert_eq!(session.event_type, EventType::UserInput);
+        // severity = Info
+        assert_eq!(session.severity, Severity::Info);
+        // plugin_name = "webhook"
+        assert_eq!(session.plugin_name.as_deref(), Some("webhook"));
+        // payload_json = body
+        assert_eq!(
+            session.payload_json.as_deref(),
+            Some(r#"{"action":"opened"}"#)
+        );
+        // model_visible = true (UserInput 是 model_visible)
+        assert!(session.model_visible);
+    }
+
+    #[test]
+    fn webhook_to_session_event_binary_body_uses_lossy_utf8() {
+        // 二进制 body → String::from_utf8_lossy 替换 invalid bytes
+        let event = WebhookEvent::new("/webhook/binary", vec![b'h', b'i', 0xFF, 0xFE, b'!']);
+        let session = webhook_to_session_event(&event).expect("convert");
+        let payload = session.payload_json.as_deref().unwrap();
+        assert!(payload.contains("hi"));
+        assert!(payload.contains("!"));
+        // 0xFF 0xFE → U+FFFD (replacement char), 不 panic
+    }
+
+    #[test]
+    fn webhook_to_session_event_empty_body_still_works() {
+        // 空 body (e.g. POST 没 body) — 仍然能转, payload 是空字符串
+        let event = WebhookEvent::new("/webhook/empty", Vec::new());
+        let session = webhook_to_session_event(&event).expect("convert");
+        assert_eq!(session.payload_json.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn webhook_to_session_event_preserves_signature_info_via_extra_headers() {
+        // WebhookEvent 的 signature / extra_headers 不会自动进 SessionEvent
+        // (SessionEvent 只有 payload_json 装 body, 没 header 字段)
+        // P15.3.3 限制: 签名信息丢失 — 业务方需要的话可自己加到 payload
+        let event = WebhookEvent::new("/webhook/git", br#"{"a":1}"#.to_vec())
+            .with_signature("sha256=abc")
+            .with_header("X-GitHub-Event", "push");
+        let session = webhook_to_session_event(&event).expect("convert");
+        // signature / extra_headers 不在 SessionEvent 上
+        assert!(session.payload_json.is_some());
+        // session_id 跟 webhook id 一致 (trace 简单)
+        assert_eq!(session.session_id, event.id);
+    }
+
+    #[test]
+    fn webhook_to_session_event_then_event_log_append_full_chain() {
+        // 端到端: webhook → session_event → event_log.append → query 拿回
+        let log = ma_harness_core::EventLog::open_in_memory().expect("open in-memory log");
+        let event = WebhookEvent::new("/webhook/git", br#"{"ref":"refs/heads/main"}"#.to_vec());
+        let session_event = webhook_to_session_event(&event).expect("convert");
+        let seq = log.append(session_event.clone());
+        assert!(seq > 0);
+
+        // query 拿回, 验内容
+        let q = ma_harness_core::EventQuery {
+            session_id: event.id.clone(),
+            ..Default::default()
+        };
+        let page = log.query(&q).expect("query");
+        assert_eq!(page.events.len(), 1);
+        let stored = &page.events[0].event;
+        assert_eq!(stored.session_id, event.id);
+        assert_eq!(stored.event_type, session_event.event_type);
+        assert_eq!(stored.plugin_name.as_deref(), Some("webhook"));
+        assert_eq!(
+            stored.payload_json.as_deref(),
+            Some(r#"{"ref":"refs/heads/main"}"#)
+        );
     }
 }
