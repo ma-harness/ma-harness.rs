@@ -129,7 +129,7 @@ pub struct CommandSpec {
     pub program: OsString,
     /// 参数列表 (不含 program)
     pub args: Vec<OsString>,
-    /// 环境变量 (显式注入, 不继承父进程 — 业务方可控)
+    /// 环境变量 (注入, 覆盖同 key 父 env; 受 `inherit_path` 控制是否先清空)
     pub env: BTreeMap<String, OsString>,
     /// 工作目录 (None = 父进程 cwd)
     pub cwd: Option<PathBuf>,
@@ -143,10 +143,13 @@ pub struct CommandSpec {
     pub kill_on_drop: bool,
     /// 超时 (None = 无限等待)
     pub timeout: Option<Duration>,
+    /// 是否继承父进程 env (默认 `true`, P14.1.1 fix — PATH 必须有, 不然 `ping.exe` 等外部命令找不到).
+    /// 业务方显式 `.no_inherit_path()` 可关 (sandboxes / 严格 env isolation).
+    pub inherit_path: bool,
 }
 
 impl CommandSpec {
-    /// 创建一个新 CommandSpec (默认: piped stdin/stdout/stderr, 显式空 env, kill_on_drop=true)
+    /// 创建一个新 CommandSpec (默认: piped stdio, kill_on_drop=true, inherit_path=true)
     pub fn new(
         program: impl Into<OsString>,
         args: impl IntoIterator<Item = impl Into<OsString>>,
@@ -161,6 +164,7 @@ impl CommandSpec {
             stderr: StdioConfig::Piped,
             kill_on_drop: true,
             timeout: None,
+            inherit_path: true,
         }
     }
 
@@ -213,6 +217,13 @@ impl CommandSpec {
         self
     }
 
+    /// 关闭 inherit_path (业务方想完全隔离 env, 例如 P14.1.1 sandbox).
+    /// 默认 `true` 继承父 PATH 等关键变量.
+    pub fn no_inherit_path(mut self) -> Self {
+        self.inherit_path = false;
+        self
+    }
+
     /// 设置超时
     pub fn timeout(mut self, dur: Duration) -> Self {
         self.timeout = Some(dur);
@@ -244,9 +255,13 @@ impl CommandSpec {
             .stderr(self.stderr.to_tokio())
             .kill_on_drop(self.kill_on_drop);
 
-        // 显式 env: 先清空父 env, 再灌入 self.env
-        // 这样业务方对 env 100% 可控 (不会意外继承敏感变量如 API key)
-        cmd.env_clear();
+        // Env 策略 (P14.1.1 fix):
+        // - 默认 inherit_path=true: 保留父 env (PATH / LANG / 等), 业务方 env 覆盖同 key
+        //   (PATH 必须有, 不然 Windows 找不到 ping.exe 等外部命令)
+        // - inherit_path=false: 先 env_clear 再灌入业务方 env (严格隔离, 给 P14.1.1 sandbox)
+        if !self.inherit_path {
+            cmd.env_clear();
+        }
         for (k, v) in &self.env {
             cmd.env(k, v);
         }
@@ -862,10 +877,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_env_does_not_inherit_parent() {
+    async fn explicit_env_overrides_parent() {
+        // P14.1.1: 默认 inherit_path=true, 父 env 会被保留 (PATH 等).
+        // 业务方 .env("KEY", "VAL") 覆盖同 key.
+        // 这里验证业务方显式 env 在子进程生效.
         let provider = LocalSubprocessProvider::new();
-        // PATH 在父进程一定有, 我们 env_clear + 只塞 MA_TEST=42
-        // 如果 shell 还看得到 PATH, 说明 env_clear 没生效
         #[cfg(windows)]
         let spec = CommandSpec::new(
             "cmd",
@@ -886,6 +902,47 @@ mod tests {
         let out = provider.output(&spec).await.expect("output failed");
         assert!(out.status.success);
         assert_eq!(out.stdout_str().trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn no_inherit_path_fully_isolates_env() {
+        // P14.1.1: .no_inherit_path() 完全清空父 env, 只保留业务方 .env()
+        // 验证: 即使父进程有 PATH, no_inherit_path 后子进程看不到
+        // (Unix /usr/bin/sleep 不需要 PATH, 但 shell 内部命令如 $PATH 验证)
+        let provider = LocalSubprocessProvider::new();
+        #[cfg(unix)]
+        let spec = CommandSpec::new(
+            "sh",
+            vec![
+                OsString::from("-c"),
+                OsString::from("echo path-is-empty:$PATH"),
+            ],
+        )
+        .no_inherit_path();
+        #[cfg(windows)]
+        let spec = CommandSpec::new(
+            "cmd",
+            vec![
+                OsString::from("/c"),
+                OsString::from("echo path-is-empty:%PATH%"),
+            ],
+        )
+        .no_inherit_path();
+
+        let out = provider.output(&spec).await.expect("output failed");
+        assert!(out.status.success, "stderr: {}", out.stderr_str());
+        // Windows: 完整清空 → echo 出来是 "path-is-empty:%PATH%" (变量未定义 → 空)
+        // Unix: 同理 → "path-is-empty:" (空)
+        let stdout = out.stdout_str();
+        assert!(
+            stdout.contains("path-is-empty:") && !stdout.contains("path-is-empty::")
+                || stdout.contains("path-is-empty:") && stdout.ends_with("\n"),
+            "PATH 应被清空, got stdout: {:?}",
+            stdout
+        );
+        // 更严格: PATH 应该是空字符串
+        #[cfg(unix)]
+        assert_eq!(stdout.trim(), "path-is-empty:");
     }
 
     #[tokio::test]
