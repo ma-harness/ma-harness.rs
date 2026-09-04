@@ -43,43 +43,52 @@
 //! - 多 tab / 多 browser 并存, UserInputAck 实时反馈 (P15.1.5+)
 //! - SSE heartbeat + dead connection 自动清理 (P15.1.6+)
 //! - Graceful shutdown (P15.1.7+)
+//! - Real session/event data from `EventLog` (P15.1.8+)
 //!
 //! **P15.1 大工程** (8-12 周): Rust + WASM (Leptos/Yew) or React + REST API.
 //! **P15.1.1 骨架**: crate 脚手架, WebUiServer trait, std+tokio HTTP server, SSE.
 //! **P15.1.2**: SSE query filter (?session=xxx), SessionStart/End events.
-//! **P15.1.3**: /api/version + /api/sessions endpoints.
+//! **P15.1.3**: /api/version + /api/sessions endpoints (stub).
 //! **P15.1.4**: POST /api/input 接 user input, UserInput 转发给 subscribers.
 //! **P15.1.5**: 多 SSE 广播 (Vec) + UserInputAck 实时反馈.
 //! **P15.1.6**: SSE heartbeat (15s) + dead sender 自动清理.
-//! **P15.1.7** (本次): Graceful shutdown (`stop()` + `Notify` 协调).
+//! **P15.1.7**: Graceful shutdown (`stop()` + `Notify` 协调).
+//! **P15.1.8** (本次): 接 `ma-harness-core::EventLog` 替 `/api/sessions` stub,
+//! 新增 `/api/sessions/<id>/events?limit=N`.
 //!
 //! **设计决策**: 不引 salvo/axum, 用 `tokio::net::TcpListener` + 手写 minimal HTTP
 //! (P15.1.x 只需要几个 endpoint, 完整 framework 过度设计).
-//! 业务方 P15.1.8+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
+//! 业务方 P15.1.9+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
 //!
 //! **核心抽象**:
 //! - [`SseEvent`] enum (SessionEvent / SessionStart/End / UserInputAck / Message / Heartbeat / Done)
 //! - [`UserInput`] struct (P15.1.4: browser → server, session + text + ts)
 //! - [`WebUiServer`] trait (bind / run / port)
-//! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE broadcast + heartbeat + graceful shutdown)
-//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.8+ 替换为 Leptos / React)
+//! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE + heartbeat + shutdown + EventLog integration)
+//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.9+ 替换为 Leptos / React)
 //!
 //! **6 质量属性**:
-//! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud)
-//! - 可维护: 模块化分块, server / sse / http / html / error / user_input 集中 lib.rs
+//! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud); `with_event_log` 接受任意 EventLog
+//! - 可维护: 模块化分块, server / sse / http / html / error / user_input / event_log 集中 lib.rs
 //! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读,
-//!   lock 短暂持有 + drop 后 send (跨 await 安全), heartbeat 自动清理死连接, stop() 幂等
-//! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client
-//! - 可测: 37+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast / heartbeat / shutdown
-//! - 可扩展: active_sse_subs Vec<Sender> + user_input_subs Vec<Sender>,
-//!   业务方多 subscriber / 多 tab 自然支持, stop() / shutdown_handle 联合其他 signal
+//!   EventLog 错误 → 500, 没 attached log → 503 (明确告诉 client), lock 短暂 + 跨 await 安全
+//! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client,
+//!   ?limit clamp 到 1000 (防 DoS)
+//! - 可测: 47+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE / heartbeat / shutdown / EventLog
+//! - 可扩展: active_sse_subs Vec<Sender> + user_input_subs Vec<Sender> + event_log Arc<EventLog>,
+//!   业务方多 subscriber / 多 tab / 真 session 数据自然支持
 //!
-//! # 限制 (Limitations) — P15.1.7
+//! # 限制 (Limitations) — P15.1.8
 //!
-//! - placeholder HTML shell (业务方 P15.1.8+ 替换为 Leptos / React)
+//! - placeholder HTML shell (业务方 P15.1.9+ 替换为 Leptos / React)
 //! - `stop()` 不强制关闭已有活跃连接 — accept loop 退出, 已连接 conn 自然结束
-//!   (业务方 P15.1.8+ 想要 hard kill 已有 conn 可加 close_inflight + 30s timeout)
-//! - 不接 ma-harness-server OpenAPI (P15.1.8+ 集成)
+//! - `/api/sessions` 只返 `event_count` + placeholder `started_at`/`last_activity` (0)
+//!   + `status: "unknown"` (P15.1.8.1+ 加 `list_session_summaries()` to EventLog 拿 first/last ts)
+//! - `/api/sessions/<id>/events` 不支持 streaming (P15.1.9+ 改 SSE subscribe, 实时推新 event)
+//! - `with_event_log` 只接 `EventLog` (P15.1.9+ 接 trait `SessionStore` 支持 mock / remote)
+//! - `stop()` 不强制关闭已有活跃连接 — accept loop 退出, 已连接 conn 自然结束
+//!   (业务方 P15.1.9+ 想要 hard kill 已有 conn 可加 close_inflight + 30s timeout)
+//! - 不接 ma-harness-server OpenAPI (P15.1.9+ 集成)
 //! - 不接 ctx.user 全链路 (P15.2 集成 ma-harness-core Context)
 //!
 //! [dsh-feature-parity-table §8]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#8-distribution-surfaces
@@ -296,6 +305,9 @@ pub struct LocalWebUiServer {
     /// P15.1.7: graceful shutdown signal. `stop()` triggers it; `run()` /
     /// `heartbeat_loop` `tokio::select!` on it.
     shutdown: Arc<tokio::sync::Notify>,
+    /// P15.1.8: 可选的 EventLog 集成. 设了之后 `/api/sessions` 返真实数据,
+    /// `/api/sessions/<id>/events` 返该 session 的 events. 没设的话返 503.
+    event_log: Option<Arc<ma_harness_core::EventLog>>,
 }
 
 impl LocalWebUiServer {
@@ -308,12 +320,33 @@ impl LocalWebUiServer {
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            event_log: None,
         }
+    }
+
+    /// Builder: attach EventLog (P15.1.8 新增).
+    ///
+    /// **作用**: 设了之后 `/api/sessions` 返真实 session 列表 (从 log 查),
+    /// `/api/sessions/<id>/events?limit=N` 返该 session 的 events.
+    /// 没设的话 session endpoints 返 503 (service unavailable, 明确告诉 client
+    /// "server 没配 event log, 不能返 session 数据").
+    ///
+    /// **注**: `EventLog` 是 `Clone` (内部 `Arc<Mutex<Connection>>`), 所以 clone 即可,
+    /// 不需要 `Arc<EventLog>` 包装. 但 crate 间共享更自然用 `Arc<EventLog>`.
+    pub fn with_event_log(mut self, log: Arc<ma_harness_core::EventLog>) -> Self {
+        self.event_log = Some(log);
+        self
     }
 
     /// 拿监听地址
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// 拿当前 attached event_log (P15.1.8 测试用)
+    #[cfg(test)]
+    pub(crate) fn has_event_log(&self) -> bool {
+        self.event_log.is_some()
     }
 
     /// 触发 graceful shutdown (P15.1.7 新增).
@@ -509,6 +542,7 @@ impl WebUiServer for LocalWebUiServer {
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            event_log: None,
         })
     }
 
@@ -558,8 +592,9 @@ impl WebUiServer for LocalWebUiServer {
                     let _ = events;
                     let active_sse_subs = Arc::clone(&self.active_sse_subs);
                     let user_input_subs = Arc::clone(&self.user_input_subs);
+                    let event_log = self.event_log.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, active_sse_subs, user_input_subs).await {
+                        if let Err(e) = handle_connection(stream, active_sse_subs, user_input_subs, event_log).await {
                             tracing::debug!(error = %e, "connection handler error");
                         }
                     });
@@ -578,6 +613,7 @@ async fn handle_connection(
     mut stream: TcpStream,
     active_sse_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
     user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
+    event_log: Option<Arc<ma_harness_core::EventLog>>,
 ) -> Result<(), WebUiError> {
     // 读 HTTP request (method + path + query + headers + body)
     // 用独立 BufReader, 不 borrow stream 持久
@@ -639,30 +675,24 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
         ("GET", "/api/sessions") => {
-            // P15.1.3 新增: 列出 active sessions (stub: 返 1 个 demo session)
-            // P15.1.5+ 业务方接 ma-harness-server EventLog 真实列 session
-            let started_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64 - 60)
-                .unwrap_or(0);
-            let body = serde_json::json!({
-                "sessions": [
-                    {
-                        "id": "demo-session",
-                        "started_at": started_at,
-                        "status": "active",
-                        "event_count": 0
-                    }
-                ],
-                "total": 1
-            })
-            .to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes()).await?;
+            // P15.1.8: 从 EventLog 查真实 session 列表
+            // 之前 (P15.1.3-P15.1.7) 返 1 个 demo-session stub — 现在需要 attached event_log
+            if let Some(log) = &event_log {
+                handle_get_api_sessions_list(&mut stream, log).await?;
+            } else {
+                // 没 attached EventLog → 503 (告诉 client "server 没配 event log")
+                let body = serde_json::json!({
+                    "error": "event_log_not_attached",
+                    "message": "WebUiServer was started without an EventLog; cannot list sessions",
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await?;
+            }
         }
         ("GET", "/api/sse") => {
             // P15.1.2: 支持 ?session=xxx query filter
@@ -736,6 +766,26 @@ async fn handle_connection(
             handle_post_api_input(&mut stream, &req.body, &user_input_subs, &active_sse_subs)
                 .await?;
         }
+        ("GET", path) if parse_session_id_from_path(path).is_some() => {
+            // P15.1.8: GET /api/sessions/<id>/events?limit=N
+            let session_id = parse_session_id_from_path(path).unwrap();
+            if let Some(log) = &event_log {
+                let limit = parse_limit_param(&req.query);
+                handle_get_api_session_events(&mut stream, session_id, log, limit).await?;
+            } else {
+                let body = serde_json::json!({
+                    "error": "event_log_not_attached",
+                    "message": "WebUiServer was started without an EventLog; cannot list events",
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).await?;
+            }
+        }
         (method, path) if KNOWN_PATHS.contains(&path) => {
             // 已知 path 但 method 不对 (e.g. GET /api/input)
             // 405 Method Not Allowed
@@ -759,6 +809,187 @@ async fn handle_connection(
         }
     }
     Ok(())
+}
+
+// ============================================================================
+// P15.1.8: EventLog-backed session endpoints
+// ============================================================================
+
+/// 处理 `GET /api/sessions` (P15.1.8 新增, 替 P15.1.3 stub).
+///
+/// **数据源**: `EventLog::list_sessions()` + `count()` per session.
+///
+/// **返回**: `{ "sessions": [...], "total": N }`
+/// 每个 session:
+/// ```json
+/// {
+///   "id": "session-abc",
+///   "event_count": 42,
+///   "started_at": 0,        // P15.1.8 minimal: 0 (placeholder, 等 list_session_summaries)
+///   "last_activity": 0,     // P15.1.8 minimal: 0
+///   "status": "unknown"     // P15.1.8 minimal: 恒为 "unknown" (P15.1.8.1+ 推 first/last ts)
+/// }
+/// ```
+///
+/// **错误处理**: EventLog 错误 (sqlite locked / IO) → 500
+async fn handle_get_api_sessions_list(
+    stream: &mut TcpStream,
+    event_log: &Arc<ma_harness_core::EventLog>,
+) -> Result<(), WebUiError> {
+    // 列所有 session_id (按事件数倒序)
+    let session_ids = match event_log.list_sessions() {
+        Ok(ids) => ids,
+        Err(e) => {
+            let body = serde_json::json!({
+                "error": "event_log_query_failed",
+                "message": e.to_string(),
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+    };
+
+    // 每个 session 加 count (started_at / last_activity / status 留 placeholder, P15.1.8 minimal)
+    let mut sessions = Vec::with_capacity(session_ids.len());
+    for sid in session_ids {
+        let event_count = event_log.count(&sid).unwrap_or(0);
+        sessions.push(serde_json::json!({
+            "id": sid,
+            "event_count": event_count,
+            "started_at": 0,    // P15.1.8.1+ 用 list_session_summaries()
+            "last_activity": 0, // 同上
+            "status": "unknown"
+        }));
+    }
+    let total = sessions.len();
+
+    let body = serde_json::json!({
+        "sessions": sessions,
+        "total": total,
+    })
+    .to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    Ok(())
+}
+
+/// 处理 `GET /api/sessions/<id>/events?limit=N` (P15.1.8 新增).
+///
+/// **数据源**: `EventLog::query()` with `EventQuery { session_id, limit, .. }`.
+///
+/// **Query 参数**:
+/// - `limit`: 最多多少条 (默认 100, 最大 1000). 不传 / 0 / 负数 → 100
+///
+/// **返回**: `{ "session_id": "...", "events": [...], "total_in_range": N, "has_more": bool }`
+async fn handle_get_api_session_events(
+    stream: &mut TcpStream,
+    session_id: &str,
+    event_log: &Arc<ma_harness_core::EventLog>,
+    limit: u32,
+) -> Result<(), WebUiError> {
+    let q = ma_harness_core::EventQuery {
+        session_id: session_id.to_string(),
+        limit: Some(limit),
+        ..Default::default()
+    };
+    let page = match event_log.query(&q) {
+        Ok(p) => p,
+        Err(e) => {
+            let body = serde_json::json!({
+                "error": "event_log_query_failed",
+                "message": e.to_string(),
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+    };
+
+    // Serialize StoredEvent -> JSON
+    let events: Vec<serde_json::Value> = page
+        .events
+        .iter()
+        .map(|se| {
+            serde_json::json!({
+                "seq": se.seq,
+                "id": se.event.id,
+                "session_id": se.event.session_id,
+                "event_type": se.event.event_type,
+                "ts": se.event.ts,
+                "severity": se.event.severity,
+                "run_id": se.event.run_id,
+                "plugin_name": se.event.plugin_name,
+                "payload_json": se.event.payload_json,
+                "error_message": se.event.error_message,
+                "model_visible": se.event.model_visible,
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "session_id": session_id,
+        "events": events,
+        "total_in_range": page.total_in_range,
+        "has_more": page.has_more,
+    })
+    .to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await?;
+    Ok(())
+}
+
+/// Parse `/api/sessions/<id>/events` 拿 `<id>` 部分 (P15.1.8 helper).
+///
+/// **注**: 不做 URL decode (P15.1.8 minimal, 业务方 UUID 不会含特殊字符).
+/// 如果 <id> 含 `/` 也不处理 (event log session_id 通常是 UUID / safe identifier).
+fn parse_session_id_from_path(path: &str) -> Option<&str> {
+    // path = "/api/sessions/<id>/events"
+    //       ^          ^    ^   ^
+    //       0          14   ?   ?
+    const PREFIX: &str = "/api/sessions/";
+    const SUFFIX: &str = "/events";
+    if !path.starts_with(PREFIX) || !path.ends_with(SUFFIX) {
+        return None;
+    }
+    let id_start = PREFIX.len();
+    let id_end = path.len() - SUFFIX.len();
+    if id_end <= id_start {
+        return None; // empty id
+    }
+    Some(&path[id_start..id_end])
+}
+
+/// Parse `?limit=N` query param to u32 (P15.1.8 helper).
+///
+/// **行为**:
+/// - 缺失 / 空 / 无法 parse → 100 (default)
+/// - 0 → 100 (P15.1.8 minimal: 0 视为缺省, 不返 0 条空列表)
+/// - 超过 1000 → clamp 到 1000 (防 DoS)
+fn parse_limit_param(query: &std::collections::HashMap<String, String>) -> u32 {
+    match query.get("limit").and_then(|s| s.parse::<u32>().ok()) {
+        Some(n) if n > 0 && n <= 1000 => n,
+        Some(n) if n > 1000 => 1000, // clamp
+        _ => 100,                    // 缺失 / 0 / 负 / parse fail → default
+    }
 }
 
 /// 处理 `POST /api/input` (P15.1.4).
@@ -1289,17 +1520,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_get_api_sessions_returns_stub_list() {
+    async fn http_get_api_sessions_without_event_log_returns_503() {
+        // P15.1.8: 没 attached EventLog 时, /api/sessions 返 503 (不再返 stub)
         let (addr, client) = start_test_server().await;
         let url = format!("http://{addr}/api/sessions");
         let resp = client.get(&url).send().await.expect("GET /api/sessions");
-        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.status(), 503);
         let body: serde_json::Value = resp.json().await.expect("json");
-        assert_eq!(body["total"], 1);
-        let sessions = body["sessions"].as_array().expect("sessions array");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0]["id"], "demo-session");
-        assert_eq!(sessions[0]["status"], "active");
+        assert_eq!(body["error"], "event_log_not_attached");
     }
 
     // ========================================================================
@@ -2078,5 +2306,219 @@ mod tests {
 
         // 注: 这个测试只验 "stop 不 panic" + "run() 干净退出"
         // 已有连接的强制关闭是 P15.1.8+ 范畴
+    }
+
+    // ========================================================================
+    // P15.1.8 tests: EventLog real session integration
+    // ========================================================================
+
+    use ma_harness_core::{EventLog, EventType, SessionEvent, Severity};
+
+    /// 启 server + attach EventLog (P15.1.8 helper)
+    async fn start_test_server_with_log() -> (String, reqwest::Client, Arc<EventLog>) {
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let log = Arc::new(EventLog::open_in_memory().expect("open in-memory log"));
+        let server = LocalWebUiServer::bind(&addr)
+            .await
+            .expect("bind")
+            .with_event_log(Arc::clone(&log));
+        assert!(server.has_event_log());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (addr, reqwest::Client::new(), log)
+    }
+
+    /// Append 一个事件到 log (P15.1.8 helper)
+    ///
+    /// **注**: 用 `ApprovalRequest` (model_visible=false), 不需要 payload_json.
+    /// 大多数 EventType (Session*, Model*, User*, Tool*) 是 model_visible,
+    /// append 时校验 "必须有非空 payload_json", 测试简单事件用 ApprovalRequest 避开.
+    fn append_event(log: &EventLog, session_id: &str, event_type: EventType) -> i64 {
+        let ev = SessionEvent::new(session_id, event_type).with_severity(Severity::Info);
+        log.append(ev)
+    }
+
+    #[tokio::test]
+    async fn http_get_api_sessions_returns_real_sessions_from_event_log() {
+        // P15.1.8: attached EventLog → 真实 session 列表
+        let (addr, client, log) = start_test_server_with_log().await;
+        // Append 2 个 session 各 3 条 events (ApprovalRequest 不需要 payload)
+        for _ in 0..3 {
+            append_event(&log, "session-A", EventType::ApprovalRequest);
+            append_event(&log, "session-B", EventType::ApprovalRequest);
+        }
+
+        let url = format!("http://{addr}/api/sessions");
+        let resp = client.get(&url).send().await.expect("GET /api/sessions");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["total"], 2);
+        let sessions = body["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 2);
+        // 按 count DESC 排序 (list_sessions 是这样)
+        // session-A 和 session-B 都 3 条, 顺序不定
+        let ids: Vec<&str> = sessions.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"session-A"));
+        assert!(ids.contains(&"session-B"));
+        // 每个 session event_count = 3
+        for s in sessions {
+            assert_eq!(s["event_count"], 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn http_get_api_sessions_with_empty_log_returns_empty_list() {
+        // P15.1.8: log 0 events → total 0, sessions []
+        let (addr, client, _log) = start_test_server_with_log().await;
+
+        let url = format!("http://{addr}/api/sessions");
+        let resp = client.get(&url).send().await.expect("GET");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["total"], 0);
+        assert_eq!(body["sessions"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn http_get_api_session_events_returns_events_for_session() {
+        // P15.1.8: GET /api/sessions/<id>/events 返该 session 的 events
+        let (addr, client, log) = start_test_server_with_log().await;
+        for i in 0..5 {
+            let payload = format!(r#"{{"i":{i}}}"#);
+            let ev = SessionEvent::new("session-X", EventType::UserInput)
+                .with_severity(Severity::Info)
+                .with_payload(&payload)
+                .expect("payload json");
+            log.append(ev);
+        }
+        // Append 1 event 到别的 session (不应该出现在结果里)
+        append_event(&log, "session-Y", EventType::ApprovalRequest);
+
+        let url = format!("http://{addr}/api/sessions/session-X/events");
+        let resp = client.get(&url).send().await.expect("GET events");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["session_id"], "session-X");
+        let events = body["events"].as_array().expect("events array");
+        assert_eq!(events.len(), 5);
+        // 每个 event 都有 seq + session_id + payload
+        for e in events {
+            assert!(e["seq"].is_number());
+            assert_eq!(e["session_id"], "session-X");
+            assert!(e["payload_json"].is_string());
+        }
+        // total_in_range = 5
+        assert_eq!(body["total_in_range"], 5);
+    }
+
+    #[tokio::test]
+    async fn http_get_api_session_events_respects_limit_query_param() {
+        // P15.1.8: ?limit=2 限制返 2 条
+        let (addr, client, log) = start_test_server_with_log().await;
+        for _ in 0..5 {
+            append_event(&log, "session-L", EventType::ApprovalRequest);
+        }
+
+        let url = format!("http://{addr}/api/sessions/session-L/events?limit=2");
+        let resp = client.get(&url).send().await.expect("GET events");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        let events = body["events"].as_array().expect("events array");
+        assert_eq!(events.len(), 2);
+        // total_in_range 还是 5 (limit 只控本次返数, 不控总范围)
+        assert_eq!(body["total_in_range"], 5);
+    }
+
+    #[tokio::test]
+    async fn http_get_api_session_events_default_limit_is_100() {
+        // P15.1.8: 没 ?limit → default 100
+        let (addr, client, log) = start_test_server_with_log().await;
+        // append 50 条 (不到 100)
+        for _ in 0..50 {
+            append_event(&log, "session-D", EventType::ApprovalRequest);
+        }
+        let url = format!("http://{addr}/api/sessions/session-D/events");
+        let resp = client.get(&url).send().await.expect("GET");
+        let body: serde_json::Value = resp.json().await.expect("json");
+        let events = body["events"].as_array().expect("events array");
+        assert_eq!(events.len(), 50); // < 100, 全返
+    }
+
+    #[tokio::test]
+    async fn http_get_api_session_events_clamps_oversized_limit_to_1000() {
+        // P15.1.8: ?limit=99999 → clamp 到 1000 (防 DoS)
+        let (addr, client, log) = start_test_server_with_log().await;
+        // append 5 条
+        for _ in 0..5 {
+            append_event(&log, "session-C", EventType::ApprovalRequest);
+        }
+        let url = format!("http://{addr}/api/sessions/session-C/events?limit=99999");
+        let resp = client.get(&url).send().await.expect("GET");
+        let body: serde_json::Value = resp.json().await.expect("json");
+        let events = body["events"].as_array().expect("events array");
+        // clamp 到 1000, 但 session 只有 5 条, 所以全返
+        assert_eq!(events.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn http_get_api_session_events_without_event_log_returns_503() {
+        // P15.1.8: 没 attached log → 503
+        let (addr, client, _rx) = start_test_server_with_input().await;
+        let url = format!("http://{addr}/api/sessions/some-id/events");
+        let resp = client.get(&url).send().await.expect("GET");
+        assert_eq!(resp.status(), 503);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["error"], "event_log_not_attached");
+    }
+
+    #[tokio::test]
+    async fn parse_session_id_from_path_handles_valid_and_invalid() {
+        // P15.1.8 helper 单元测试
+        assert_eq!(
+            parse_session_id_from_path("/api/sessions/abc-123/events"),
+            Some("abc-123")
+        );
+        assert_eq!(
+            parse_session_id_from_path("/api/sessions/some.long.id/events"),
+            Some("some.long.id")
+        );
+        // 不是 /events 结尾
+        assert_eq!(parse_session_id_from_path("/api/sessions/abc"), None);
+        // 不是 /api/sessions/ 开头
+        assert_eq!(parse_session_id_from_path("/api/other/abc/events"), None);
+        // 空 id
+        assert_eq!(parse_session_id_from_path("/api/sessions//events"), None);
+    }
+
+    #[tokio::test]
+    async fn parse_limit_param_handles_edge_cases() {
+        // P15.1.8 helper 单元测试
+        use std::collections::HashMap;
+        let mut q = HashMap::new();
+
+        // 缺省 → 100
+        assert_eq!(parse_limit_param(&q), 100);
+
+        // 正常值
+        q.insert("limit".into(), "50".into());
+        assert_eq!(parse_limit_param(&q), 50);
+
+        // 0 → 100 (default)
+        q.insert("limit".into(), "0".into());
+        assert_eq!(parse_limit_param(&q), 100);
+
+        // 超过 1000 → clamp 到 1000
+        q.insert("limit".into(), "9999".into());
+        assert_eq!(parse_limit_param(&q), 1000);
+
+        // 无效 parse → 100
+        q.insert("limit".into(), "abc".into());
+        assert_eq!(parse_limit_param(&q), 100);
     }
 }
