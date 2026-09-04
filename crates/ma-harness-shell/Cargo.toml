@@ -1,0 +1,28 @@
+[package]
+name = "ma-harness-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness shell capability (ctx.shell): Service Definition + Local/Pwsh providers. P14.2 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 — 委托 subprocess 做实际进程 spawn/wait
+ma-harness-subprocess = { path = "../ma-harness-subprocess", version = "0.1.0" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+
+# 外部
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
