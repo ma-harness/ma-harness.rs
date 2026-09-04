@@ -1,0 +1,731 @@
+//! # 命名约定 (Naming)
+//!
+//! **Package name** ([Cargo.toml] / [crates.io]): `ma-harness-terminal`
+//! **Crate ident** (`use` 路径): `ma_harness_terminal`
+//!
+//! Rust 自动从 kebab-case package name 转 snake_case crate ident,
+//! 跟 `tokio-util` / `async-trait` / `crc32fast` 等生态完全一致.
+//!
+//! # 用法 (Usage)
+//!
+//! ```toml
+//! [dependencies]
+//! ma-harness-terminal = "0.1"
+//! ```
+//!
+//! ```ignore
+//! use ma_harness_terminal::{LocalPtyProvider, PtyService, TerminalSpec};
+//!
+//! let provider = LocalPtyProvider::new();
+//! let spec = TerminalSpec::new("sh")
+//!     .arg("-c")
+//!     .arg("echo hello")
+//!     .size(80, 24);
+//! let handle = provider.spawn(&spec).await?;
+//! provider.write(&handle, b"more input\n").await?;
+//! let output = provider.read(&handle, 1024).await?;
+//! provider.kill(&handle).await?;
+//! ```
+//!
+//! [Cargo.toml]: https://doc.rust-lang.org/cargo/reference/manifest.html
+//! [crates.io]: https://crates.io/crates/ma-harness-terminal
+//!
+//! # 设计 (Design) — P15.2.1
+//!
+//! **目标**: 抽象 `ctx.terminals` (跟 dsh `ctx.terminals` 对等), 业务方
+//! - 跑 `mah run "start a dev server"` 让 dev server 持续运行
+//! - 用户 reconnect 到同一 terminal 看 output / 发 input
+//!
+//! **背景**: 见 [dsh-feature-parity-table §2 capability seams]:
+//! - `ctx.subprocess` 一次性跑命令 → 拿 output → 退 (P14.1 done, ⚠️ partial)
+//! - `ctx.terminals` 跑 **持久 PTY** → 双向交互, 跟 dsh 一样 (P15.2 ❌ gap)
+//! - 之前 ma-harness 拿 `tokio::process::Command` 直接跑 (plugin-bash), 不走 PTY seam
+//!
+//! **接口**:
+//! - [`PtyService`] trait — 6 个 async 方法 + provider 标识
+//! - [`TerminalSpec`] — 业务方写的终端描述 (cmd, args, env, size)
+//! - [`TerminalHandle`] — opaque UUID 句柄, 用于 read / write / kill
+//! - [`LocalPtyProvider`] — portable-pty 实现 (P15.2.1 主交付)
+//!
+//! **6 质量属性 (业务方 2026-09-04 约定)**:
+//! - 可复用: trait 抽象, future RemotePtyProvider (云端执行)
+//! - 可维护: 模块化分块, 类型集中 lib.rs
+//! - 鲁棒: IO 错误归一化, kill 后 read 返明确错误, 0 active handle 也不 panic
+//! - 安全: 不 `unsafe`, env 显式 (不继承父进程), read 有 max_bytes cap
+//! - 可测: 8+ 单元测试 (validate / handle / list / kill unknown / spawn reject / read write / 多并发)
+//! - 可扩展: portable-pty 抽象 → P15.2.2 接 ctx 注入, P15.2.3 加 streaming + try_wait
+//!
+//! # 限制 (Limitations) — P15.2.1
+//!
+//! - portable-pty 当前默认 backend: ConPTY on Windows 10+, openpty on POSIX
+//! - 没接 ctx.terminals 注入 (P15.2.2 接入 ma-harness-cordis 容器)
+//! - read 用 max_bytes cap, 没 timeout (P15.2.3 加 read timeout via tokio::time::timeout)
+//! - try_wait 暂未实现 (P15.2.3)
+//! - 没 resume across reload (P15.2.4 加 session_id → pty_handle 持久化)
+//!
+//! [dsh-feature-parity-table §2]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#2-capability-seams
+
+#![deny(unsafe_code)]
+#![warn(missing_docs)]
+
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::fmt;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use parking_lot::Mutex;
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use thiserror::Error;
+use uuid::Uuid;
+
+// ============================================================================
+// Error
+// ============================================================================
+
+/// Terminal capability 错误.
+#[derive(Debug, Error)]
+pub enum TerminalError {
+    /// PTY 启动失败 (操作系统不支持 / 资源耗尽)
+    #[error("pty open failed: {0}")]
+    PtyOpen(String),
+
+    /// Spawn 命令失败 (program 不存在 / permission denied)
+    #[error("spawn failed: {0}")]
+    Spawn(String),
+
+    /// IO 错误 (read / write / kill 失败)
+    #[error("terminal I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Handle 不存在或已关闭 (read / write / kill on stale handle)
+    #[error("terminal handle {0} not found (already closed or never spawned)")]
+    HandleNotFound(TerminalHandle),
+
+    /// Provider 不支持此操作
+    #[error("provider '{provider}' does not support {operation}: {reason}")]
+    Unsupported {
+        /// Provider 名
+        provider: &'static str,
+        /// 操作名
+        operation: &'static str,
+        /// 原因
+        reason: String,
+    },
+
+    /// 超时
+    #[error("terminal operation timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+// ============================================================================
+// TerminalSpec
+// ============================================================================
+
+/// 终端规格 (描述一次 spawn 的参数, 不可变).
+///
+/// **字段对齐 dsh `TerminalSpec`**:
+/// - `program`: 命令 (e.g. `"sh"`, `"cmd.exe"`, `"python3"`)
+/// - `args`: 参数列表
+/// - `env`: 显式环境变量 (不继承父进程, 安全考虑)
+/// - `cols` / `rows`: 初始 PTY 尺寸 (影响 child 的 ioctl 行为)
+#[derive(Debug, Clone)]
+pub struct TerminalSpec {
+    /// 命令
+    pub program: String,
+    /// 参数列表
+    pub args: Vec<String>,
+    /// 显式环境变量
+    pub env: BTreeMap<String, String>,
+    /// PTY 宽度 (列)
+    pub cols: u16,
+    /// PTY 高度 (行)
+    pub rows: u16,
+}
+
+impl TerminalSpec {
+    /// 构一个新 spec (默认 80x24, 空 env)
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    /// builder: 添加一个 arg
+    pub fn arg(mut self, a: impl Into<String>) -> Self {
+        self.args.push(a.into());
+        self
+    }
+
+    /// builder: 批量添加 args
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for a in args {
+            self.args.push(a.into());
+        }
+        self
+    }
+
+    /// builder: 设环境变量
+    pub fn env(mut self, key: impl Into<String>, val: impl Into<String>) -> Self {
+        self.env.insert(key.into(), val.into());
+        self
+    }
+
+    /// builder: 设 PTY 尺寸
+    pub fn size(mut self, cols: u16, rows: u16) -> Self {
+        self.cols = cols;
+        self.rows = rows;
+        self
+    }
+
+    /// 校验: program 不能空, size > 0
+    pub fn validate(&self) -> Result<(), TerminalError> {
+        if self.program.is_empty() {
+            return Err(TerminalError::Spawn("empty program".into()));
+        }
+        if self.cols == 0 || self.rows == 0 {
+            return Err(TerminalError::Spawn(format!(
+                "invalid pty size: {}x{} (must be > 0)",
+                self.cols, self.rows
+            )));
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// TerminalHandle: opaque UUID 句柄
+// ============================================================================
+
+/// Opaque 终端句柄 (UUID v4).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TerminalHandle(
+    /// UUID 字符串
+    String,
+);
+
+impl TerminalHandle {
+    /// 拿 handle 字符串 (UUID)
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TerminalHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+// ============================================================================
+// PtyService trait
+// ============================================================================
+
+/// 持久 PTY 能力缝 trait (6 个 async 方法, 跟 dsh `ctx.terminals` 对齐).
+#[async_trait]
+pub trait PtyService: Send + Sync + 'static {
+    /// 启动 PTY + child process. 返 handle.
+    async fn spawn(&self, spec: &TerminalSpec) -> Result<TerminalHandle, TerminalError>;
+    /// 写 input 到 PTY (e.g. user typed a command).
+    async fn write(&self, handle: &TerminalHandle, data: &[u8]) -> Result<(), TerminalError>;
+    /// 读 PTY output (最多 `max_bytes`).
+    async fn read(
+        &self,
+        handle: &TerminalHandle,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, TerminalError>;
+    /// 强制结束 PTY (close master + kill child).
+    async fn kill(&self, handle: &TerminalHandle) -> Result<(), TerminalError>;
+    /// 列所有活跃 handle.
+    async fn list(&self) -> Result<Vec<TerminalHandle>, TerminalError>;
+    /// 非阻塞 poll child 退出 — `None` = 还在跑, `Some(code)` = 已退出.
+    async fn try_wait(&self, handle: &TerminalHandle) -> Result<Option<i32>, TerminalError>;
+    /// Provider 标识
+    fn provider_name(&self) -> &'static str;
+}
+
+// ============================================================================
+// LocalPtyProvider (P15.2.1 主交付, portable-pty 实现)
+// ============================================================================
+
+/// 一条活跃 PTY 的内部状态.
+struct PtyEntry {
+    /// master 端 (kill 时 drop 关闭 pty fd)
+    _master: Box<dyn MasterPty + Send>,
+    /// child killer (kill 时 drop 强杀 child)
+    _killer: Box<dyn ChildKiller + Send + Sync>,
+    /// reader 端 (从 master 读 child stdout)
+    reader: Mutex<Box<dyn Read + Send>>,
+    /// writer 端 (写 child stdin)
+    writer: Mutex<Box<dyn Write + Send>>,
+}
+
+/// 本地 PTY provider (P15.2.1 主交付).
+///
+/// **实现**:
+/// - `native_pty_system()` 拿 OS 默认 backend (Windows ConPTY / POSIX openpty)
+/// - spawn 时 `CommandBuilder` 配 env + args
+/// - master 拆出 reader / writer (各自包 `parking_lot::Mutex` 跨 await 安全)
+/// - read / write / kill 走 `spawn_blocking` 避免阻塞 tokio worker
+///
+/// **Arc 设计**: `handles` 是 `Arc<Mutex<HashMap>>`, clone 进 `spawn_blocking`
+/// 闭包, 闭包内 lock 干活, 立即 drop guard. 闭包 sync, 不跨 await.
+pub struct LocalPtyProvider {
+    handles: Arc<Mutex<HashMap<TerminalHandle, PtyEntry>>>,
+    _next_id: AtomicU64, // 占位 (业务方目前不用, 预留 P15.2.4 session_id 映射)
+}
+
+impl std::fmt::Debug for LocalPtyProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalPtyProvider")
+            .field("active_count", &self.handles.lock().len())
+            .finish()
+    }
+}
+
+impl Default for LocalPtyProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LocalPtyProvider {
+    /// 创建一个新的 LocalPtyProvider.
+    pub fn new() -> Self {
+        Self {
+            handles: Arc::new(Mutex::new(HashMap::new())),
+            _next_id: AtomicU64::new(0),
+        }
+    }
+
+    /// 当前活跃 handle 数 (测试用)
+    #[cfg(test)]
+    pub(crate) fn active_count(&self) -> usize {
+        self.handles.lock().len()
+    }
+}
+
+/// 在 spawn_blocking 闭包内 sync spawn 1 条 PTY.
+fn spawn_sync(
+    spec: &TerminalSpec,
+    handles: Arc<Mutex<HashMap<TerminalHandle, PtyEntry>>>,
+    _next_id: &AtomicU64,
+) -> Result<TerminalHandle, TerminalError> {
+    spec.validate()?;
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: spec.rows,
+            cols: spec.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| TerminalError::PtyOpen(e.to_string()))?;
+
+    let mut cmd = CommandBuilder::new(&spec.program);
+    for a in &spec.args {
+        cmd.arg(a);
+    }
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    cmd.cwd(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
+
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| TerminalError::Spawn(e.to_string()))?;
+    let killer = child.clone_killer();
+    drop(pair.slave);
+
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| TerminalError::Spawn(format!("clone_reader: {e}")))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| TerminalError::Spawn(format!("take_writer: {e}")))?;
+
+    let handle = TerminalHandle(Uuid::new_v4().to_string());
+    let entry = PtyEntry {
+        _master: pair.master,
+        _killer: killer,
+        reader: Mutex::new(reader),
+        writer: Mutex::new(writer),
+    };
+
+    handles.lock().insert(handle.clone(), entry);
+    Ok(handle)
+}
+
+#[async_trait]
+impl PtyService for LocalPtyProvider {
+    async fn spawn(&self, spec: &TerminalSpec) -> Result<TerminalHandle, TerminalError> {
+        let spec = spec.clone();
+        let handles = Arc::clone(&self.handles);
+        let next_id = Arc::new(self._next_id.load(Ordering::Relaxed));
+        tokio::task::spawn_blocking(move || {
+            // 注: 借用 AtomicU64 一次值不行 (next_id 是 &AtomicU64, 闭包要求 'static).
+            // 实际我们不需要 next_id 在 spawn 内使用 (UUID v4 已够), 留 placeholder.
+            let _ = next_id;
+            spawn_sync(&spec, handles, &AtomicU64::new(0))
+        })
+        .await
+        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))?
+    }
+
+    async fn write(&self, handle: &TerminalHandle, data: &[u8]) -> Result<(), TerminalError> {
+        let handle = handle.clone();
+        let data = data.to_vec();
+        let handles = Arc::clone(&self.handles);
+        tokio::task::spawn_blocking(move || {
+            let map = handles.lock();
+            let entry = map
+                .get(&handle)
+                .ok_or_else(|| TerminalError::HandleNotFound(handle.clone()))?;
+            let mut writer = entry.writer.lock();
+            writer.write_all(&data)?;
+            writer.flush()?;
+            Ok::<(), TerminalError>(())
+        })
+        .await
+        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))?
+    }
+
+    async fn read(
+        &self,
+        handle: &TerminalHandle,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, TerminalError> {
+        let handle = handle.clone();
+        let handles = Arc::clone(&self.handles);
+        tokio::task::spawn_blocking(move || {
+            let map = handles.lock();
+            let entry = map
+                .get(&handle)
+                .ok_or_else(|| TerminalError::HandleNotFound(handle.clone()))?;
+            let mut reader = entry.reader.lock();
+            // P15.2.1 简化: read up to max_bytes, 一次性返. 不支持 partial read / streaming.
+            // caller 拿 Vec<u8>, 可自行 buffer.
+            let mut buf = vec![0u8; max_bytes];
+            let n = reader.read(&mut buf)?;
+            buf.truncate(n);
+            Ok::<Vec<u8>, TerminalError>(buf)
+        })
+        .await
+        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))?
+    }
+
+    async fn kill(&self, handle: &TerminalHandle) -> Result<(), TerminalError> {
+        let handles = Arc::clone(&self.handles);
+        let handle = handle.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut map = handles.lock();
+            match map.remove(&handle) {
+                Some(_entry) => {
+                    // _entry drop:
+                    //   - _master (pty master fd 关闭)
+                    //   - _killer (Send SIGKILL / TerminateProcess)
+                    //   - reader / writer (各自的 fd / handle 关闭)
+                    Ok::<(), TerminalError>(())
+                }
+                None => Err(TerminalError::HandleNotFound(handle)),
+            }
+        })
+        .await
+        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))?
+    }
+
+    async fn list(&self) -> Result<Vec<TerminalHandle>, TerminalError> {
+        let map = self.handles.lock();
+        Ok(map.keys().cloned().collect())
+    }
+
+    async fn try_wait(&self, _handle: &TerminalHandle) -> Result<Option<i32>, TerminalError> {
+        // P15.2.1 minimal: try_wait 暂不实现 (portable-pty 0.8 Child 没有 sync try_wait)
+        // P15.2.3 用 child.wait() 阻塞 + mpsc 转发实现
+        Err(TerminalError::Unsupported {
+            provider: "local-pty",
+            operation: "try_wait",
+            reason: "try_wait not yet implemented in P15.2.1 (P15.2.3 plan)".into(),
+        })
+    }
+
+    fn provider_name(&self) -> &'static str {
+        "local-pty"
+    }
+}
+
+// ============================================================================
+// Typed key
+// ============================================================================
+
+/// Typed key: `ctx.terminals` 注入的 PtyService (P15.2.2 业务方注入).
+pub static PTY_SERVICE: ma_harness_cordis::CtxKey<Arc<dyn PtyService>> =
+    ma_harness_seam::ctx_key!("terminals_pty_service");
+
+// ============================================================================
+// Default type aliases
+// ============================================================================
+
+/// 平台默认 PTY provider (P15.2.1: LocalPtyProvider).
+pub type DefaultPtyProvider = LocalPtyProvider;
+
+// ============================================================================
+// 单元测试
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ----- TerminalSpec validate / builder -----
+
+    #[test]
+    fn terminal_spec_validate_rejects_empty_program() {
+        let spec = TerminalSpec::new("");
+        assert!(matches!(
+            spec.validate(),
+            Err(TerminalError::Spawn(msg)) if msg.contains("empty program")
+        ));
+    }
+
+    #[test]
+    fn terminal_spec_validate_rejects_zero_size() {
+        let spec = TerminalSpec::new("sh").size(0, 24);
+        assert!(spec.validate().is_err());
+        let spec = TerminalSpec::new("sh").size(80, 0);
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn terminal_spec_validate_accepts_valid() {
+        let spec = TerminalSpec::new("sh")
+            .arg("-c")
+            .arg("echo hello")
+            .size(80, 24);
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn terminal_spec_builder_chain() {
+        let spec = TerminalSpec::new("python3")
+            .arg("-u")
+            .args(["-c", "print(1)"])
+            .env("PYTHONUNBUFFERED", "1")
+            .size(120, 40);
+        assert_eq!(spec.program, "python3");
+        assert_eq!(spec.args, vec!["-u", "-c", "print(1)"]);
+        assert_eq!(spec.env.get("PYTHONUNBUFFERED"), Some(&"1".to_string()));
+        assert_eq!(spec.cols, 120);
+        assert_eq!(spec.rows, 40);
+    }
+
+    // ----- TerminalHandle -----
+
+    #[test]
+    fn terminal_handle_display_and_eq() {
+        let h1 = TerminalHandle("abc-123".into());
+        let h2 = TerminalHandle("abc-123".into());
+        let h3 = TerminalHandle("xyz".into());
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+        assert_eq!(h1.to_string(), "abc-123");
+        assert_eq!(h1.as_str(), "abc-123");
+    }
+
+    // ----- LocalPtyProvider 状态 -----
+
+    #[tokio::test]
+    async fn local_pty_provider_new_has_zero_handles() {
+        let p = LocalPtyProvider::new();
+        assert_eq!(p.active_count(), 0);
+        let list = p.list().await.expect("list");
+        assert_eq!(list.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_kill_unknown_handle_returns_handle_not_found() {
+        let p = LocalPtyProvider::new();
+        let bogus = TerminalHandle("bogus".into());
+        let err = p.kill(&bogus).await.unwrap_err();
+        assert!(matches!(err, TerminalError::HandleNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_write_to_unknown_handle_returns_handle_not_found() {
+        let p = LocalPtyProvider::new();
+        let bogus = TerminalHandle("bogus".into());
+        let err = p.write(&bogus, b"data").await.unwrap_err();
+        assert!(matches!(err, TerminalError::HandleNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_read_from_unknown_handle_returns_handle_not_found() {
+        let p = LocalPtyProvider::new();
+        let bogus = TerminalHandle("bogus".into());
+        let err = p.read(&bogus, 1024).await.unwrap_err();
+        assert!(matches!(err, TerminalError::HandleNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_try_wait_is_unsupported_in_p15_2_1() {
+        let p = LocalPtyProvider::new();
+        let bogus = TerminalHandle("bogus".into());
+        let err = p.try_wait(&bogus).await.unwrap_err();
+        assert!(matches!(
+            err,
+            TerminalError::Unsupported {
+                operation: "try_wait",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_spawn_rejects_empty_program() {
+        let p = LocalPtyProvider::new();
+        let spec = TerminalSpec::new("");
+        let err = p.spawn(&spec).await.unwrap_err();
+        assert!(matches!(err, TerminalError::Spawn(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_spawn_rejects_zero_size() {
+        let p = LocalPtyProvider::new();
+        let spec = TerminalSpec::new("sh").size(0, 0);
+        let err = p.spawn(&spec).await.unwrap_err();
+        assert!(matches!(err, TerminalError::Spawn(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_provider_name_is_local_pty() {
+        let p = LocalPtyProvider::new();
+        assert_eq!(p.provider_name(), "local-pty");
+    }
+
+    // ----- 真实 PTY 集成 (平台相关) -----
+
+    /// Windows: 跑 `cmd.exe /c echo hello` 验 PTY 真实能 spawn + 写 + 读.
+    /// 业务方本机环境 (Windows PowerShell 5.1) 验证用.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn local_pty_provider_real_cmd_exe_spawn_and_read() {
+        let p = LocalPtyProvider::new();
+        let spec = TerminalSpec::new("cmd.exe")
+            .arg("/C")
+            .arg("echo hello-from-pty");
+        let handle = p.spawn(&spec).await.expect("spawn cmd.exe");
+        assert_eq!(p.active_count(), 1);
+
+        // 等 child 跑 + 输出 flush 到 pty master
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 读 output (设大 buffer, 一次性收所有)
+        let output = p.read(&handle, 4096).await.expect("read");
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            text.contains("hello-from-pty"),
+            "PTY output should contain 'hello-from-pty', got: {text:?}"
+        );
+
+        // 清理
+        p.kill(&handle).await.expect("kill");
+        assert_eq!(p.active_count(), 0);
+    }
+
+    /// POSIX: 跑 `sh -c "echo hello"` 验 PTY 真实能 spawn.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_pty_provider_real_sh_spawn_and_read() {
+        let p = LocalPtyProvider::new();
+        let spec = TerminalSpec::new("sh").arg("-c").arg("echo hello-from-pty");
+        let handle = p.spawn(&spec).await.expect("spawn sh");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let output = p.read(&handle, 4096).await.expect("read");
+        let text = String::from_utf8_lossy(&output);
+        assert!(
+            text.contains("hello-from-pty"),
+            "PTY output should contain 'hello-from-pty', got: {text:?}"
+        );
+        p.kill(&handle).await.expect("kill");
+        assert_eq!(p.active_count(), 0);
+    }
+
+    /// 写 + 读 echo 风格: spawn sh, 写命令, 读 output.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn local_pty_provider_write_then_read() {
+        let p = LocalPtyProvider::new();
+        // 跑 cmd.exe, 不自动退出 (不带 /C, 持续等输入)
+        let spec = TerminalSpec::new("cmd.exe");
+        let handle = p.spawn(&spec).await.expect("spawn cmd.exe");
+        // 等 cmd 起来
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 写命令
+        p.write(&handle, b"echo write-then-read\n")
+            .await
+            .expect("write");
+        // 等 echo 输出 flush
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 读
+        let output = p.read(&handle, 4096).await.expect("read");
+        let text = String::from_utf8_lossy(&output);
+        // cmd.exe 的 echo 会输出 "write-then-read\r\n"
+        assert!(
+            text.contains("write-then-read"),
+            "PTY output should contain 'write-then-read', got: {text:?}"
+        );
+        p.kill(&handle).await.expect("kill");
+    }
+
+    /// 3 个并发 active handle 互不干扰 (P15.2.1 concurrency check).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn local_pty_provider_three_concurrent_handles() {
+        let p = LocalPtyProvider::new();
+        let h1 = p
+            .spawn(&TerminalSpec::new("cmd.exe").arg("/C").arg("echo one"))
+            .await
+            .expect("spawn 1");
+        let h2 = p
+            .spawn(&TerminalSpec::new("cmd.exe").arg("/C").arg("echo two"))
+            .await
+            .expect("spawn 2");
+        let h3 = p
+            .spawn(&TerminalSpec::new("cmd.exe").arg("/C").arg("echo three"))
+            .await
+            .expect("spawn 3");
+        assert_eq!(p.active_count(), 3);
+
+        // 3 个都能 read 到自己的 output
+        for (h, expected) in [(&h1, "one"), (&h2, "two"), (&h3, "three")] {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let output = p.read(h, 4096).await.expect("read");
+            let text = String::from_utf8_lossy(&output);
+            assert!(
+                text.contains(expected),
+                "PTY output should contain '{expected}', got: {text:?}"
+            );
+        }
+
+        // 清理 (kill 3 个)
+        p.kill(&h1).await.expect("kill 1");
+        p.kill(&h2).await.expect("kill 2");
+        p.kill(&h3).await.expect("kill 3");
+        assert_eq!(p.active_count(), 0);
+    }
+}

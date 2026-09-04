@@ -1,0 +1,32 @@
+[package]
+name = "ma-harness-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness terminal capability (ctx.terminals): portable-pty-based PTY backend for long-running interactive sessions. P15.2 dsh parity (replaces direct tokio::process in plugin-bash and friends)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 (跟 subprocess / shell 一致, 预留 cordis ctx service 注入 — P15.2.2 接入)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }  # ctx_key! macro
+
+# 外部
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+portable-pty = { workspace = true }  # P15.2.1 PTY backend
+uuid = { workspace = true }  # 句柄 ID 用 UUID v4 (跟 SessionEvent 一致)
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }
