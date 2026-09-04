@@ -40,37 +40,42 @@
 //! - 跑 `mah web` 打开浏览器
 //! - 看 live session (events via SSE)
 //! - 接受 user input (P15.1.4+)
+//! - 多 tab / 多 browser 并存, UserInputAck 实时反馈 (P15.1.5+)
 //!
 //! **P15.1 大工程** (8-12 周): Rust + WASM (Leptos/Yew) or React + REST API.
 //! **P15.1.1 骨架**: crate 脚手架, WebUiServer trait, std+tokio HTTP server, SSE.
-//! **P15.1.2**: SSE 多 channel + query filter (?session=xxx), SessionStart/End events.
+//! **P15.1.2**: SSE query filter (?session=xxx), SessionStart/End events.
 //! **P15.1.3**: /api/version + /api/sessions endpoints.
-//! **P15.1.4** (本次): POST /api/input 接 user input, UserInput 转发给 subscribers.
+//! **P15.1.4**: POST /api/input 接 user input, UserInput 转发给 subscribers.
+//! **P15.1.5** (本次): 多 SSE 广播 (Vec) + UserInputAck 实时反馈.
 //!
 //! **设计决策**: 不引 salvo/axum, 用 `tokio::net::TcpListener` + 手写 minimal HTTP
 //! (P15.1.x 只需要几个 endpoint, 完整 framework 过度设计).
-//! 业务方 P15.1.5+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
+//! 业务方 P15.1.6+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
 //!
 //! **核心抽象**:
-//! - [`SseEvent`] enum (SessionEvent / SessionStart/End / Message / Heartbeat / Done)
+//! - [`SseEvent`] enum (SessionEvent / SessionStart/End / UserInputAck / Message / Heartbeat / Done)
 //! - [`UserInput`] struct (P15.1.4: browser → server, session + text + ts)
 //! - [`WebUiServer`] trait (bind / run / port)
-//! - [`LocalWebUiServer`] (主交付, std + tokio)
-//! - [`html_shell`] (P15.1.4: 含 input form, 业务方 P15.1.5+ 替换为 Leptos / React)
+//! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE broadcast via active_sse_subs Vec)
+//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.6+ 替换为 Leptos / React)
 //!
 //! **6 质量属性**:
 //! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud)
-//! - 可维护: 模块化分块, server / sse / http / html / error 集中 lib.rs
-//! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读
+//! - 可维护: 模块化分块, server / sse / http / html / error / user_input 集中 lib.rs
+//! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读,
+//!   lock 短暂持有 + drop 后 send (跨 await 安全)
 //! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client
-//! - 可测: 12+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 并发
-//! - 可扩展: user_input_subs Vec<Sender>, 业务方可多 subscriber
+//! - 可测: 23+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast
+//! - 可扩展: active_sse_subs Vec<Sender> + user_input_subs Vec<Sender>,
+//!   业务方多 subscriber / 多 tab 自然支持
 //!
-//! # 限制 (Limitations) — P15.1.4
+//! # 限制 (Limitations) — P15.1.5
 //!
-//! - placeholder HTML shell (业务方 P15.1.5 加 Leptos / React)
-//! - 单 active_sse channel 简化版 (P15.1.2+ 多 SSE connection 共享会有 race)
-//! - 不接 ma-harness-server OpenAPI (P15.1.5+ 集成)
+//! - placeholder HTML shell (业务方 P15.1.6+ 替换为 Leptos / React)
+//! - SSE 连接断开时未主动清理 (sse_tx send 失败时被忽略, 但 sender 留在 Vec —
+//!   P15.1.6+ 加 heartbeat ping 检测断连 + 清理)
+//! - 不接 ma-harness-server OpenAPI (P15.1.6+ 集成)
 //! - 不接 ctx.user 全链路 (P15.2 集成 ma-harness-core Context)
 //!
 //! [dsh-feature-parity-table §8]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#8-distribution-surfaces
@@ -134,6 +139,17 @@ pub enum SseEvent {
         /// 业务方 session id
         session_id: String,
     },
+    /// User input ack (P15.1.5 新增).
+    ///
+    /// **流向**: `POST /api/input` 收到 → server 广播给所有 SSE 连接,
+    /// 让浏览器看到 "input received" 而不必等 POST 200 response.
+    /// 同时包含 server 端盖的 timestamp (跟 UserInput.received_at_ms 一致).
+    UserInputAck {
+        /// 业务方 session id
+        session_id: String,
+        /// server 接收时间戳 (ms since epoch)
+        received_at_ms: i64,
+    },
     /// 自定义消息 (e.g. 错误 / 状态)
     Message(String),
     /// Heartbeat (keep-alive, 防 proxy / browser timeout)
@@ -155,6 +171,15 @@ impl SseEvent {
             SseEvent::SessionEnd { session_id } => {
                 format!("event: session_end\nid: {session_id}\ndata: end\n\n")
             }
+            SseEvent::UserInputAck {
+                session_id,
+                received_at_ms,
+            } => {
+                // data 字段是 JSON 字符串, 方便浏览器 parse
+                let data =
+                    format!(r#"{{"session":"{session_id}","received_at_ms":{received_at_ms}}}"#);
+                format!("event: user_input_ack\nid: {session_id}\ndata: {data}\n\n")
+            }
             SseEvent::Message(msg) => format!("event: message\ndata: {msg}\n\n"),
             SseEvent::Heartbeat => ": heartbeat\n\n".to_string(),
             SseEvent::Done => "event: done\ndata: end\n\n".to_string(),
@@ -166,7 +191,8 @@ impl SseEvent {
         match self {
             SseEvent::SessionEvent { session_id, .. }
             | SseEvent::SessionStart { session_id }
-            | SseEvent::SessionEnd { session_id } => Some(session_id),
+            | SseEvent::SessionEnd { session_id }
+            | SseEvent::UserInputAck { session_id, .. } => Some(session_id),
             _ => None,
         }
     }
@@ -255,8 +281,10 @@ pub trait WebUiServer: Send + Sync + 'static {
 pub struct LocalWebUiServer {
     addr: String,
     port: u16,
-    /// 当前活跃的 SSE sender (P15.1.2 多 channel 时改成 Vec)
-    active_sse: Arc<Mutex<Option<mpsc::UnboundedSender<SseEvent>>>>,
+    /// 活跃的 SSE senders (P15.1.5: Vec 替代 Option, 支持多 tab 多 browser).
+    /// 每条 SSE 连接 push 一个 sender 进来, 连接断开时清理 (TODO: 业务方 P15.1.5+ 加 cleanup).
+    /// 改用 `std::sync::Mutex` (跟 `user_input_subs` 一致, lock 短暂 + 跨 await 安全)
+    active_sse_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
     /// 订阅 user input 的 receivers (P15.1.4 新增, std::sync::Mutex 因为 subscribe_user_input 是 sync)
     user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
     /// Server 启动状态
@@ -269,7 +297,7 @@ impl LocalWebUiServer {
         Self {
             addr: addr.into(),
             port: 0,
-            active_sse: Arc::new(Mutex::new(None)),
+            active_sse_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
         }
@@ -302,7 +330,7 @@ impl LocalWebUiServer {
         if let Ok(mut subs) = self.user_input_subs.lock() {
             subs.push(tx);
         }
-        // 注: lock 失败 (poisoned) 时 subscriber 收不到消息, 但不 panic
+        // 注: lock 失败 (poisoned) 时 subscriber 拿不到消息, 但不 panic
         // — 业务方通常启动期 subscribe, 不会遇到
         rx
     }
@@ -311,6 +339,49 @@ impl LocalWebUiServer {
     #[cfg(test)]
     pub(crate) fn user_input_sub_count(&self) -> usize {
         self.user_input_subs.lock().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// 拿当前活跃 SSE connection 数 (P15.1.5 测试用)
+    #[cfg(test)]
+    pub(crate) fn sse_sub_count(&self) -> usize {
+        self.active_sse_subs.lock().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// 广播 SseEvent 给所有活跃 SSE 连接 (P15.1.5 新增).
+    ///
+    /// **用法**: 业务方 / 内置 handler (e.g. `POST /api/input`) 想发事件给所有浏览器
+    /// 调这个. 不会 panic 如果 0 connections (静默 no-op).
+    ///
+    /// **lock 策略**: 短暂 lock 拿到 sender Vec 副本, drop lock, 再非阻塞 send.
+    /// 不在 lock 内 send 是为了减少锁持有时间 (虽然 send 不 await, 但保持一致性).
+    ///
+    /// **注**: `#[allow(dead_code)]` 因为 lib crate dead-code 分析看不到测试用法,
+    /// 实际 `tests::broadcast_sse_with_no_subscribers_is_noop` 和
+    /// `tests::multiple_sse_connections_all_receive_broadcast` 都用到.
+    #[allow(dead_code)]
+    pub(crate) fn broadcast_sse(&self, event: SseEvent) {
+        broadcast_sse(&self.active_sse_subs, event);
+    }
+}
+
+/// 广播 SseEvent 给所有活跃 SSE 连接 (P15.1.5 free function).
+///
+/// **共享 helper**: `LocalWebUiServer::broadcast_sse` 和 `handle_post_api_input`
+/// 都用这个 — 避免逻辑重复. 静默 no-op if 0 connections / lock poisoned.
+fn broadcast_sse(
+    active_sse_subs: &Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
+    event: SseEvent,
+) {
+    let senders: Vec<mpsc::UnboundedSender<SseEvent>> = match active_sse_subs.lock() {
+        Ok(subs) => subs.iter().cloned().collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "active_sse_subs mutex poisoned");
+            return;
+        }
+    };
+    for tx in senders {
+        // 失败说明 connection 已断 (filter_rx drop), 不影响其他连接
+        let _ = tx.send(event.clone());
     }
 }
 
@@ -332,7 +403,7 @@ impl WebUiServer for LocalWebUiServer {
         Ok(Self {
             addr: addr.to_string(),
             port,
-            active_sse: Arc::new(Mutex::new(None)),
+            active_sse_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             user_input_subs: Arc::new(std::sync::Mutex::new(Vec::new())),
             running: Arc::new(Mutex::new(false)),
         })
@@ -356,12 +427,14 @@ impl WebUiServer for LocalWebUiServer {
                     continue;
                 }
             };
-            let sse_tx = events.clone();
-            let active_sse = Arc::clone(&self.active_sse);
+            // P15.1.5: events (外层 sse_tx) 不再 clone 到 handle_connection —
+            // 用 active_sse_subs Vec broadcast 取代了之前的 per-connection filter_tx.
+            // 外层 sse_tx 暂未使用 (P15.1.6+ 业务方接 ma-harness-core EventLog 时接入).
+            let _ = events;
+            let active_sse_subs = Arc::clone(&self.active_sse_subs);
             let user_input_subs = Arc::clone(&self.user_input_subs);
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(stream, sse_tx, active_sse, user_input_subs).await
-                {
+                if let Err(e) = handle_connection(stream, active_sse_subs, user_input_subs).await {
                     tracing::debug!(error = %e, "connection handler error");
                 }
             });
@@ -376,8 +449,7 @@ impl WebUiServer for LocalWebUiServer {
 /// 处理 1 个 HTTP connection (内部用, 业务方一般不调).
 async fn handle_connection(
     mut stream: TcpStream,
-    sse_tx: mpsc::UnboundedSender<SseEvent>,
-    active_sse: Arc<Mutex<Option<mpsc::UnboundedSender<SseEvent>>>>,
+    active_sse_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
     user_input_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
 ) -> Result<(), WebUiError> {
     // 读 HTTP request (method + path + query + headers + body)
@@ -485,11 +557,15 @@ async fn handle_connection(
                     .await?;
             }
 
-            // 注册 active SSE sender (per-connection filter channel)
+            // 注册 active SSE sender (per-connection filter channel, push 到 Vec)
+            // P15.1.5: 用 Vec 替代 Option, 支持多 tab / 多 browser 并存
             let (filter_tx, mut filter_rx) = mpsc::unbounded_channel::<SseEvent>();
             {
-                let mut active = active_sse.lock().await;
-                *active = Some(filter_tx);
+                if let Ok(mut subs) = active_sse_subs.lock() {
+                    subs.push(filter_tx);
+                }
+                // 注: lock 失败 (poisoned) 时本 connection 收不到 broadcast,
+                // 但自己 filter_tx 内的数据 (直接通过 filter_rx) 仍能工作
             }
 
             let mut buf = [0u8; 1024];
@@ -524,12 +600,14 @@ async fn handle_connection(
                     }
                 }
             }
-            // 注: sse_tx 没在此函数用 (per-connection filter_tx 替代), 保留参数兼容性
-            let _ = sse_tx;
+            // 注: P15.1.5 重构后 sse_tx 已从 handle_connection 移除,
+            // broadcast 改用 active_sse_subs (Vec) + LocalWebUiServer::broadcast_sse.
         }
         ("POST", "/api/input") => {
-            // P15.1.4: 接收 user input, 转发给所有 subscribers
-            handle_post_api_input(&mut stream, &req.body, &user_input_subs).await?;
+            // P15.1.4 + P15.1.5: 接收 user input, 转发给所有 subscribers
+            // 并广播 UserInputAck 给所有活跃 SSE 连接
+            handle_post_api_input(&mut stream, &req.body, &user_input_subs, &active_sse_subs)
+                .await?;
         }
         (method, path) if KNOWN_PATHS.contains(&path) => {
             // 已知 path 但 method 不对 (e.g. GET /api/input)
@@ -567,10 +645,14 @@ async fn handle_connection(
 /// - 200: `{"ok": true, "session": "xxx", "received_at_ms": 1234}`
 /// - 400: `{"error": "invalid_json", "message": "..."}`
 /// - 400: `{"error": "missing_field", "message": "session and text are required"}`
+///
+/// **副作用** (P15.1.5 新增): 成功后广播 `SseEvent::UserInputAck` 给所有活跃 SSE 连接,
+/// 让浏览器立刻看到 "input received" 而不必等 POST 200 response.
 async fn handle_post_api_input(
     stream: &mut TcpStream,
     body: &[u8],
     user_input_subs: &Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<UserInput>>>>,
+    active_sse_subs: &Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
 ) -> Result<(), WebUiError> {
     // 1. 解析 JSON
     let json: serde_json::Value = match serde_json::from_slice(body) {
@@ -635,12 +717,23 @@ async fn handle_post_api_input(
         let _ = tx.send(user_input.clone());
     }
 
+    // 4.5 P15.1.5: 广播 UserInputAck 给所有活跃 SSE 连接
+    // 浏览器 fetch POST 完拿 200 response 之前, 已经能从 SSE 看到 ack
+    let ack = SseEvent::UserInputAck {
+        session_id: user_input.session_id.clone(),
+        received_at_ms: user_input.received_at_ms,
+    };
+    // 统计 sse_delivered (需要 lock 拿 Vec.len, 然后释放 lock 调 broadcast_sse)
+    let sse_delivered = active_sse_subs.lock().map(|s| s.len()).unwrap_or(0);
+    broadcast_sse(active_sse_subs, ack);
+
     // 5. 返 200 OK
     let resp_body = serde_json::json!({
         "ok": true,
         "session": user_input.session_id,
         "received_at_ms": user_input.received_at_ms,
         "delivered_to": delivered,
+        "sse_delivered_to": sse_delivered,
     })
     .to_string();
     let response = format!(
@@ -818,6 +911,11 @@ pub fn html_shell() -> String {
     es.addEventListener('session', (e) => appendEvent('session', '[session] ' + e.data));
     es.addEventListener('session_start', (e) => appendEvent('session', '[session_start] ' + e.data));
     es.addEventListener('session_end', (e) => appendEvent('session', '[session_end] ' + e.data));
+    es.addEventListener('user_input_ack', (e) => {
+      // data 是 JSON 字符串, parse 后展示
+      let obj = JSON.parse(e.data);
+      appendEvent('user-input', '[ack] ' + obj.session + ' received at ' + obj.received_at_ms);
+    });
     es.addEventListener('message', (e) => appendEvent('message', '[message] ' + e.data));
     es.addEventListener('done', () => appendEvent('done', '[done] stream ended'));
     es.onerror = () => appendEvent('heartbeat', '[error] SSE connection lost');
@@ -943,6 +1041,16 @@ mod tests {
 
         let done = SseEvent::Done;
         assert_eq!(done.to_sse_string(), "event: done\ndata: end\n\n");
+
+        // P15.1.5: UserInputAck
+        let ack = SseEvent::UserInputAck {
+            session_id: "s1".into(),
+            received_at_ms: 1234567890,
+        };
+        assert_eq!(
+            ack.to_sse_string(),
+            "event: user_input_ack\nid: s1\ndata: {\"session\":\"s1\",\"received_at_ms\":1234567890}\n\n"
+        );
     }
 
     #[tokio::test]
@@ -1316,5 +1424,175 @@ mod tests {
         assert!(html.contains("/api/input"));
         assert!(html.contains("send-btn"));
         assert!(html.contains("user-text"));
+    }
+
+    // ========================================================================
+    // P15.1.5 tests: multi-SSE broadcast + UserInputAck
+    // ========================================================================
+
+    #[tokio::test]
+    async fn sse_event_user_input_ack_to_sse_string_includes_json_data() {
+        // P15.1.5: UserInputAck 的 data 字段是 JSON 字符串 (浏览器 parse 用)
+        let ack = SseEvent::UserInputAck {
+            session_id: "s1".into(),
+            received_at_ms: 1234567890,
+        };
+        let sse = ack.to_sse_string();
+        assert!(sse.starts_with("event: user_input_ack\n"));
+        assert!(sse.contains("id: s1\n"));
+        assert!(sse.contains(r#"data: {"session":"s1","received_at_ms":1234567890}"#));
+        assert!(sse.ends_with("\n\n"));
+        // session_id 应被识别
+        assert_eq!(ack.session_id(), Some("s1"));
+    }
+
+    #[tokio::test]
+    async fn broadcast_sse_with_no_subscribers_is_noop() {
+        // P15.1.5: 0 connections 时 broadcast_sse 不 panic
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+        assert_eq!(server.sse_sub_count(), 0);
+
+        // 调用 broadcast_sse — 不应 panic
+        server.broadcast_sse(SseEvent::Message("test".into()));
+        server.broadcast_sse(SseEvent::Heartbeat);
+        server.broadcast_sse(SseEvent::UserInputAck {
+            session_id: "s1".into(),
+            received_at_ms: 100,
+        });
+    }
+
+    #[tokio::test]
+    async fn multiple_sse_connections_all_receive_broadcast() {
+        // P15.1.5: 多 SSE connection (multi-tab) 时 broadcast 全部收到
+        // 这里直接测 broadcast_sse (跳过 HTTP, 走直接调用)
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+
+        // 模拟 3 个 SSE connection 注册 (push filter_tx)
+        // 注: 我们直接 push Sender 到 active_sse_subs Vec, 模拟 SSE handler 行为
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx3, mut rx3) = mpsc::unbounded_channel::<SseEvent>();
+        {
+            let mut subs = server.active_sse_subs.lock().unwrap();
+            subs.push(tx1);
+            subs.push(tx2);
+            subs.push(tx3);
+        }
+        assert_eq!(server.sse_sub_count(), 3);
+
+        // Broadcast
+        let event = SseEvent::Message("broadcast to all".into());
+        server.broadcast_sse(event.clone());
+
+        // 3 个 rx 都收到
+        let e1 = rx1.recv().await.expect("rx1");
+        let e2 = rx2.recv().await.expect("rx2");
+        let e3 = rx3.recv().await.expect("rx3");
+        assert_eq!(e1, event);
+        assert_eq!(e2, event);
+        assert_eq!(e3, event);
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_broadcasts_user_input_ack_to_sse_subscribers() {
+        // P15.1.5: POST /api/input 成功后广播 UserInputAck 给活跃 SSE
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+
+        // 模拟 1 个 SSE connection 注册
+        let (sse_tx, mut sse_rx) = mpsc::unbounded_channel::<SseEvent>();
+        {
+            let mut subs = server.active_sse_subs.lock().unwrap();
+            subs.push(sse_tx);
+        }
+        assert_eq!(server.sse_sub_count(), 1);
+
+        // 启 server
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // POST /api/input
+        let url = format!("http://{addr}/api/input");
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "session": "ack-test",
+            "text": "hello ack"
+        });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 200);
+        let resp_body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(resp_body["ok"], true);
+        assert_eq!(resp_body["sse_delivered_to"], 1);
+
+        // SSE 收到 UserInputAck
+        let event = sse_rx.recv().await.expect("sse rx");
+        match event {
+            SseEvent::UserInputAck {
+                session_id,
+                received_at_ms,
+            } => {
+                assert_eq!(session_id, "ack-test");
+                assert!(received_at_ms > 0);
+            }
+            other => panic!("expected UserInputAck, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_post_api_input_with_sse_response_includes_sse_delivered_count() {
+        // P15.1.5: POST 响应包含 sse_delivered_to 字段
+        let (addr, client, _rx) = start_test_server_with_input().await;
+
+        // 模拟 1 个 SSE connection 注册
+        let port: u16 = addr
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .expect("parse port");
+        let _ = port; // 不用, 仅为说明
+
+        // 因为 start_test_server_with_input 创建了 server 但没注册 SSE,
+        // sse_delivered_to 应该是 0
+        let url = format!("http://{addr}/api/input");
+        let body = serde_json::json!({
+            "session": "s1",
+            "text": "no sse"
+        });
+        let resp = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 200);
+        let resp_body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(resp_body["ok"], true);
+        assert!(resp_body["sse_delivered_to"].is_number());
+        assert_eq!(resp_body["sse_delivered_to"], 0);
+    }
+
+    #[tokio::test]
+    async fn http_html_shell_contains_user_input_ack_event_handler() {
+        // P15.1.5: HTML shell 应处理 user_input_ack 事件
+        let html = html_shell();
+        assert!(html.contains("addEventListener('user_input_ack'"));
+        assert!(html.contains("JSON.parse(e.data)"));
     }
 }
