@@ -18,6 +18,8 @@ ma-harness-seam = { path = "../../crates/ma-harness-seam", version = "0.1.0" }
 ma-harness-cordis = { path = "../../crates/ma-harness-cordis", version = "0.1.0" }
 ma-harness-plugin-macro = { path = "../../crates/ma-harness-plugin-macro", version = "0.1.1" }
 ma-harness-core = { path = "../../crates/ma-harness-core", version = "0.1.0" }
+# P14.2.2: 走 ctx.shell (ma-harness-shell) 替代直接 tokio::Command
+ma-harness-shell = { path = "../../crates/ma-harness-shell", version = "0.1.0" }
 # 外部
 anyhow = { workspace = true }
 thiserror = { workspace = true }

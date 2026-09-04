@@ -517,7 +517,189 @@ impl ShellService for PwshShellProvider {
 pub type DefaultShellProvider = LocalShellProvider;
 
 // ============================================================================
-// 单元测试 (mod tests) — 8 个核心场景
+// SHELL_SERVICE typed key (P14.2.2: 跟 ctx.shell 接入点)
+// ============================================================================
+
+/// Typed key: `ctx.shell` 注入的 ShellService provider.
+///
+/// 业务方:
+/// ```ignore
+/// use ma_harness_shell::{SHELL_SERVICE, LocalShellProvider, ShellService};
+/// use std::sync::Arc;
+///
+/// ctx.set(SHELL_SERVICE, Arc::new(LocalShellProvider::new()) as Arc<dyn ShellService>);
+/// ```
+///
+/// 消费者 (例如 `plugin-bash` 的 BashService):
+/// ```ignore
+/// let shell: Arc<dyn ShellService> = ctx
+///     .get(SHELL_SERVICE)
+///     .unwrap_or_else(|| Arc::new(LocalShellProvider::new()));
+/// ```
+pub static SHELL_SERVICE: ma_harness_cordis::CtxKey<std::sync::Arc<dyn ShellService>> =
+    ma_harness_seam::ctx_key!("shell_service");
+
+// ============================================================================
+// Consumer Pattern: ShellCommand + ShellRegistry (P14.2.2)
+// ============================================================================
+//
+// 业务方注册 "git-commit" / "test-suite" 等高层命令作为 LLM 工具, 跟
+// 直接调 `shell.execute("git commit -m ...") ` 区别:
+// - ShellCommand 是 typed + described, LLM 拿到的 tool schema 明确
+// - ShellRegistry 是 in-memory 容器, plugin 装到 ctx, agent 调 invoke_by_name
+// - 跟 dsh `#[shell("description")]` 宏同构 (P14.2.4 加 proc-macro, 简化业务方样板)
+//
+// 例子 (业务方写):
+// ```ignore
+// use ma_harness_shell::{ShellCommand, ShellRegistry, ShellResult, ShellError};
+//
+// struct GitCommit;
+// #[async_trait]
+// impl ShellCommand for GitCommit {
+//     fn name(&self) -> &str { "git-commit" }
+//     fn description(&self) -> &str { "git commit staged changes with a message" }
+//     fn param_schema(&self) -> serde_json::Value {
+//         serde_json::json!({
+//             "type": "object",
+//             "properties": { "message": { "type": "string" } },
+//             "required": ["message"]
+//         })
+//     }
+//     async fn invoke(&self, args: serde_json::Value) -> Result<ShellResult, ShellError> {
+//         let msg = args["message"].as_str().unwrap_or("(no message)");
+//         let shell = LocalShellProvider::new();
+//         shell.execute(&ShellSpec::new(format!("git commit -m {}", msg))).await
+//     }
+// }
+//
+// // 装到 ctx:
+// let mut registry = ShellRegistry::new();
+// registry.register(GitCommit);
+// ctx.shell_commands = Some(Arc::new(registry));
+// ```
+
+/// Shell 命令描述符 (Consumer pattern).
+///
+/// 业务方实现这个 trait, 把高层命令 (e.g. "git-commit") 注册到 [`ShellRegistry`].
+/// LLM 拿到的 tool schema 自动从 `name` / `description` / `param_schema` 生成.
+///
+/// **生命周期**: 业务方实现, 装到 `ShellRegistry`, registry 装到 `ctx.shell_commands`.
+/// invoke 阶段由 [`ShellService`] 实际跑 shell 命令.
+#[async_trait]
+pub trait ShellCommand: Send + Sync + 'static {
+    /// 命令名 (snake_case, e.g. "git_commit" / "test_suite"). Registry 用作 key.
+    fn name(&self) -> &str;
+
+    /// 命令描述 (LLM 看, 决定什么时候调)
+    fn description(&self) -> &str;
+
+    /// 参数 schema (JSON Schema 草图, 业务方手写; P14.2.4 加 macro 自动生成)
+    fn param_schema(&self) -> serde_json::Value;
+
+    /// 实际 invoke (业务方实现, 内部一般调 `ShellService::execute`)
+    async fn invoke(&self, args: serde_json::Value) -> Result<ShellResult, ShellError>;
+}
+
+/// Shell 命令注册表.
+///
+/// 业务方 `register(GitCommit)`, agent `invoke("git-commit", json!({"message": "fix"}))`.
+pub struct ShellRegistry {
+    commands: std::collections::HashMap<String, std::sync::Arc<dyn ShellCommand>>,
+}
+
+impl ShellRegistry {
+    /// 创建一个空 registry
+    pub fn new() -> Self {
+        Self {
+            commands: std::collections::HashMap::new(),
+        }
+    }
+
+    /// 注册一个命令 (重复 name 覆盖前一个 + log warn)
+    pub fn register<C: ShellCommand>(&mut self, cmd: C) {
+        let name = cmd.name().to_string();
+        if self.commands.contains_key(&name) {
+            tracing::warn!(
+                command = %name,
+                "ShellRegistry::register overrides existing command"
+            );
+        }
+        tracing::debug!(command = %name, "shell command registered");
+        self.commands.insert(name, std::sync::Arc::new(cmd));
+    }
+
+    /// 按名拿命令
+    pub fn get(&self, name: &str) -> Option<std::sync::Arc<dyn ShellCommand>> {
+        self.commands.get(name).cloned()
+    }
+
+    /// 列出所有命令名 (sorted)
+    pub fn list(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.commands.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// 数量
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// 是否空
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    /// 按名 invoke (便捷方法, 业务方一般直接 `get` + `invoke`)
+    ///
+    /// # Errors
+    /// - 命令不存在: `ShellError::Unsupported { operation: "invoke", reason: "command not found: <name>" }`
+    pub async fn invoke(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<ShellResult, ShellError> {
+        let cmd = self.get(name).ok_or_else(|| ShellError::Unsupported {
+            provider: "ShellRegistry",
+            operation: "invoke",
+            reason: format!("command not found: {name}"),
+        })?;
+        cmd.invoke(args).await
+    }
+
+    /// 给 LLM 用的 tool list (跟 dsh `tools/pre-execute` 走同一格式)
+    ///
+    /// 返回 `[{name, description, parameters}, ...]`, LLM 自己挑
+    pub fn tool_list(&self) -> Vec<serde_json::Value> {
+        self.commands
+            .values()
+            .map(|cmd| {
+                serde_json::json!({
+                    "name": cmd.name(),
+                    "description": cmd.description(),
+                    "parameters": cmd.param_schema(),
+                })
+            })
+            .collect()
+    }
+}
+
+impl Default for ShellRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for ShellRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellRegistry")
+            .field("commands", &self.list())
+            .finish()
+    }
+}
+
+// ============================================================================
+// 单元测试 (mod tests) — P14.2.1 10 个 + P14.2.2 Consumer pattern 6 个
 // ============================================================================
 
 #[cfg(test)]
@@ -669,5 +851,139 @@ mod tests {
         assert!(result.is_success());
         assert_eq!(result.stdout.trim(), "bash-test");
         assert_eq!(result.shell_kind, ShellKind::Bash);
+    }
+
+    // ========================================================================
+    // P14.2.2 Consumer pattern 测试 (ShellCommand + ShellRegistry)
+    // ========================================================================
+
+    /// 测试用 ShellCommand: "echo-hello" — invoke 时跑 `echo <args.name>`
+    struct EchoHelloCommand;
+
+    #[async_trait]
+    impl ShellCommand for EchoHelloCommand {
+        fn name(&self) -> &str {
+            "echo_hello"
+        }
+        fn description(&self) -> &str {
+            "print 'hello <name>' to stdout (test command)"
+        }
+        fn param_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            })
+        }
+        async fn invoke(&self, args: serde_json::Value) -> Result<ShellResult, ShellError> {
+            let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("world");
+            let provider = LocalShellProvider::new();
+            let spec = ShellSpec::new(format!("echo hello {name}")).timeout(Duration::from_secs(5));
+            provider.execute(&spec).await
+        }
+    }
+
+    /// 测试用 ShellCommand: "fail-on-purpose" — invoke 时跑 `false` / `exit 1`
+    struct FailCommand;
+
+    #[async_trait]
+    impl ShellCommand for FailCommand {
+        fn name(&self) -> &str {
+            "fail_on_purpose"
+        }
+        fn description(&self) -> &str {
+            "always returns non-zero (test command)"
+        }
+        fn param_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn invoke(&self, _args: serde_json::Value) -> Result<ShellResult, ShellError> {
+            let provider = LocalShellProvider::new();
+            let spec = ShellSpec::new("false").timeout(Duration::from_secs(5));
+            provider.execute(&spec).await
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_registry_register_and_get() {
+        let mut registry = ShellRegistry::new();
+        registry.register(EchoHelloCommand);
+        assert_eq!(registry.len(), 1);
+        assert!(!registry.is_empty());
+
+        let cmd = registry.get("echo_hello").expect("command not found");
+        assert_eq!(cmd.name(), "echo_hello");
+        assert!(cmd.description().contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn shell_registry_invoke_success() {
+        let mut registry = ShellRegistry::new();
+        registry.register(EchoHelloCommand);
+
+        let result = registry
+            .invoke(
+                "echo_hello",
+                serde_json::json!({ "name": "consumer-pattern" }),
+            )
+            .await
+            .expect("invoke failed");
+        assert!(result.is_success());
+        assert_eq!(result.stdout.trim(), "hello consumer-pattern");
+    }
+
+    #[tokio::test]
+    async fn shell_registry_invoke_unknown_command_errors() {
+        let registry = ShellRegistry::new();
+        let err = registry
+            .invoke("nonexistent", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ShellError::Unsupported { .. }));
+    }
+
+    #[tokio::test]
+    async fn shell_registry_invoke_propagates_nonzero() {
+        let mut registry = ShellRegistry::new();
+        registry.register(FailCommand);
+        // ShellService 返回 Ok(ShellResult { exit_code: 1 }) — 不是 Err
+        // 业务方自行检查 is_success()
+        let result = registry
+            .invoke("fail_on_purpose", serde_json::json!({}))
+            .await
+            .expect("invoke should propagate non-zero as Ok result");
+        assert!(!result.is_success());
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn shell_registry_tool_list() {
+        let mut registry = ShellRegistry::new();
+        registry.register(EchoHelloCommand);
+        registry.register(FailCommand);
+
+        let tools = registry.tool_list();
+        assert_eq!(tools.len(), 2);
+        let names: Vec<String> = tools
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"echo_hello".to_string()));
+        assert!(names.contains(&"fail_on_purpose".to_string()));
+
+        // 验证 schema 字段都存在
+        for tool in &tools {
+            assert!(tool["description"].is_string());
+            assert!(tool["parameters"].is_object());
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_registry_register_override_warns() {
+        let mut registry = ShellRegistry::new();
+        registry.register(EchoHelloCommand);
+        // 重复注册同名命令 (override)
+        registry.register(EchoHelloCommand);
+        assert_eq!(registry.len(), 1, "重复注册应覆盖, 数量仍为 1");
     }
 }

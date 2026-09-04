@@ -5,6 +5,10 @@
 //! **Week 5-6 实装**: BashService ?subprocess (tokio::process::Command) +
 //! 捕获 stdout/stderr/exit_code + timeout via MAX_RUNTIME_MS.
 //!
+//! **P14.2.2 重构**: BashService 内部从 `tokio::process::Command` 改为
+//! 走 `ma_harness_shell::ShellService` (跟 dsh `ctx.shell` seam 1:1 对等).
+//! 公开 API 保持 (`run_command` / `run_command_with_timeout` / `CommandOutput` 不变).
+//!
 //! **Phase 1 简?*:
 //! - 没有 landlock sandbox (?docs/code-mode-deferred.md 风格, Phase 2 ?
 //! - 没有白名单命?(业务方通过 plugin.toml seam.sandbox.exec ? Phase 2)
@@ -13,17 +17,16 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ma_harness_cordis::Context;
 use ma_harness_cordis::Plugin as CordisPlugin;
 use ma_harness_cordis::Service as CordisService;
 use ma_harness_seam::{ctx_key, Plugin as SeamPlugin, Service as SeamService};
+use ma_harness_shell::{LocalShellProvider, ShellError, ShellService, ShellSpec};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::process::Command;
-use tokio::time::timeout;
 
 // ============================================================================
 // 公开 typed key
@@ -58,6 +61,10 @@ pub enum BashError {
         /// stderr 内容
         stderr: String,
     },
+
+    /// ctx.shell 错误 (P14.2.2: 由 ma-harness-shell 包装, 这里暴露给业务方)
+    #[error("shell service error: {0}")]
+    Shell(#[from] ShellError),
 }
 
 // ============================================================================
@@ -90,8 +97,12 @@ impl CommandOutput {
 
 /// Bash service ?shell 命令
 ///
+/// **P14.2.2 重构**: 内部从 `tokio::process::Command` 改为
+/// 走 [`ma_harness_shell::ShellService`]. 业务方如果有 `ctx.shell` 注入的 provider, 用它;
+/// 否则 fallback 到 `LocalShellProvider::new()` (平台默认).
+///
 /// **关键设计**: service 自身**不存** timeout, 每次 run 时从 ctx ?MAX_RUNTIME_MS.
-/// 业务?set 这个 key 立刻生效 (?hello plugin ?"活的 ctx" 设计一?.
+/// 业务?set 这个 key 立刻生效 (?hello plugin ?"活的 ctx" 设计一?).
 pub struct BashService;
 
 impl BashService {
@@ -108,65 +119,37 @@ impl BashService {
     /// ```
     pub async fn run_command(&self, ctx: &Context, cmd: &str) -> Result<CommandOutput, BashError> {
         let max_runtime_ms = ctx.get(MAX_RUNTIME_MS).unwrap_or(DEFAULT_MAX_RUNTIME_MS);
-        self.run_command_with_timeout(cmd, Duration::from_millis(max_runtime_ms as u64))
+        self.run_command_with_timeout(ctx, cmd, Duration::from_millis(max_runtime_ms as u64))
             .await
     }
 
     /// ?shell 命令, 显式指定 timeout
+    ///
+    /// P14.2.2: 内部走 ctx.shell (从 SHELL_SERVICE typed key 拿, fallback 到 LocalShellProvider).
     pub async fn run_command_with_timeout(
         &self,
+        ctx: &Context,
         cmd: &str,
         max_runtime: Duration,
     ) -> Result<CommandOutput, BashError> {
         let start = std::time::Instant::now();
 
-        // 跨平? ?sh -c (Unix) ?cmd /C (Windows)
-        let mut command = build_shell_command(cmd);
-        command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null());
+        // 拿 ctx.shell (如果有) 否则 fallback
+        let shell: Arc<dyn ShellService> = ctx
+            .get(ma_harness_shell::SHELL_SERVICE)
+            .unwrap_or_else(|| Arc::new(LocalShellProvider::new()));
 
-        tracing::debug!(cmd = %cmd, timeout_ms = max_runtime.as_millis(), "running command");
-
-        let child = command.spawn().map_err(BashError::Spawn)?;
-        let output = match timeout(max_runtime, child.wait_with_output()).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Err(BashError::Spawn(e)),
-            Err(_elapsed) => {
-                // 超时: child 已被 drop (wait_with_output ?self-consuming)
-                // 实际子进程可能仍在跑 (?Unix ?zombie), ?tokio 杀进程
-                tracing::warn!(cmd = %cmd, timeout_ms = max_runtime.as_millis(), "command timed out");
-                return Err(BashError::Timeout(max_runtime.as_millis() as u32));
-            }
-        };
+        let spec = ShellSpec::new(cmd).timeout(max_runtime);
+        let result = shell.execute(&spec).await?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
         Ok(CommandOutput {
-            exit_code,
-            stdout,
-            stderr,
+            exit_code: result.exit_code,
+            stdout: result.stdout,
+            stderr: result.stderr,
             duration_ms,
         })
     }
-}
-
-#[cfg(target_family = "unix")]
-fn build_shell_command(cmd: &str) -> Command {
-    let mut c = Command::new("sh");
-    c.arg("-c").arg(cmd);
-    c
-}
-
-#[cfg(target_family = "windows")]
-fn build_shell_command(cmd: &str) -> Command {
-    let mut c = Command::new("cmd");
-    c.arg("/C").arg(cmd);
-    c
 }
 
 impl CordisService for BashService {
@@ -195,7 +178,7 @@ impl SeamService for BashService {
 // Plugin: BashPlugin
 // ============================================================================
 
-/// Bash plugin ?install 时注?BashService + 写默?typed key
+/// Bash plugin ?install 时注?BashService + 写默认 typed key
 pub struct BashPlugin;
 
 impl CordisPlugin for BashPlugin {
@@ -204,6 +187,14 @@ impl CordisPlugin for BashPlugin {
         ctx.inject(std::sync::Arc::new(svc));
         // 默认 timeout (业务方可以覆?
         ctx.set(MAX_RUNTIME_MS, DEFAULT_MAX_RUNTIME_MS);
+        // P14.2.2: 如果 ctx 还没装 SHELL_SERVICE, 装 LocalShellProvider
+        // (业务方可以 ctx.set(SHELL_SERVICE, ...) 覆盖, 例如装 PwshShellProvider)
+        if ctx.get(ma_harness_shell::SHELL_SERVICE).is_none() {
+            ctx.set(
+                ma_harness_shell::SHELL_SERVICE,
+                Arc::new(LocalShellProvider::new()) as Arc<dyn ShellService>,
+            );
+        }
         Ok(())
     }
     fn name(&self) -> &str {
@@ -280,12 +271,23 @@ mod tests {
     /// 跨平台 timeout (Phase 1 测试 sleep)
     #[tokio::test]
     async fn run_respects_timeout() {
-        let _ctx = ctx_with_default_timeout();
+        let ctx = ctx_with_default_timeout();
         let svc = BashService;
         let result = svc
-            .run_command_with_timeout(&sleep_cmd("5"), Duration::from_millis(100))
+            .run_command_with_timeout(&ctx, &sleep_cmd("5"), Duration::from_millis(100))
             .await;
-        assert!(matches!(result, Err(BashError::Timeout(100))));
+        // P14.2.2: 走 ctx.shell, 超时返回 ShellError::Subprocess(...) — BashError::Shell 包装
+        // 业务方只 assert BashError::Shell, 不需要解 SubprocessError 内部
+        assert!(
+            matches!(
+                result,
+                Err(BashError::Shell(ma_harness_shell::ShellError::Subprocess(
+                    _
+                )))
+            ),
+            "expected timeout wrapped in Shell, got: {:?}",
+            result.map_err(|e| format!("{:?}", e))
+        );
     }
 
     /// 业务方覆盖默?timeout
@@ -295,7 +297,12 @@ mod tests {
         ctx.set(MAX_RUNTIME_MS, 100u32); // 100ms
         let svc = BashService;
         let result = svc.run_command(&ctx, &sleep_cmd("5")).await;
-        assert!(matches!(result, Err(BashError::Timeout(_))));
+        assert!(matches!(
+            result,
+            Err(BashError::Shell(ma_harness_shell::ShellError::Subprocess(
+                _
+            )))
+        ));
     }
 
     // ========================================================================
