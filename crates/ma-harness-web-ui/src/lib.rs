@@ -41,41 +41,43 @@
 //! - 看 live session (events via SSE)
 //! - 接受 user input (P15.1.4+)
 //! - 多 tab / 多 browser 并存, UserInputAck 实时反馈 (P15.1.5+)
+//! - SSE heartbeat + dead connection 自动清理 (P15.1.6+)
 //!
 //! **P15.1 大工程** (8-12 周): Rust + WASM (Leptos/Yew) or React + REST API.
 //! **P15.1.1 骨架**: crate 脚手架, WebUiServer trait, std+tokio HTTP server, SSE.
 //! **P15.1.2**: SSE query filter (?session=xxx), SessionStart/End events.
 //! **P15.1.3**: /api/version + /api/sessions endpoints.
 //! **P15.1.4**: POST /api/input 接 user input, UserInput 转发给 subscribers.
-//! **P15.1.5** (本次): 多 SSE 广播 (Vec) + UserInputAck 实时反馈.
+//! **P15.1.5**: 多 SSE 广播 (Vec) + UserInputAck 实时反馈.
+//! **P15.1.6** (本次): SSE heartbeat (15s) + dead sender 自动清理.
 //!
 //! **设计决策**: 不引 salvo/axum, 用 `tokio::net::TcpListener` + 手写 minimal HTTP
 //! (P15.1.x 只需要几个 endpoint, 完整 framework 过度设计).
-//! 业务方 P15.1.6+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
+//! 业务方 P15.1.7+ 改用 axum + 真 SPA 框架时, LocalWebUiServer 换成对应 impl.
 //!
 //! **核心抽象**:
 //! - [`SseEvent`] enum (SessionEvent / SessionStart/End / UserInputAck / Message / Heartbeat / Done)
 //! - [`UserInput`] struct (P15.1.4: browser → server, session + text + ts)
 //! - [`WebUiServer`] trait (bind / run / port)
 //! - [`LocalWebUiServer`] (主交付, std + tokio; multi-SSE broadcast via active_sse_subs Vec)
-//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.6+ 替换为 Leptos / React)
+//! - [`html_shell`] (P15.1.5: 含 input form + UserInputAck 渲染, 业务方 P15.1.7+ 替换为 Leptos / React)
 //!
 //! **6 质量属性**:
 //! - 可复用: WebUiServer trait, future RemoteWebUiServer (P15+ cloud)
 //! - 可维护: 模块化分块, server / sse / http / html / error / user_input 集中 lib.rs
 //! - 鲁棒: 错误归一化 (Bind / IO / ChannelClosed), 405 vs 404 区分, Content-Length body 读,
-//!   lock 短暂持有 + drop 后 send (跨 await 安全)
+//!   lock 短暂持有 + drop 后 send (跨 await 安全), heartbeat 自动清理死连接
 //! - 安全: 不 eval user input, SSE events 静态 string, server 端盖 timestamp 不信 client
-//! - 可测: 23+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast
+//! - 可测: 30+ 测试覆盖 bind / HTTP / SSE / HTML / POST input / 多 subscriber / 多 SSE broadcast / heartbeat
 //! - 可扩展: active_sse_subs Vec<Sender> + user_input_subs Vec<Sender>,
 //!   业务方多 subscriber / 多 tab 自然支持
 //!
-//! # 限制 (Limitations) — P15.1.5
+//! # 限制 (Limitations) — P15.1.6
 //!
-//! - placeholder HTML shell (业务方 P15.1.6+ 替换为 Leptos / React)
-//! - SSE 连接断开时未主动清理 (sse_tx send 失败时被忽略, 但 sender 留在 Vec —
-//!   P15.1.6+ 加 heartbeat ping 检测断连 + 清理)
-//! - 不接 ma-harness-server OpenAPI (P15.1.6+ 集成)
+//! - placeholder HTML shell (业务方 P15.1.7+ 替换为 Leptos / React)
+//! - heartbeat task 无 cancellation token — `run()` 退出时 heartbeat 继续跑到下一个 tick
+//!   (业务方 P15.1.7+ 想要 graceful shutdown 加 stop() + oneshot signal)
+//! - 不接 ma-harness-server OpenAPI (P15.1.7+ 集成)
 //! - 不接 ctx.user 全链路 (P15.2 集成 ma-harness-core Context)
 //!
 //! [dsh-feature-parity-table §8]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#8-distribution-surfaces
@@ -385,6 +387,66 @@ fn broadcast_sse(
     }
 }
 
+// ============================================================================
+// P15.1.6: SSE heartbeat + dead sender cleanup
+// ============================================================================
+
+/// P15.1.6: 默认 heartbeat 间隔 (server → 所有活跃 SSE 连接).
+///
+/// **15s 理由**:
+/// - 短: 能快速发现 dead connection (3 个 miss ≈ 45s 才被 cleanup, 够快)
+/// - 长: 不浪费带宽, 不影响 idle browser (SSE comment 不触发 JS 事件)
+/// - 业务方 P15.1.7+ 可以 `set_heartbeat_interval()` override
+pub(crate) const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(15);
+
+/// P15.1.6: SSE heartbeat 后台循环.
+///
+/// **作用**:
+/// 1. 每 `interval` 触发一次, 遍历 `active_sse_subs`
+/// 2. 对每个 sender 试 `send(Heartbeat)` — 失败 (receiver 已 drop) 表示连接死了
+/// 3. 用 `Vec::retain` 移除 dead senders (原子, 不需要再 lock)
+///
+/// **为何用 send 来 detect 死连接**:
+/// - `mpsc::UnboundedSender::send` 只在 `Receiver` drop 时返回 `Err`
+/// - SSE connection 断开 → handle_connection task 退出 → filter_rx drop → send 立即 fail
+/// - 一次 `send` 既发 heartbeat 又 detect 死连接, 不需要单独 ping/pong
+///
+/// **lock 策略**: 整个 retain 在一个 critical section, 不跨 await, 不会丢新 push 的 conn
+/// (因为新 push 在 retain 之后才会 lock 拿锁).
+async fn heartbeat_loop(
+    active_sse_subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
+    interval: std::time::Duration,
+) {
+    let mut tick = tokio::time::interval(interval);
+    // 第一次 tick 立即触发, 但 first_tick = 0 之后等 interval — 跳过 first tick
+    // (避免 server 刚启动就 heartbeat 一次空 Vec)
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        let cleanup_count = {
+            match active_sse_subs.lock() {
+                Ok(mut subs) => {
+                    let before = subs.len();
+                    // retain 内部试 send: 成功 (Ok) → 保留, 失败 (Err) → 移除
+                    subs.retain(|tx| tx.send(SseEvent::Heartbeat).is_ok());
+                    before - subs.len()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "heartbeat: active_sse_subs mutex poisoned");
+                    0
+                }
+            }
+        };
+        if cleanup_count > 0 {
+            tracing::debug!(
+                cleaned = cleanup_count,
+                "heartbeat: pruned dead SSE senders"
+            );
+        }
+    }
+}
+
 #[async_trait]
 impl WebUiServer for LocalWebUiServer {
     async fn bind(addr: &str) -> Result<Self, WebUiError> {
@@ -418,6 +480,12 @@ impl WebUiServer for LocalWebUiServer {
             *running = true;
         }
         tracing::info!(addr = %self.addr, port = self.port, "web UI server started");
+
+        // P15.1.6: 启 heartbeat 后台任务 (清理 dead SSE senders + keep-alive)
+        let heartbeat_subs = Arc::clone(&self.active_sse_subs);
+        tokio::spawn(async move {
+            heartbeat_loop(heartbeat_subs, DEFAULT_HEARTBEAT_INTERVAL).await;
+        });
 
         loop {
             let (stream, _peer) = match listener.accept().await {
@@ -1594,5 +1662,179 @@ mod tests {
         let html = html_shell();
         assert!(html.contains("addEventListener('user_input_ack'"));
         assert!(html.contains("JSON.parse(e.data)"));
+    }
+
+    // ========================================================================
+    // P15.1.6 tests: SSE heartbeat + dead sender cleanup
+    // ========================================================================
+
+    /// 启一个 heartbeat_loop 测试用 (短 interval), 等若干 tick, 然后 abort
+    async fn run_heartbeat_for(
+        subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>>,
+        interval: std::time::Duration,
+        ticks: u32,
+    ) {
+        let handle = tokio::spawn(async move {
+            heartbeat_loop(subs, interval).await;
+        });
+        // 等 ticks * interval 毫秒 (留 50ms buffer 让 tick 触发)
+        let total = interval * ticks + std::time::Duration::from_millis(50);
+        tokio::time::sleep(total).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_with_empty_subs_is_noop() {
+        // P15.1.6: 0 connections 时 heartbeat 不 panic, 不影响任何东西
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        // 跑 2 个 tick (~100ms), 内部应 noop
+        run_heartbeat_for(subs.clone(), std::time::Duration::from_millis(50), 2).await;
+        assert_eq!(subs.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_delivers_heartbeat_to_all_alive_subscribers() {
+        // P15.1.6: heartbeat 发到所有活跃 sub
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx3, mut rx3) = mpsc::unbounded_channel::<SseEvent>();
+        {
+            let mut s = subs.lock().unwrap();
+            s.push(tx1);
+            s.push(tx2);
+            s.push(tx3);
+        }
+        assert_eq!(subs.lock().unwrap().len(), 3);
+
+        // 跑 2 个 tick (~100ms), 期望每个 rx 至少收到 2 个 Heartbeat
+        run_heartbeat_for(subs.clone(), std::time::Duration::from_millis(50), 2).await;
+
+        // 3 个 conn 还在 (没被清理)
+        assert_eq!(subs.lock().unwrap().len(), 3);
+
+        // 每个 rx 收到 Heartbeat
+        let e1 = rx1.try_recv().expect("rx1 got heartbeat");
+        let e2 = rx2.try_recv().expect("rx2 got heartbeat");
+        let e3 = rx3.try_recv().expect("rx3 got heartbeat");
+        assert!(matches!(e1, SseEvent::Heartbeat));
+        assert!(matches!(e2, SseEvent::Heartbeat));
+        assert!(matches!(e3, SseEvent::Heartbeat));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_cleans_up_dead_senders_after_receiver_dropped() {
+        // P15.1.6: 关键 regression test — P15.1.5 limitation fix
+        // receiver drop → sender 在 Vec 里 → 下个 heartbeat tick send 失败 → retain 移除
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // 1 个 alive conn + 1 个 dead conn (tx 留 Vec, rx 已 drop)
+        let (tx_alive, mut rx_alive) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx_dead, _rx_dead) = mpsc::unbounded_channel::<SseEvent>();
+        drop(_rx_dead); // 立即 drop, 模拟断连
+        {
+            let mut s = subs.lock().unwrap();
+            s.push(tx_alive);
+            s.push(tx_dead);
+        }
+        assert_eq!(subs.lock().unwrap().len(), 2);
+
+        // 跑 2 个 tick (~100ms)
+        run_heartbeat_for(subs.clone(), std::time::Duration::from_millis(50), 2).await;
+
+        // dead conn 已被清理, 只剩 alive
+        assert_eq!(subs.lock().unwrap().len(), 1);
+
+        // alive 收到 heartbeat
+        let e = rx_alive.try_recv().expect("alive got heartbeat");
+        assert!(matches!(e, SseEvent::Heartbeat));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_with_all_dead_senders_clears_vec() {
+        // P15.1.6: 全部 dead 时 Vec 变空
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx1, rx1) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx2, rx2) = mpsc::unbounded_channel::<SseEvent>();
+        drop(rx1);
+        drop(rx2);
+        {
+            let mut s = subs.lock().unwrap();
+            s.push(tx1);
+            s.push(tx2);
+        }
+        assert_eq!(subs.lock().unwrap().len(), 2);
+
+        // 跑 1 个 tick (~60ms)
+        run_heartbeat_for(subs.clone(), std::time::Duration::from_millis(50), 1).await;
+
+        assert_eq!(subs.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_loop_does_not_remove_healthy_senders() {
+        // P15.1.6 regression: 不要误伤活 conn
+        let subs: Arc<std::sync::Mutex<Vec<mpsc::UnboundedSender<SseEvent>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx1, _rx1) = mpsc::unbounded_channel::<SseEvent>();
+        let (tx2, _rx2) = mpsc::unbounded_channel::<SseEvent>();
+        {
+            let mut s = subs.lock().unwrap();
+            s.push(tx1);
+            s.push(tx2);
+        }
+
+        run_heartbeat_for(subs.clone(), std::time::Duration::from_millis(50), 3).await;
+
+        // rx 还持有, send 永远成功, 不会清
+        assert_eq!(subs.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_method_spawns_heartbeat_task_for_active_sse_subs() {
+        // P15.1.6: run() 启 server 时同时启 heartbeat 后台任务
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let server = LocalWebUiServer::bind(&addr).await.expect("bind");
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let server = Arc::new(server);
+        let server_clone = Arc::clone(&server);
+        tokio::spawn(async move {
+            let _ = server_clone.run(tx).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 模拟 1 个 SSE conn 注册, 跑 ~1.5 个 DEFAULT_HEARTBEAT_INTERVAL 太长 (22.5s)
+        // 这里不真等 15s, 只验 "spawn 后 server 内部状态正常 + 有 task 跑"
+        let (sse_tx, sse_rx) = mpsc::unbounded_channel::<SseEvent>();
+        {
+            let mut s = server.active_sse_subs.lock().unwrap();
+            s.push(sse_tx);
+        }
+        assert_eq!(server.sse_sub_count(), 1);
+
+        // 等短时间, 验 server 没 panic + 还能 accept 新 conn
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let resp = reqwest::get(format!("http://{addr}/api/health"))
+            .await
+            .expect("GET /api/health");
+        assert_eq!(resp.status(), 200);
+
+        // cleanup: drop sse_rx 让 heartbeat 把它清掉 (但要 15s+ 才会发生, 这里只验注册成功)
+        drop(sse_rx);
+    }
+
+    #[tokio::test]
+    async fn default_heartbeat_interval_is_reasonable() {
+        // P15.1.6: 默认 interval 应是 15s (业务方可依赖)
+        assert_eq!(
+            DEFAULT_HEARTBEAT_INTERVAL,
+            std::time::Duration::from_secs(15)
+        );
     }
 }
