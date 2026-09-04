@@ -485,6 +485,169 @@ pub static PTY_SERVICE: ma_harness_cordis::CtxKey<Arc<dyn PtyService>> =
 pub type DefaultPtyProvider = LocalPtyProvider;
 
 // ============================================================================
+// P15.2.2: Consumer Pattern (TerminalCommand + TerminalRegistry)
+// ============================================================================
+
+/// Terminal 命令 invoke 结果 (P15.2.2 新增).
+///
+/// **跟 ShellResult 区别**: Terminal 是持久 PTY, invoke 通常:
+/// 1. 启动一个长跑 child (e.g. `npm run dev`)
+/// 2. 读一段时间 output (max_read_bytes 上限)
+/// 3. 保留 handle 给业务方后续 read / write / kill
+///
+/// 所以 TerminalResult 多一个 `terminal_id` 字段 (UUID 字符串), 让业务方
+/// 之后能继续跟这个 PTY 交互 (P15.2.4 session 持久化就用这个).
+#[derive(Debug, Clone)]
+pub struct TerminalResult {
+    /// Terminal handle 字符串 (UUID, 给后续 read/write/kill 用)
+    pub terminal_id: String,
+    /// 启动 → 读到 output 的耗时
+    pub duration: Duration,
+    /// 读到的 output bytes (最多 `max_read_bytes`)
+    pub output: Vec<u8>,
+    /// 读之后 PTY 是否还活着 (true = 还在跑, false = 已退出)
+    pub still_running: bool,
+}
+
+impl TerminalResult {
+    /// 拿 output 的 UTF-8 lossy string
+    pub fn output_str(&self) -> String {
+        String::from_utf8_lossy(&self.output).into_owned()
+    }
+}
+
+/// Terminal 命令 trait (P15.2.2 新增, 跟 P14.2.2 ShellCommand 镜像).
+///
+/// **生命周期**: 业务方实现, 装到 [`TerminalRegistry`], registry 装到 ctx.
+/// invoke 阶段由 [`PtyService`] 实际 spawn / write / read / kill.
+///
+/// **跟 ShellCommand 区别**:
+/// - 返回 `TerminalResult` (含 handle + output) 而不是 `ShellResult` (含 exit_code)
+/// - 适合"长跑 + 收 output"而不是"跑完即退"
+#[async_trait]
+pub trait TerminalCommand: Send + Sync + 'static {
+    /// 命令名 (snake_case, e.g. "start_dev_server" / "long_task"). Registry 用作 key.
+    fn name(&self) -> &str;
+
+    /// 命令描述 (LLM 看, 决定什么时候调).
+    fn description(&self) -> &str;
+
+    /// 参数 schema (JSON Schema 草图, 业务方手写).
+    fn param_schema(&self) -> serde_json::Value;
+
+    /// 实际 invoke (业务方实现, 内部一般调 `PtyService::spawn/write/read`).
+    ///
+    /// # Arguments
+    /// - `pty`: PtyService provider (业务方可能注入自己的)
+    /// - `args`: 命令参数 (符合 `param_schema`)
+    /// - `max_read_bytes`: invoke 阶段读多少 output (后续可继续 read)
+    async fn invoke(
+        &self,
+        pty: Arc<dyn PtyService>,
+        args: serde_json::Value,
+        max_read_bytes: usize,
+    ) -> Result<TerminalResult, TerminalError>;
+}
+
+/// Terminal 命令注册表 (P15.2.2 新增).
+///
+/// 业务方 `register(StartDevServer)`, agent `invoke("start_dev_server", json!({"cmd": "npm"}))`.
+pub struct TerminalRegistry {
+    commands: std::collections::HashMap<String, Arc<dyn TerminalCommand>>,
+}
+
+impl TerminalRegistry {
+    /// 创建一个空 registry
+    pub fn new() -> Self {
+        Self {
+            commands: std::collections::HashMap::new(),
+        }
+    }
+
+    /// 注册一个命令 (重复 name 覆盖前一个 + log warn)
+    pub fn register<C: TerminalCommand>(&mut self, cmd: C) {
+        let name = cmd.name().to_string();
+        if self.commands.contains_key(&name) {
+            tracing::warn!(
+                command = %name,
+                "TerminalRegistry::register overrides existing command"
+            );
+        }
+        tracing::debug!(command = %name, "terminal command registered");
+        self.commands.insert(name, Arc::new(cmd));
+    }
+
+    /// 按名拿命令
+    pub fn get(&self, name: &str) -> Option<Arc<dyn TerminalCommand>> {
+        self.commands.get(name).cloned()
+    }
+
+    /// 列出所有命令名 (sorted)
+    pub fn list(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.commands.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// 数量
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// 是否空
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    /// 按名 invoke (便捷方法).
+    ///
+    /// # Errors
+    /// - 命令不存在: `TerminalError::Unsupported { operation: "invoke", reason: ... }`
+    pub async fn invoke(
+        &self,
+        pty: Arc<dyn PtyService>,
+        name: &str,
+        args: serde_json::Value,
+        max_read_bytes: usize,
+    ) -> Result<TerminalResult, TerminalError> {
+        let cmd = self.get(name).ok_or_else(|| TerminalError::Unsupported {
+            provider: "TerminalRegistry",
+            operation: "invoke",
+            reason: format!("command not found: {name}"),
+        })?;
+        cmd.invoke(pty, args, max_read_bytes).await
+    }
+
+    /// 给 LLM 用的 tool list (跟 dsh `tools/pre-execute` 走同一格式).
+    pub fn tool_list(&self) -> Vec<serde_json::Value> {
+        self.commands
+            .values()
+            .map(|cmd| {
+                serde_json::json!({
+                    "name": cmd.name(),
+                    "description": cmd.description(),
+                    "parameters": cmd.param_schema(),
+                })
+            })
+            .collect()
+    }
+}
+
+impl Default for TerminalRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for TerminalRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalRegistry")
+            .field("commands", &self.list())
+            .finish()
+    }
+}
+
+// ============================================================================
 // 单元测试
 // ============================================================================
 
@@ -711,14 +874,28 @@ mod tests {
             .expect("spawn 3");
         assert_eq!(p.active_count(), 3);
 
-        // 3 个都能 read 到自己的 output
+        // 等 child 跑完 (cmd /C echo 应该是 < 1s, 500ms 应该够)
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // 3 个都能 read 到自己的 output (P15.2.1 read 是 one-shot, 可能只读到 chunk 1)
+        // 业务方自己 buffer 拼 — 这里 retry 直到找到 expected 或 1s timeout
         for (h, expected) in [(&h1, "one"), (&h2, "two"), (&h3, "three")] {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let output = p.read(h, 4096).await.expect("read");
-            let text = String::from_utf8_lossy(&output);
+            let mut combined = Vec::new();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                let chunk = p.read(h, 4096).await.expect("read");
+                combined.extend_from_slice(&chunk);
+                let text = String::from_utf8_lossy(&combined);
+                if text.contains(expected) {
+                    break;
+                }
+                // 等多 50ms 再试
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            let text = String::from_utf8_lossy(&combined);
             assert!(
                 text.contains(expected),
-                "PTY output should contain '{expected}', got: {text:?}"
+                "PTY output should contain '{expected}' within 2s, got: {text:?}"
             );
         }
 
@@ -727,5 +904,246 @@ mod tests {
         p.kill(&h2).await.expect("kill 2");
         p.kill(&h3).await.expect("kill 3");
         assert_eq!(p.active_count(), 0);
+    }
+
+    // ----- P15.2.2 Consumer Pattern: TerminalCommand + TerminalRegistry -----
+
+    /// Test command: spawn `cmd.exe /C echo <text>` and read output.
+    /// Param schema: `{ "text": "string" }`
+    struct EchoCommand;
+
+    #[async_trait]
+    impl TerminalCommand for EchoCommand {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "Spawn a shell that echoes the given text to stdout"
+        }
+        fn param_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "text to echo" }
+                },
+                "required": ["text"]
+            })
+        }
+        async fn invoke(
+            &self,
+            pty: Arc<dyn PtyService>,
+            args: serde_json::Value,
+            max_read_bytes: usize,
+        ) -> Result<TerminalResult, TerminalError> {
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| TerminalError::Spawn("missing 'text' arg".into()))?
+                .to_string();
+
+            // 平台相关: Windows 用 `cmd /C echo <text>`, POSIX 用 `sh -c "echo <text>"`
+            let spec = if cfg!(windows) {
+                TerminalSpec::new("cmd.exe")
+                    .arg("/C")
+                    .arg(format!("echo {text}"))
+            } else {
+                TerminalSpec::new("sh")
+                    .arg("-c")
+                    .arg(format!("echo {text}"))
+            };
+
+            let start = std::time::Instant::now();
+            let handle = pty.spawn(&spec).await?;
+            // 等 child 跑完 (短命令) + output flush
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let output = pty.read(&handle, max_read_bytes).await?;
+            let duration = start.elapsed();
+
+            Ok(TerminalResult {
+                terminal_id: handle.to_string(),
+                duration,
+                output,
+                still_running: true, // 简化: 不真 poll, 返 true
+            })
+        }
+    }
+
+    /// Failing command for "unknown command" test
+    struct FailCommand;
+
+    #[async_trait]
+    impl TerminalCommand for FailCommand {
+        fn name(&self) -> &str {
+            "fail_on_purpose"
+        }
+        fn description(&self) -> &str {
+            "Always returns Unsupported error (for testing)"
+        }
+        fn param_schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        async fn invoke(
+            &self,
+            _pty: Arc<dyn PtyService>,
+            _args: serde_json::Value,
+            _max_read_bytes: usize,
+        ) -> Result<TerminalResult, TerminalError> {
+            Err(TerminalError::Unsupported {
+                provider: "FailCommand",
+                operation: "invoke",
+                reason: "intentional failure for test".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn terminal_registry_new_is_empty() {
+        let r = TerminalRegistry::new();
+        assert!(r.is_empty());
+        assert_eq!(r.len(), 0);
+        assert_eq!(r.list(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn terminal_registry_default_matches_new() {
+        let r = TerminalRegistry::default();
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn terminal_registry_register_adds_command() {
+        let mut r = TerminalRegistry::new();
+        r.register(EchoCommand);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r.list(), vec!["echo".to_string()]);
+        assert!(r.get("echo").is_some());
+    }
+
+    #[test]
+    fn terminal_registry_register_override_warns_and_overrides() {
+        let mut r = TerminalRegistry::new();
+        r.register(EchoCommand);
+        r.register(EchoCommand); // 第二次注册同名, 覆盖 + warn
+        assert_eq!(r.len(), 1);
+        // 仍能拿到
+        assert!(r.get("echo").is_some());
+    }
+
+    #[test]
+    fn terminal_registry_get_unknown_returns_none() {
+        let r = TerminalRegistry::new();
+        assert!(r.get("nope").is_none());
+    }
+
+    #[test]
+    fn terminal_registry_tool_list_format() {
+        let mut r = TerminalRegistry::new();
+        r.register(EchoCommand);
+        r.register(FailCommand);
+        let tools = r.tool_list();
+        assert_eq!(tools.len(), 2);
+        // 2 个 tool 都有 name / description / parameters
+        for t in &tools {
+            assert!(t["name"].is_string());
+            assert!(t["description"].is_string());
+            assert!(t["parameters"].is_object());
+        }
+        // names 包含 echo + fail_on_purpose
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"fail_on_purpose"));
+    }
+
+    #[tokio::test]
+    async fn terminal_registry_invoke_unknown_returns_unsupported() {
+        let r = TerminalRegistry::new();
+        let pty: Arc<dyn PtyService> = Arc::new(LocalPtyProvider::new());
+        let err = r
+            .invoke(pty, "nope", serde_json::json!({}), 1024)
+            .await
+            .unwrap_err();
+        match err {
+            TerminalError::Unsupported {
+                operation, reason, ..
+            } => {
+                assert_eq!(operation, "invoke");
+                assert!(reason.contains("nope"));
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_registry_invoke_fail_command_propagates_error() {
+        let mut r = TerminalRegistry::new();
+        r.register(FailCommand);
+        let pty: Arc<dyn PtyService> = Arc::new(LocalPtyProvider::new());
+        let err = r
+            .invoke(pty, "fail_on_purpose", serde_json::json!({}), 1024)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            TerminalError::Unsupported {
+                provider: "FailCommand",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_registry_invoke_echo_command_runs_real_pty() {
+        // P15.2.2 端到端: registry + command + pty 真跑
+        let mut r = TerminalRegistry::new();
+        r.register(EchoCommand);
+        let pty: Arc<dyn PtyService> = Arc::new(LocalPtyProvider::new());
+
+        let result = r
+            .invoke(
+                pty.clone(),
+                "echo",
+                serde_json::json!({"text": "from-registry"}),
+                4096,
+            )
+            .await
+            .expect("invoke echo");
+        // P15.2.1 read 是 one-shot, 实际可能只读到 chunk 1 (ANSI escape).
+        // 这里只验 "PTY 真 spawn 成功 + output bytes 不空", 内容验证留给下面 retry 版本.
+        assert!(!result.terminal_id.is_empty());
+        assert!(result.duration.as_millis() < 5000);
+        // Retry 读直到找到 'from-registry' (业务方实际使用模式)
+        let handle = TerminalHandle(result.terminal_id.clone());
+        let mut combined = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let chunk = pty.read(&handle, 4096).await.expect("read");
+            combined.extend_from_slice(&chunk);
+            if String::from_utf8_lossy(&combined).contains("from-registry") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let text = String::from_utf8_lossy(&combined);
+        assert!(
+            text.contains("from-registry"),
+            "PTY output (after retry) should contain 'from-registry', got: {text:?}"
+        );
+        // 清理
+        pty.kill(&handle).await.expect("kill");
+    }
+
+    #[test]
+    fn terminal_result_output_str_handles_non_utf8() {
+        // output 含 invalid UTF-8 → lossy 替换
+        let r = TerminalResult {
+            terminal_id: "id".into(),
+            duration: std::time::Duration::from_millis(10),
+            output: vec![b'h', b'i', 0xFF, 0xFE, b'!'],
+            still_running: true,
+        };
+        let s = r.output_str();
+        // 包含 'hi' 和 '!' (中间的 invalid byte 替换成 U+FFFD)
+        assert!(s.contains("hi"));
+        assert!(s.contains("!"));
     }
 }

@@ -25,6 +25,8 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 portable-pty = { workspace = true }  # P15.2.1 PTY backend
 uuid = { workspace = true }  # 句柄 ID 用 UUID v4 (跟 SessionEvent 一致)
+serde = { workspace = true }  # P15.2.2 TerminalCommand param_schema 用 Serialize
+serde_json = { workspace = true }  # P15.2.2 TerminalCommand args/param_schema
 
 [dev-dependencies]
 tempfile = { workspace = true }
