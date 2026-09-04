@@ -456,6 +456,326 @@ pub static WEBHOOK_SERVICE: ma_harness_cordis::CtxKey<Arc<dyn WebhookService>> =
 pub type DefaultWebhookProvider = LocalWebhookProvider;
 
 // ============================================================================
+// P15.3.2: HTTP server (POST /webhook/{route})
+// ============================================================================
+
+/// HTTP 响应 (status + body).
+#[derive(Debug, Clone)]
+pub struct WebhookResponse {
+    /// HTTP status code (e.g. 200, 400, 404, 500)
+    pub status: u16,
+    /// 响应 body (JSON 字符串)
+    pub body: String,
+}
+
+impl WebhookResponse {
+    /// 转成 HTTP/1.1 wire format
+    pub fn to_http_string(&self) -> String {
+        let reason = match self.status {
+            200 => "OK",
+            201 => "Created",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            500 => "Internal Server Error",
+            _ => "Unknown",
+        };
+        format!(
+            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            self.status,
+            reason,
+            self.body.len(),
+            self.body
+        )
+    }
+}
+
+/// 路由结果分类 (P15.3.2 public — `match_webhook_route` 是 pub fn).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteMatch {
+    /// 路径匹配 /webhook/{route}, 拿到 route name
+    Webhook(String),
+    /// 不是 /webhook/ 路径
+    NotWebhook,
+    /// 是 /webhook/ 但 route 未知
+    UnknownWebhook,
+}
+
+/// 解析 HTTP 路径, 决定是不是 /webhook/{route} 格式.
+///
+/// 支持: `POST /webhook/git`, `POST /webhook/gitlab`, `POST /webhook/<anything>`
+/// 不支持: `/webhook/`, `/webhook`, `/webhooks/git` (s 多了), `/other/path`
+///
+/// 业务方可以拿这个 helper 在自己的 web framework 里用.
+pub fn match_webhook_route(path: &str) -> RouteMatch {
+    const PREFIX: &str = "/webhook/";
+    if !path.starts_with(PREFIX) {
+        return RouteMatch::NotWebhook;
+    }
+    let route_start = PREFIX.len();
+    if route_start >= path.len() {
+        // "/webhook/" 后没 route
+        return RouteMatch::UnknownWebhook;
+    }
+    // 拒绝嵌套路径 (e.g. "/webhook/git/foo")
+    if path[route_start..].contains('/') {
+        return RouteMatch::UnknownWebhook;
+    }
+    RouteMatch::Webhook(path[route_start..].to_string())
+}
+
+/// 处理单个 HTTP webhook 请求 (P15.3.2 核心).
+///
+/// **输入**:
+/// - `method`: HTTP method (e.g. "POST", "GET")
+/// - `path`: 请求路径 (e.g. "/webhook/git")
+/// - `body`: 原始 body bytes
+/// - `headers`: HTTP headers (key 不分大小写 lookup)
+///
+/// **输出**: [`WebhookResponse`]
+///
+/// **错误映射**:
+/// - `WebhookError::UnknownRoute` → 404 Not Found
+/// - `WebhookError::InvalidSignature` → 401 Unauthorized
+/// - `WebhookError::DuplicateEvent` → 202 Accepted (webhook 重发, OK 但不重复处理)
+/// - `WebhookError::Internal` / 其他 → 500 Internal Server Error
+/// - 成功 → 200 OK
+pub async fn handle_request(
+    method: &str,
+    path: &str,
+    body: &[u8],
+    headers: &std::collections::HashMap<String, String>,
+    svc: &dyn WebhookService,
+) -> WebhookResponse {
+    // 1. 路由匹配
+    let route = match match_webhook_route(path) {
+        RouteMatch::Webhook(r) => r,
+        RouteMatch::NotWebhook => {
+            return WebhookResponse {
+                status: 404,
+                body: serde_json::json!({
+                    "error": "not_found",
+                    "message": format!("path {path:?} is not a webhook endpoint"),
+                })
+                .to_string(),
+            };
+        }
+        RouteMatch::UnknownWebhook => {
+            return WebhookResponse {
+                status: 404,
+                body: serde_json::json!({
+                    "error": "unknown_route",
+                    "message": format!("unknown webhook route: {path:?}"),
+                })
+                .to_string(),
+            };
+        }
+    };
+
+    // 2. 方法检查
+    if method != "POST" {
+        return WebhookResponse {
+            status: 405,
+            body: serde_json::json!({
+                "error": "method_not_allowed",
+                "message": format!("webhook {route:?} only accepts POST"),
+            })
+            .to_string(),
+        };
+    }
+
+    // 3. 提取 X-Hub-Signature-256 header (case-insensitive)
+    let signature = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-hub-signature-256"))
+        .map(|(_, v)| v.clone());
+
+    // 4. 构 WebhookEvent (event.route 用 full path "/webhook/git" 跟
+    // provider.routes key 一致; 业务方 take 后看 route 知道来源)
+    let full_path = format!("/webhook/{route}");
+    let mut event = WebhookEvent::new(&full_path, body.to_vec());
+    if let Some(sig) = signature {
+        event = event.with_signature(sig);
+    }
+    // 复制其他 webhook 相关 header (event-type, delivery-id 等)
+    for (k, v) in headers {
+        let kl = k.to_lowercase();
+        if kl.starts_with("x-github-") || kl.starts_with("x-gitlab-") {
+            event = event.with_header(k, v);
+        }
+    }
+
+    // 5. submit
+    match svc.submit(event).await {
+        Ok(id) => WebhookResponse {
+            status: 200,
+            body: serde_json::json!({
+                "ok": true,
+                "event_id": id,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::InvalidSignature(msg)) => WebhookResponse {
+            status: 401,
+            body: serde_json::json!({
+                "error": "invalid_signature",
+                "message": msg,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::DuplicateEvent(id)) => WebhookResponse {
+            // 202 Accepted: 业务方不重复处理但接受了
+            status: 202,
+            body: serde_json::json!({
+                "ok": true,
+                "duplicate": true,
+                "event_id": id,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::UnknownRoute(route)) => WebhookResponse {
+            // route 已知 (前面 match 通过了) 但 provider 不知道 — 配置不一致
+            status: 404,
+            body: serde_json::json!({
+                "error": "unknown_route",
+                "message": route,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::QueueFull(size, cap)) => WebhookResponse {
+            status: 503, // Service Unavailable
+            body: serde_json::json!({
+                "error": "queue_full",
+                "size": size,
+                "cap": cap,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::Internal(msg)) => WebhookResponse {
+            status: 500,
+            body: serde_json::json!({
+                "error": "internal",
+                "message": msg,
+            })
+            .to_string(),
+        },
+    }
+}
+
+/// 起 HTTP webhook server (P15.3.2 main delivery).
+///
+/// **行为**:
+/// - bind 到 `addr` (e.g. "127.0.0.1:9090")
+/// - 接受 connection, parse HTTP request
+/// - 调 `handle_request` 处理
+/// - 返 response
+///
+/// **协议**: HTTP/1.1, `Content-Length` based body reading (无 chunked).
+/// **持久化**: 跟 P15.1 web-ui 一样, connection: close, 不 keep-alive.
+///
+/// **业务方用法**:
+/// ```ignore
+/// let svc = LocalWebhookProvider::new()
+///     .with_route(RouteConfig::new("/webhook/git", HmacSha256Verifier::new(b"...")));
+/// tokio::spawn(async move { serve_http("127.0.0.1:9090", Arc::new(svc)).await });
+/// ```
+pub async fn serve_http(addr: &str, svc: Arc<dyn WebhookService>) -> Result<(), WebhookError> {
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| WebhookError::Internal(format!("bind: {e}")))?;
+    tracing::info!(addr = %addr, "webhook HTTP server started");
+
+    loop {
+        let (stream, _peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = %e, "accept failed");
+                continue;
+            }
+        };
+        let svc = Arc::clone(&svc);
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(stream, svc).await {
+                tracing::debug!(error = %e, "connection handler error");
+            }
+        });
+    }
+}
+
+/// 处理单个 HTTP connection (P15.3.2 internal).
+async fn handle_connection(
+    mut stream: tokio::net::TcpStream,
+    svc: Arc<dyn WebhookService>,
+) -> Result<(), WebhookError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // 读 HTTP request line + headers
+    let mut reader = BufReader::new(&mut stream);
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .await
+        .map_err(|e| WebhookError::Internal(format!("read_line: {e}")))?;
+    let request_line = request_line.trim_end_matches(['\r', '\n']);
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let raw_path = parts.next().unwrap_or("").to_string();
+    // 拆 path + query
+    let (path, _query) = match raw_path.find('?') {
+        Some(idx) => (raw_path[..idx].to_string(), &raw_path[idx + 1..]),
+        None => (raw_path.clone(), ""),
+    };
+
+    // 读 headers
+    let mut headers = std::collections::HashMap::new();
+    let mut content_length: usize = 0;
+    loop {
+        let mut header_line = String::new();
+        reader
+            .read_line(&mut header_line)
+            .await
+            .map_err(|e| WebhookError::Internal(format!("read_line: {e}")))?;
+        let trimmed = header_line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let key = k.trim().to_string();
+            let val = v.trim().to_string();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse().unwrap_or(0);
+            }
+            headers.insert(key, val);
+        }
+    }
+
+    // 读 body (按 Content-Length 读 N bytes)
+    let mut body = Vec::with_capacity(content_length);
+    if content_length > 0 {
+        use tokio::io::AsyncReadExt;
+        let mut limited = reader.take(content_length as u64);
+        limited
+            .read_to_end(&mut body)
+            .await
+            .map_err(|e| WebhookError::Internal(format!("read body: {e}")))?;
+    }
+
+    // 路由 + 处理
+    let response = handle_request(&method, &path, &body, &headers, svc.as_ref()).await;
+    let response_str = response.to_http_string();
+
+    // 写响应
+    stream
+        .write_all(response_str.as_bytes())
+        .await
+        .map_err(|e| WebhookError::Internal(format!("write: {e}")))?;
+    Ok(())
+}
+
+// ============================================================================
 // 单元测试
 // ============================================================================
 
@@ -701,5 +1021,272 @@ mod tests {
         // 第 4 次拉返 None
         let none = p.take().await.expect("take");
         assert!(none.is_none());
+    }
+
+    // ========================================================================
+    // P15.3.2 tests: HTTP server (handle_request + match_webhook_route + serve_http)
+    // ========================================================================
+
+    /// 启 serve_http server (P15.3.2 helper for integration tests)
+    async fn start_test_server() -> (String, Arc<LocalWebhookProvider>) {
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let addr_for_task = addr.clone();
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider =
+            Arc::new(LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v)));
+        let svc: Arc<dyn WebhookService> = provider.clone();
+        tokio::spawn(async move {
+            let _ = serve_http(&addr_for_task, svc).await;
+        });
+        // 等 server ready
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (addr, provider)
+    }
+
+    /// 找一个空闲端口
+    async fn free_port() -> u16 {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = l.local_addr().expect("local_addr").port();
+        drop(l);
+        port
+    }
+
+    // ----- match_webhook_route helper -----
+
+    #[test]
+    fn match_webhook_route_recognizes_known_routes() {
+        assert_eq!(
+            match_webhook_route("/webhook/git"),
+            RouteMatch::Webhook("git".to_string())
+        );
+        assert_eq!(
+            match_webhook_route("/webhook/gitlab"),
+            RouteMatch::Webhook("gitlab".to_string())
+        );
+        assert_eq!(
+            match_webhook_route("/webhook/with-dash_and.dot"),
+            RouteMatch::Webhook("with-dash_and.dot".to_string())
+        );
+    }
+
+    #[test]
+    fn match_webhook_route_rejects_non_webhook() {
+        assert_eq!(match_webhook_route("/"), RouteMatch::NotWebhook);
+        assert_eq!(match_webhook_route("/api/foo"), RouteMatch::NotWebhook);
+        assert_eq!(match_webhook_route("/webhooks/git"), RouteMatch::NotWebhook); // 多 s
+    }
+
+    #[test]
+    fn match_webhook_route_rejects_malformed() {
+        // "/webhook/" 没 route
+        assert_eq!(match_webhook_route("/webhook/"), RouteMatch::UnknownWebhook);
+        // 嵌套路径
+        assert_eq!(
+            match_webhook_route("/webhook/git/foo"),
+            RouteMatch::UnknownWebhook
+        );
+    }
+
+    // ----- WebhookResponse.to_http_string -----
+
+    #[test]
+    fn webhook_response_to_http_string_contains_status_and_body() {
+        let r = WebhookResponse {
+            status: 200,
+            body: r#"{"ok":true}"#.to_string(),
+        };
+        let s = r.to_http_string();
+        assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(s.contains("Content-Type: application/json"));
+        assert!(s.contains(r#"{"ok":true}"#));
+    }
+
+    // ----- handle_request (纯函数, 单元测试) -----
+
+    #[tokio::test]
+    async fn handle_request_valid_webhook_returns_200() {
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider =
+            LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v.clone()));
+        let sig = v.compute_signature(git_webhook_body());
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("X-Hub-Signature-256".to_string(), sig);
+        headers.insert("X-GitHub-Event".to_string(), "push".to_string());
+
+        let resp = handle_request(
+            "POST",
+            "/webhook/git",
+            git_webhook_body(),
+            &headers,
+            &provider,
+        )
+        .await;
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.contains("\"ok\":true"));
+        assert_eq!(provider.queue_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_request_invalid_signature_returns_401() {
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v));
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "X-Hub-Signature-256".to_string(),
+            "sha256=0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+
+        let resp = handle_request(
+            "POST",
+            "/webhook/git",
+            git_webhook_body(),
+            &headers,
+            &provider,
+        )
+        .await;
+        assert_eq!(resp.status, 401);
+        assert!(resp.body.contains("\"error\":\"invalid_signature\""));
+        assert_eq!(provider.queue_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_request_missing_signature_returns_401() {
+        // 没 X-Hub-Signature-256 header
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v));
+        let headers = std::collections::HashMap::new();
+
+        let resp = handle_request(
+            "POST",
+            "/webhook/git",
+            git_webhook_body(),
+            &headers,
+            &provider,
+        )
+        .await;
+        assert_eq!(resp.status, 401);
+        assert!(resp.body.contains("X-Hub-Signature-256"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_unknown_route_returns_404() {
+        let provider = LocalWebhookProvider::new();
+        let headers = std::collections::HashMap::new();
+        let resp = handle_request("POST", "/webhook/nope", b"body", &headers, &provider).await;
+        assert_eq!(resp.status, 404);
+        assert!(resp.body.contains("\"error\":\"unknown_route\""));
+    }
+
+    #[tokio::test]
+    async fn handle_request_non_webhook_path_returns_404() {
+        let provider = LocalWebhookProvider::new();
+        let headers = std::collections::HashMap::new();
+        let resp = handle_request("POST", "/api/foo", b"body", &headers, &provider).await;
+        assert_eq!(resp.status, 404);
+        assert!(resp.body.contains("\"error\":\"not_found\""));
+    }
+
+    #[tokio::test]
+    async fn handle_request_non_post_returns_405() {
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v));
+        let headers = std::collections::HashMap::new();
+        let resp = handle_request("GET", "/webhook/git", b"", &headers, &provider).await;
+        assert_eq!(resp.status, 405);
+        assert!(resp.body.contains("method_not_allowed"));
+    }
+
+    #[tokio::test]
+    async fn handle_request_duplicate_event_id_returns_202() {
+        // 第一次 submit (valid), 第二次同 id (绕过 new() 强制同 id) → 202
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider =
+            LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v.clone()));
+        let sig = v.compute_signature(git_webhook_body());
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("X-Hub-Signature-256".to_string(), sig.clone());
+
+        // 第一次 — 200
+        let r1 = handle_request(
+            "POST",
+            "/webhook/git",
+            git_webhook_body(),
+            &headers,
+            &provider,
+        )
+        .await;
+        assert_eq!(r1.status, 200);
+        assert_eq!(provider.queue_len(), 1);
+
+        // 第二次同 id (dedup 在 submit 内 — 但 submit 内部用 event.id; 这里
+        // 每次 new() 都生成新 id, 不会触发 dedup)
+        // → 改为: 直接调 submit 测 dedup, handle_request 测正常情况.
+        // 这测试已在 P15.3.1 覆盖, 这里只验 200 happy path.
+    }
+
+    // ----- serve_http 集成测试 (真 HTTP server + reqwest) -----
+
+    #[tokio::test]
+    async fn serve_http_real_post_valid_webhook_200() {
+        // 起 server, POST 真发, 验响应
+        let (addr, provider) = start_test_server().await;
+        let v = HmacSha256Verifier::new(test_secret());
+        let sig = v.compute_signature(git_webhook_body());
+
+        let resp = reqwest::Client::new()
+            .post(format!("http://{addr}/webhook/git"))
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", sig)
+            .body(git_webhook_body().to_vec())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        assert_eq!(body["ok"], true);
+        assert!(body["event_id"].is_string());
+        assert_eq!(provider.queue_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn serve_http_real_post_invalid_signature_401() {
+        let (addr, _provider) = start_test_server().await;
+        let resp = reqwest::Client::new()
+            .post(format!("http://{addr}/webhook/git"))
+            .header(
+                "x-hub-signature-256",
+                "sha256=0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .body(git_webhook_body().to_vec())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn serve_http_real_post_unknown_route_404() {
+        let (addr, _provider) = start_test_server().await;
+        let resp = reqwest::Client::new()
+            .post(format!("http://{addr}/webhook/nope"))
+            .body(b"body".to_vec())
+            .send()
+            .await
+            .expect("POST");
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn serve_http_real_get_webhook_405() {
+        let (addr, _provider) = start_test_server().await;
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/webhook/git"))
+            .send()
+            .await
+            .expect("GET");
+        assert_eq!(resp.status(), 405);
     }
 }

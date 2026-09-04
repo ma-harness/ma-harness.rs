@@ -30,7 +30,9 @@ subtle = { workspace = true }  # constant-time compare (timing attack 防护)
 hex = { workspace = true }  # X-Hub-Signature-256 格式 (sha256=<hex>)
 chrono = { workspace = true }  # 事件 timestamp
 uuid = { workspace = true }  # WebhookEvent id (UUID v4, dedup)
+serde_json = { workspace = true }  # P15.3.2 HTTP response body
 
 [dev-dependencies]
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }  # P15.3.2 HTTP 集成测试
