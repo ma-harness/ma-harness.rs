@@ -2892,6 +2892,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-web-ui"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "futures",
+ "ma-harness-cordis",
+ "ma-harness-core",
+ "ma-harness-seam",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mach2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,32 @@
+[package]
+name = "ma-harness-web-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness Web UI (P15.1.1 skeleton): WebUiServer trait + std/tokio HTTP server + SSE endpoint + HTML shell. P15.1 (8-12 weeks) starts here."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+
+# 外部 — std + tokio 避免引新 framework (salvo/axum)
+tokio = { workspace = true, features = ["net", "io-util", "sync", "rt", "rt-multi-thread", "macros", "time"] }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }  # 业务方测试 SSE
+futures = { workspace = true }
