@@ -52,16 +52,17 @@
 //! - 可维护: 模块化分块, 类型集中 lib.rs
 //! - 鲁棒: IO 错误归一化, kill 后 read 返明确错误, 0 active handle 也不 panic
 //! - 安全: 不 `unsafe`, env 显式 (不继承父进程), read 有 max_bytes cap
-//! - 可测: 8+ 单元测试 (validate / handle / list / kill unknown / spawn reject / read write / 多并发)
-//! - 可扩展: portable-pty 抽象 → P15.2.2 接 ctx 注入, P15.2.3 加 streaming + try_wait
+//! - 可测: 16+ 单元测试 (validate / handle / list / kill unknown / spawn reject / read write / 多并发 / try_wait)
+//! - 可扩展: portable-pty 抽象 → P15.2.2 接 ctx 注入, P15.2.3 try_wait 实现, P15.2.4 streaming + resume
 //!
-//! # 限制 (Limitations) — P15.2.1
+//! # 限制 (Limitations) — P15.2.3
 //!
 //! - portable-pty 当前默认 backend: ConPTY on Windows 10+, openpty on POSIX
-//! - 没接 ctx.terminals 注入 (P15.2.2 接入 ma-harness-cordis 容器)
-//! - read 用 max_bytes cap, 没 timeout (P15.2.3 加 read timeout via tokio::time::timeout)
-//! - try_wait 暂未实现 (P15.2.3)
+//! - read 是 one-shot (可能只读到 chunk 1) — 业务方用 retry pattern 拿全部 output
+//!   (P15.2.4+ 加 streaming read 用 mpsc channel 持续 read 到 buffer)
+//! - try_wait 只 cache exit code (不存 signal 信息) — 业务方 P15.2.4+ 需要再补
 //! - 没 resume across reload (P15.2.4 加 session_id → pty_handle 持久化)
+//! - kill 后 entry 立即移除 — try_wait 返 HandleNotFound (设计选择: 简化状态机)
 //!
 //! [dsh-feature-parity-table §2]: https://github.com/ma-harness/ma-harness.rs/blob/main/docs/en/dsh-feature-parity-table.md#2-capability-seams
 
@@ -249,7 +250,7 @@ pub trait PtyService: Send + Sync + 'static {
     async fn kill(&self, handle: &TerminalHandle) -> Result<(), TerminalError>;
     /// 列所有活跃 handle.
     async fn list(&self) -> Result<Vec<TerminalHandle>, TerminalError>;
-    /// 非阻塞 poll child 退出 — `None` = 还在跑, `Some(code)` = 已退出.
+    /// 非阻塞 poll child 退出 — `None` = 还在跑, `Some(code)` = 已退出 (P15.2.3 新增).
     async fn try_wait(&self, handle: &TerminalHandle) -> Result<Option<i32>, TerminalError>;
     /// Provider 标识
     fn provider_name(&self) -> &'static str;
@@ -269,6 +270,9 @@ struct PtyEntry {
     reader: Mutex<Box<dyn Read + Send>>,
     /// writer 端 (写 child stdin)
     writer: Mutex<Box<dyn Write + Send>>,
+    /// P15.2.3: cached child exit code. `None` = 还在跑, `Some(code)` = 已退出.
+    /// 写入者是后台 wait task (spawn 时启动), 读是 try_wait.
+    exit_status: Arc<Mutex<Option<i32>>>,
 }
 
 /// 本地 PTY provider (P15.2.1 主交付).
@@ -317,11 +321,14 @@ impl LocalPtyProvider {
 }
 
 /// 在 spawn_blocking 闭包内 sync spawn 1 条 PTY.
+///
+/// **P15.2.3 变化**: 返 `(handle, child)`, 让 spawn() 拿 child 启后台 wait task
+/// (child.wait() 阻塞, 缓存 exit code 给 try_wait).
 fn spawn_sync(
     spec: &TerminalSpec,
     handles: Arc<Mutex<HashMap<TerminalHandle, PtyEntry>>>,
     _next_id: &AtomicU64,
-) -> Result<TerminalHandle, TerminalError> {
+) -> Result<(TerminalHandle, Box<dyn portable_pty::Child + Send + Sync>), TerminalError> {
     spec.validate()?;
 
     let pty_system = native_pty_system();
@@ -360,15 +367,21 @@ fn spawn_sync(
         .map_err(|e| TerminalError::Spawn(format!("take_writer: {e}")))?;
 
     let handle = TerminalHandle(Uuid::new_v4().to_string());
+    let exit_status: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let entry = PtyEntry {
         _master: pair.master,
         _killer: killer,
         reader: Mutex::new(reader),
         writer: Mutex::new(writer),
+        exit_status: Arc::clone(&exit_status),
     };
 
     handles.lock().insert(handle.clone(), entry);
-    Ok(handle)
+
+    // 返回 child 给 spawn() 让它启 wait task.
+    // portable-pty 0.8 的 Child: trait Child: Send + Sync, wait(&mut self).
+    // spawn_command 返的 child 已经是 Box<dyn Child + Send + Sync>, 直接 move.
+    Ok((handle, child))
 }
 
 #[async_trait]
@@ -377,14 +390,35 @@ impl PtyService for LocalPtyProvider {
         let spec = spec.clone();
         let handles = Arc::clone(&self.handles);
         let next_id = Arc::new(self._next_id.load(Ordering::Relaxed));
-        tokio::task::spawn_blocking(move || {
-            // 注: 借用 AtomicU64 一次值不行 (next_id 是 &AtomicU64, 闭包要求 'static).
-            // 实际我们不需要 next_id 在 spawn 内使用 (UUID v4 已够), 留 placeholder.
+        let (handle, mut child) = tokio::task::spawn_blocking(move || {
             let _ = next_id;
             spawn_sync(&spec, handles, &AtomicU64::new(0))
         })
         .await
-        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))?
+        .map_err(|e| TerminalError::PtyOpen(format!("join error: {e}")))??;
+
+        // P15.2.3: 启后台 wait task — child.wait() 阻塞, 完成后缓存 exit code
+        // (Arc<Mutex<Option<i32>>> 在 entry 里). try_wait 读这个缓存.
+        // 注: child.wait() 是 portable_pty 0.8 Child::wait(&mut self), 阻塞到 child 退出.
+        //     我们 move child 进闭包, 独占. wait 完 drop child (释放 child 资源).
+        let handles_for_wait = Arc::clone(&self.handles);
+        let handle_for_wait = handle.clone();
+        tokio::task::spawn(async move {
+            let exit_result = tokio::task::spawn_blocking(move || child.wait()).await;
+            if let Ok(Ok(status)) = exit_result {
+                // portable_pty::ExitStatus: u32 code + Option<signal>
+                // 注: signal-killed 没 exit code, 我们只 cache 正常 exit
+                //     (signal 信息丢失; 业务方 P15.2.4+ 可加)
+                let code = status.exit_code() as i32;
+                // 缓存到 entry
+                if let Some(entry) = handles_for_wait.lock().get(&handle_for_wait) {
+                    *entry.exit_status.lock() = Some(code);
+                }
+            }
+            // wait 完成但 entry 可能已被 kill/移除 — drop guard, 不报错
+        });
+
+        Ok(handle)
     }
 
     async fn write(&self, handle: &TerminalHandle, data: &[u8]) -> Result<(), TerminalError> {
@@ -454,14 +488,15 @@ impl PtyService for LocalPtyProvider {
         Ok(map.keys().cloned().collect())
     }
 
-    async fn try_wait(&self, _handle: &TerminalHandle) -> Result<Option<i32>, TerminalError> {
-        // P15.2.1 minimal: try_wait 暂不实现 (portable-pty 0.8 Child 没有 sync try_wait)
-        // P15.2.3 用 child.wait() 阻塞 + mpsc 转发实现
-        Err(TerminalError::Unsupported {
-            provider: "local-pty",
-            operation: "try_wait",
-            reason: "try_wait not yet implemented in P15.2.1 (P15.2.3 plan)".into(),
-        })
+    async fn try_wait(&self, handle: &TerminalHandle) -> Result<Option<i32>, TerminalError> {
+        // P15.2.3: 读 entry.exit_status (后台 wait task 缓存)
+        // - None: child 还在跑 (wait task 还没 set)
+        // - Some(code): child 已退出, code 是 exit code
+        let map = self.handles.lock();
+        let entry = map
+            .get(handle)
+            .ok_or_else(|| TerminalError::HandleNotFound(handle.clone()))?;
+        Ok(*entry.exit_status.lock())
     }
 
     fn provider_name(&self) -> &'static str {
@@ -745,17 +780,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_pty_provider_try_wait_is_unsupported_in_p15_2_1() {
+    async fn local_pty_provider_try_wait_unknown_handle_returns_handle_not_found() {
+        // P15.2.3: try_wait 真正实现 — 读 entry.exit_status.
+        // 未知 handle 返 HandleNotFound (不是 Unsupported)
         let p = LocalPtyProvider::new();
         let bogus = TerminalHandle("bogus".into());
         let err = p.try_wait(&bogus).await.unwrap_err();
-        assert!(matches!(
-            err,
-            TerminalError::Unsupported {
-                operation: "try_wait",
-                ..
+        assert!(matches!(err, TerminalError::HandleNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn local_pty_provider_try_wait_running_child_returns_none() {
+        // P15.2.3: 短命令 (e.g. `cmd /C pause` 等用户输入) 不会立即退出,
+        // try_wait 在 wait task 完成前返 None.
+        // 注: cmd /C pause 等不到输入会 hang, 我们 spawn cmd.exe 不带 /C
+        // 也不会立即退出 — 等用户输入.
+        let p = LocalPtyProvider::new();
+        let handle = p.spawn(&TerminalSpec::new("cmd.exe")).await.expect("spawn");
+        // 立即 try_wait — wait task 还没完成
+        let result = p.try_wait(&handle).await.expect("try_wait");
+        assert_eq!(result, None, "running child should return None");
+        // 清理
+        p.kill(&handle).await.expect("kill");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn local_pty_provider_try_wait_after_quick_exit_returns_some() {
+        // P15.2.3 端到端: spawn 一个快速退出的命令, 等 wait task 完成, try_wait 返 Some(0)
+        let p = LocalPtyProvider::new();
+        let handle = p
+            .spawn(&TerminalSpec::new("cmd.exe").arg("/C").arg("exit 42"))
+            .await
+            .expect("spawn");
+        // 等 wait task 完成 (cmd /C exit 42 应该 < 1s)
+        let mut got = None;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if let Some(code) = p.try_wait(&handle).await.expect("try_wait") {
+                got = Some(code);
+                break;
             }
-        ));
+        }
+        assert_eq!(got, Some(42), "exit code should be 42");
+        // entry 还在 (没 kill), 但 wait task 已 set
+        assert_eq!(p.active_count(), 1);
+        // 清理
+        p.kill(&handle).await.expect("kill");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn local_pty_provider_try_wait_after_kill_returns_handle_not_found() {
+        // P15.2.3: kill 移除 entry, try_wait 返 HandleNotFound (不返 stale data)
+        // 业务方应在 kill 之前 try_wait 或在 kill 后知道 handle 失效
+        let p = LocalPtyProvider::new();
+        let handle = p
+            .spawn(&TerminalSpec::new("cmd.exe")) // 不带 /C, 持续等输入
+            .await
+            .expect("spawn");
+        p.kill(&handle).await.expect("kill");
+        // kill 后 entry 已移除
+        let err = p.try_wait(&handle).await.unwrap_err();
+        assert!(
+            matches!(err, TerminalError::HandleNotFound(_)),
+            "expected HandleNotFound after kill, got {err:?}"
+        );
     }
 
     #[tokio::test]
