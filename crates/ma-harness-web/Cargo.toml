@@ -1,0 +1,33 @@
+[package]
+name = "ma-harness-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness web capability (ctx.web): WebSearch + WebFetch traits + HttpFetchProvider + BraveSearch/DuckDuckGo stubs. P14.6 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部 — reqwest 已有 rustls-tls 配 workspace, 用作 HTTP client
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+url = "2"
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util"] }
+pretty_assertions = { workspace = true }
