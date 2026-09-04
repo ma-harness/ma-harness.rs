@@ -1,0 +1,36 @@
+[package]
+name = "ma-harness-webhook"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness webhook capability (ctx.webhookRuntime): HMAC-SHA256 signature verification + dispatch queue for incoming webhooks (GitHub/GitLab/Generic). P15.3 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 (跟 subprocess / shell / terminal 模式一致)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }  # ctx_key! macro
+
+# 外部
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+# P15.3.1 HMAC-SHA256 signature verification
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }  # constant-time compare (timing attack 防护)
+hex = { workspace = true }  # X-Hub-Signature-256 格式 (sha256=<hex>)
+chrono = { workspace = true }  # 事件 timestamp
+uuid = { workspace = true }  # WebhookEvent id (UUID v4, dedup)
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
