@@ -69,7 +69,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
@@ -105,7 +105,22 @@ pub enum WebUiError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SseEvent {
     /// SessionEvent (业务方喂 ma-harness-core::SessionEvent JSON 串)
-    SessionEvent(String),
+    SessionEvent {
+        /// 业务方 session id (P15.1.2: 多 session filter)
+        session_id: String,
+        /// 事件 JSON 字符串
+        json: String,
+    },
+    /// Session 开始 (P15.1.2 新增)
+    SessionStart {
+        /// 业务方 session id
+        session_id: String,
+    },
+    /// Session 结束 (P15.1.2 新增)
+    SessionEnd {
+        /// 业务方 session id
+        session_id: String,
+    },
     /// 自定义消息 (e.g. 错误 / 状态)
     Message(String),
     /// Heartbeat (keep-alive, 防 proxy / browser timeout)
@@ -116,13 +131,30 @@ pub enum SseEvent {
 
 impl SseEvent {
     /// 转成 SSE wire format (`data: ...\n\n`)
-    #[allow(dead_code)] // P15.1.1 预留 helper, P15.1.2+ 会在 handle_connection 里用
-    fn to_sse_string(&self) -> String {
+    pub fn to_sse_string(&self) -> String {
         match self {
-            SseEvent::SessionEvent(json) => format!("event: session\ndata: {json}\n\n"),
+            SseEvent::SessionEvent { session_id, json } => {
+                format!("event: session\nid: {session_id}\ndata: {json}\n\n")
+            }
+            SseEvent::SessionStart { session_id } => {
+                format!("event: session_start\nid: {session_id}\ndata: start\n\n")
+            }
+            SseEvent::SessionEnd { session_id } => {
+                format!("event: session_end\nid: {session_id}\ndata: end\n\n")
+            }
             SseEvent::Message(msg) => format!("event: message\ndata: {msg}\n\n"),
             SseEvent::Heartbeat => ": heartbeat\n\n".to_string(),
             SseEvent::Done => "event: done\ndata: end\n\n".to_string(),
+        }
+    }
+
+    /// 拿 session_id (如果有)
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            SseEvent::SessionEvent { session_id, .. }
+            | SseEvent::SessionStart { session_id }
+            | SseEvent::SessionEnd { session_id } => Some(session_id),
+            _ => None,
         }
     }
 }
@@ -265,18 +297,20 @@ async fn handle_connection(
     // 简单 parse: "GET /path HTTP/1.1"
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
-    let path = parts.next().unwrap_or("");
+    let raw_path = parts.next().unwrap_or("");
 
     if method != "GET" {
-        // 简化: 仅支持 GET
         let response = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n";
         stream.write_all(response.as_bytes()).await?;
         return Ok(());
     }
 
+    // P15.1.2: 拆 path + query string
+    let (path, query) = split_path_query(raw_path);
+    let query_params = parse_query(query);
+
     match path {
         "/" | "/index.html" => {
-            // 返 HTML shell
             let body = html_shell();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -285,30 +319,83 @@ async fn handle_connection(
             );
             stream.write_all(response.as_bytes()).await?;
         }
+        "/api/health" => {
+            // P15.1.2 新增: health check endpoint
+            let body = serde_json::json!({
+                "status": "ok",
+                "version": env!("CARGO_PKG_VERSION"),
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
         "/api/sse" => {
+            // P15.1.2: 支持 ?session=xxx query filter
+            let session_filter = query_params.get("session").cloned();
+
+            // Split stream: reader 独立, writer 独立 (避免 borrow 冲突)
+            let (read_half, mut write_half) = stream.split();
+            let mut reader = BufReader::new(read_half);
+
             // 返 SSE stream
             let prelude = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n";
-            stream.write_all(prelude.as_bytes()).await?;
+            write_half.write_all(prelude.as_bytes()).await?;
 
-            // 注册 active SSE sender (P15.1.2: 多 channel)
+            // 立即发 session_filter hint
+            if let Some(ref sid) = session_filter {
+                let hint = SseEvent::Message(format!("subscribed to session: {sid}"));
+                write_half
+                    .write_all(hint.to_sse_string().as_bytes())
+                    .await?;
+            }
+
+            // 注册 active SSE sender (per-connection filter channel)
+            let (filter_tx, mut filter_rx) = mpsc::unbounded_channel::<SseEvent>();
             {
                 let mut active = active_sse.lock().await;
-                *active = Some(sse_tx.clone());
+                *active = Some(filter_tx);
             }
 
-            // 持续读 (hold connection), 直到 client 断开
             let mut buf = [0u8; 1024];
-            let mut reader = BufReader::new(&mut stream);
+
             loop {
-                match reader.read(&mut buf).await {
-                    Ok(0) => break,    // client 断开
-                    Ok(_) => continue, // 忽略 client data
-                    Err(_) => break,
+                tokio::select! {
+                    _ = read_with_timeout(&mut reader, &mut buf) => {
+                        break; // client 断开或超时
+                    }
+                    event = filter_rx.recv() => {
+                        match event {
+                            Some(e) => {
+                                // 过滤: session_filter 不匹配则跳过
+                                if let Some(filter) = &session_filter {
+                                    if let Some(e_sid) = e.session_id() {
+                                        if e_sid != filter {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                let sse = e.to_sse_string();
+                                if write_half.write_all(sse.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => {
+                                let done = SseEvent::Done.to_sse_string();
+                                let _ = write_half.write_all(done.as_bytes()).await;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+            // 注: sse_tx 没在此函数用 (per-connection filter_tx 替代), 保留参数兼容性
+            let _ = sse_tx;
         }
         _ => {
-            // 404
             let body = "Not Found";
             let response = format!(
                 "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -319,6 +406,42 @@ async fn handle_connection(
         }
     }
     Ok(())
+}
+
+/// 拆 path 和 query string (P15.1.2 helper)
+fn split_path_query(raw: &str) -> (&str, &str) {
+    match raw.find('?') {
+        Some(idx) => (&raw[..idx], &raw[idx + 1..]),
+        None => (raw, ""),
+    }
+}
+
+/// Parse query string to HashMap (P15.1.2 简化版: 不支持重复 key / url decode)
+fn parse_query(query: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if query.is_empty() {
+        return map;
+    }
+    for pair in query.split('&') {
+        if let Some(eq) = pair.find('=') {
+            map.insert(pair[..eq].to_string(), pair[eq + 1..].to_string());
+        }
+    }
+    map
+}
+
+/// 读 client data with 30s timeout (P15.1.2 helper, 防止僵尸连接)
+async fn read_with_timeout<R: tokio::io::AsyncBufRead + Unpin + Send>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
+    use tokio::io::AsyncReadExt;
+    match tokio::time::timeout(std::time::Duration::from_secs(30), reader.read(buf)).await {
+        Ok(Ok(0)) => Ok(0),
+        Ok(Ok(n)) => Ok(n),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Ok(0), // 超时算断
+    }
 }
 
 // ============================================================================
@@ -444,10 +567,29 @@ mod tests {
 
     #[tokio::test]
     async fn sse_event_to_sse_string() {
-        let session = SseEvent::SessionEvent(r#"{"id":"1"}"#.into());
+        let session = SseEvent::SessionEvent {
+            session_id: "s1".into(),
+            json: r#"{"id":"1"}"#.into(),
+        };
         assert_eq!(
             session.to_sse_string(),
-            "event: session\ndata: {\"id\":\"1\"}\n\n"
+            "event: session\nid: s1\ndata: {\"id\":\"1\"}\n\n"
+        );
+
+        let start = SseEvent::SessionStart {
+            session_id: "s1".into(),
+        };
+        assert_eq!(
+            start.to_sse_string(),
+            "event: session_start\nid: s1\ndata: start\n\n"
+        );
+
+        let end = SseEvent::SessionEnd {
+            session_id: "s1".into(),
+        };
+        assert_eq!(
+            end.to_sse_string(),
+            "event: session_end\nid: s1\ndata: end\n\n"
         );
 
         let msg = SseEvent::Message("hello".into());
