@@ -26,6 +26,7 @@ members = [
     "crates/ma-harness-web",  # 2026-09-04 (Day 101+32): P14.6.1 ctx.web 能力缝 (HTTP fetch + search stub)
     "crates/ma-harness-todo",  # 2026-09-04 (Day 101+32): P14.7.1 ctx.todo + ctx.plan 能力缝
     "crates/ma-harness-session",  # 2026-09-04 (Day 101+32): P14.8.1 ctx.sessions fork + ctx.goals + ctx.sessionTitle
+    "crates/ma-harness-profile",  # 2026-09-04 (Day 101+32): P14.9.1 profile system (5 default profiles)
     "plugins/ma-harness-plugin-hello",
     "plugins/ma-harness-plugin-bash",
     "plugins/ma-harness-plugin-fs",
