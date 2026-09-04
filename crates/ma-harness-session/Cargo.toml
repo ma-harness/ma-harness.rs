@@ -1,0 +1,33 @@
+[package]
+name = "ma-harness-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness session capability (P14.8): EventForker (sessions.fork) + Goal + TitleProvider. dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部 — 绑 ma-harness-core EventLog
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.0" }
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
