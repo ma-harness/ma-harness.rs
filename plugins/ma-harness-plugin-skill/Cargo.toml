@@ -17,12 +17,16 @@ ma-harness-seam = { path = "../../crates/ma-harness-seam", version = "0.1.0" }
 ma-harness-cordis = { path = "../../crates/ma-harness-cordis", version = "0.1.0" }
 ma-harness-plugin-macro = { path = "../../crates/ma-harness-plugin-macro", version = "0.1.1" }
 ma-harness-core = { path = "../../crates/ma-harness-core", version = "0.1.0" }
+# P14.3.2: 走 ctx.skill (ma-harness-skill) 替代直接 yaml loader
+ma-harness-skill = { path = "../../crates/ma-harness-skill", version = "0.1.0" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "fs"] }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

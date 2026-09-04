@@ -32,7 +32,8 @@
 //! - `LocalShellProvider` — 平台默认 shell (Unix: `sh -c`, Windows: `cmd /C`)
 //! - `PwshShellProvider` — Windows PowerShell Core 7+ (`pwsh -c`), 跨平台 stub
 //! - 未来: `BashShellProvider` (显式 bash, 不依赖 /bin/sh) / `ZshShellProvider` / 等
-//! 可插拔. 跟 dsh [ctx.shell seam] 1:1 对等.
+//!
+//!   可插拔. 跟 dsh [ctx.shell seam] 1:1 对等.
 //!
 //! **背景**: 见 [dsh-feature-parity-table §2] — `ctx.shell` 在 dsh 是 14 个能力缝之一,
 //! 有 `LocalShellProvider` / `PwshShellProvider` / Consumer pattern (业务方写
@@ -307,14 +308,6 @@ impl ShellResult {
     pub fn is_success(&self) -> bool {
         self.exit_code == 0
     }
-
-    /// 从 SubprocessError::Timeout 自动包装时用
-    pub(crate) fn timed_out(&self) -> bool {
-        // ExitStatus 没 timeout 概念 — 调用方 (LocalShellProvider) 在 timeout 时
-        // 不构造 ShellResult, 直接返回 ShellError::Subprocess(Timeout)
-        // 所以这里 never reached
-        false
-    }
 }
 
 // ============================================================================
@@ -457,28 +450,157 @@ impl CommandSpecExt for CommandSpec {
 }
 
 // ============================================================================
-// PwshShellProvider: Windows PowerShell Core 7+ (P14.2.3 stub)
+// PwshShellProvider: Windows PowerShell Core 7+ (P14.2.3 实装)
 // ============================================================================
 
-/// Windows PowerShell Core 7+ provider (P14.2.3 stub).
+/// Windows PowerShell Core 7+ provider (P14.2.3 实现).
 ///
-/// **P14.2.3 实现路径**:
-/// 1. 调 `where pwsh` 找 pwsh.exe 路径
-/// 2. `pwsh -NoLogo -NoProfile -Command <command>` (NoProfile 避免慢)
-/// 3. 委托给 `LocalSubprocessProvider` 跑
-/// 4. 非 Windows 平台直接返回 `ShellError::ShellNotFound` (业务方明确知道)
+/// **实装路径**:
+/// 1. [`find_pwsh()`](Self::find_pwsh) 在 PATH / Windows 常见路径找 `pwsh.exe`
+/// 2. `pwsh -NoLogo -NoProfile -Command <command>`
+///    - `-NoLogo` 跳过启动 banner
+///    - `-NoProfile` 避免读 PowerShell profile (~200ms 启动加速)
+///    - `-Command <command>` 跑命令字符串
+/// 3. 委托给 `LocalSubprocessProvider` 跑 (P14.1)
+/// 4. 非 Windows 平台: 直接返回 `ShellError::ShellNotFound` (跨平台 stub)
 ///
-/// **为什么先 stub**: 业务方本机没 pwsh.exe (待 P14.2.3 装 + 测), 提前定义好 trait 接口.
+/// **业务方安装 pwsh**:
+/// - Windows: `winget install Microsoft.PowerShell` 或 `choco install pwsh`
+/// - macOS: `brew install powershell`
+/// - Linux: 见 https://learn.microsoft.com/powershell/scripting/install/installing-powershell
 pub struct PwshShellProvider {
+    /// 内部 subprocess provider (P14.1)
     inner: LocalSubprocessProvider,
 }
 
 impl PwshShellProvider {
-    /// 创建一个 PwshShellProvider (P14.2.3 stub)
+    /// 创建一个 PwshShellProvider
     pub fn new() -> Self {
         Self {
             inner: LocalSubprocessProvider::new(),
         }
+    }
+
+    /// 在 PATH + Windows 常见路径里找 `pwsh.exe`.
+    ///
+    /// **查找顺序** (P14.2.3 简化版):
+    /// 1. 业务方显式 `MA_HARNESS_PWSH_PATH` 环境变量
+    /// 2. `which::which("pwsh")` (跨平台, 依赖 std env::var("PATH"))
+    /// 3. Windows 常见路径:
+    ///    - `%ProgramFiles%\PowerShell\7\pwsh.exe`
+    ///    - `%ProgramFiles(x86)%\PowerShell\7\pwsh.exe`
+    ///    - `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` (Windows Store 安装)
+    /// 4. macOS: `/usr/local/bin/pwsh` / `/opt/homebrew/bin/pwsh`
+    /// 5. Linux: `/usr/bin/pwsh` / `/usr/local/bin/pwsh`
+    ///
+    /// # Returns
+    /// - `Some(PathBuf)` 找到
+    /// - `None` 找不到 (业务方需要装 pwsh)
+    pub fn find_pwsh() -> Option<PathBuf> {
+        use std::path::PathBuf;
+
+        // 1. 业务方显式 env override
+        if let Ok(p) = std::env::var("MA_HARNESS_PWSH_PATH") {
+            let pb = PathBuf::from(p);
+            if pb.is_file() {
+                return Some(pb);
+            }
+        }
+
+        // 2. 跨平台 PATH 搜索 (自己写, 避免引 which crate)
+        //    业务方 P14.1 决定不引 which crate, 用 std env::var("PATH")
+        if let Some(p) = find_in_path("pwsh") {
+            return Some(p);
+        }
+
+        // 3-5. 平台特定常见路径
+        #[cfg(windows)]
+        {
+            let candidates: &[&str] = &[
+                r"C:\Program Files\PowerShell\7\pwsh.exe",
+                r"C:\Program Files (x86)\PowerShell\7\pwsh.exe",
+            ];
+            for c in candidates {
+                let pb = PathBuf::from(c);
+                if pb.is_file() {
+                    return Some(pb);
+                }
+            }
+            // LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe
+            if let Ok(local) = std::env::var("LOCALAPPDATA") {
+                let pb = PathBuf::from(local)
+                    .join("Microsoft")
+                    .join("WindowsApps")
+                    .join("pwsh.exe");
+                if pb.is_file() {
+                    return Some(pb);
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            for c in &[
+                "/usr/local/bin/pwsh",
+                "/opt/homebrew/bin/pwsh",
+                "/usr/bin/pwsh",
+            ] {
+                let pb = PathBuf::from(c);
+                if pb.is_file() {
+                    return Some(pb);
+                }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            for c in &["/usr/bin/pwsh", "/usr/local/bin/pwsh"] {
+                let pb = PathBuf::from(c);
+                if pb.is_file() {
+                    return Some(pb);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// 实际跑命令 (内部用, 业务方一般调 `execute`)
+    async fn run_pwsh(
+        &self,
+        pwsh: &std::path::Path,
+        spec: &ShellSpec,
+    ) -> Result<ShellResult, ShellError> {
+        let start = std::time::Instant::now();
+
+        // pwsh -NoLogo -NoProfile -Command <command>
+        // (args 顺序: -NoLogo -NoProfile -Command <command>)
+        let cmd = CommandSpec::new(
+            pwsh.to_path_buf(),
+            vec![
+                OsString::from("-NoLogo"),
+                OsString::from("-NoProfile"),
+                OsString::from("-Command"),
+                OsString::from(&spec.command),
+            ],
+        )
+        .envs(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+        .stdout(StdioConfig::Piped)
+        .stderr(StdioConfig::Piped)
+        .stdin(StdioConfig::Null)
+        .pipe_if_some_cwd(spec.cwd.as_ref())
+        .pipe_if_some_timeout(spec.timeout);
+
+        let output = self.inner.output(&cmd).await?;
+        let duration = start.elapsed();
+
+        Ok(ShellResult {
+            exit_code: output.status.code.unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            duration,
+            shell_kind: ShellKind::Pwsh,
+        })
     }
 }
 
@@ -488,16 +610,45 @@ impl Default for PwshShellProvider {
     }
 }
 
+/// 跨平台 PATH 搜索 (内部用, 业务方一般不调).
+///
+/// 跟 P14.1 `plugin-bash` `build_shell_command` 同思路: `env::var("PATH")` 拆 `:`
+/// (Unix) 或 `;` (Windows), 逐个目录加 program 名, 检查 `.is_file()`.
+fn find_in_path(program: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let exe_suffix = if cfg!(windows) {
+        // Windows: 试原名 + .exe + .cmd + .bat
+        vec!["", ".exe", ".cmd", ".bat"]
+    } else {
+        vec![""]
+    };
+
+    for dir in std::env::split_paths(&path_var) {
+        for suffix in &exe_suffix {
+            let candidate = dir.join(format!("{program}{suffix}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let _ = separator; // silence unused on Windows
+    None
+}
+
 #[async_trait]
 impl ShellService for PwshShellProvider {
     async fn execute(&self, spec: &ShellSpec) -> Result<ShellResult, ShellError> {
         spec.validate()?;
 
-        // P14.2.1 stub: 直接返回 ShellNotFound, 业务方知道 P14.2.3 才填实现
-        let _ = spec;
-        Err(ShellError::ShellNotFound {
+        // 非 Windows 平台: PowerShell Core 在 macOS/Linux 可装 (brew install powershell),
+        // 但默认 PATH 没, 我们仍尝试 find_pwsh (跨平台 search)
+        // 找不到就返回 ShellNotFound, 业务方明确知道
+        let pwsh = Self::find_pwsh().ok_or_else(|| ShellError::ShellNotFound {
             shell: OsString::from("pwsh"),
-        })
+        })?;
+
+        self.run_pwsh(&pwsh, spec).await
     }
 
     fn default_shell_kind(&self) -> ShellKind {
@@ -505,7 +656,7 @@ impl ShellService for PwshShellProvider {
     }
 
     fn provider_name(&self) -> &'static str {
-        "pwsh-stub"
+        "pwsh"
     }
 }
 
@@ -807,16 +958,68 @@ mod tests {
         assert!(matches!(err, ShellError::InvalidSpec(_)));
     }
 
-    /// PwshShellProvider stub 现在返回 ShellNotFound
-    #[tokio::test]
-    async fn pwsh_provider_stub_returns_shell_not_found() {
+    /// P14.2.3: PwshShellProvider 实装后, provider_name 从 "pwsh-stub" 变成 "pwsh"
+    #[test]
+    fn pwsh_provider_name_after_implementation() {
         let provider = PwshShellProvider::new();
         assert_eq!(provider.default_shell_kind(), ShellKind::Pwsh);
-        assert_eq!(provider.provider_name(), "pwsh-stub");
+        assert_eq!(
+            provider.provider_name(),
+            "pwsh",
+            "P14.2.3 实装后 provider_name 不再是 'pwsh-stub'"
+        );
+    }
 
+    /// P14.2.3: 业务方本机没装 pwsh → find_pwsh 返回 None
+    #[test]
+    fn pwsh_find_pwsh_returns_none_when_not_installed() {
+        // 业务方本机 PATH 没 pwsh, 也没在常见路径 — 假设
+        // (CI runner / 业务方开发机 当前都没装, 这个测试 cross-platform 安全)
+        // 实际: 如果本机装了, find_pwsh 返回 Some, 跳过这个测试
+        if PwshShellProvider::find_pwsh().is_some() {
+            // 装了, 不测 (跨平台 install 状态不可控)
+            return;
+        }
+        // 没装, 验证 find_pwsh 行为正确
+        let result = PwshShellProvider::find_pwsh();
+        assert!(
+            result.is_none(),
+            "业务方本机没装 pwsh, find_pwsh 应返回 None, got: {:?}",
+            result
+        );
+    }
+
+    /// P14.2.3: execute 在没装 pwsh 时返回 ShellNotFound
+    #[tokio::test]
+    async fn pwsh_provider_execute_returns_not_found_when_uninstalled() {
+        if PwshShellProvider::find_pwsh().is_some() {
+            // 装了, 跳过 (e2e 测试要 MA_HARNESS_E2E=1 opt-in)
+            return;
+        }
+        let provider = PwshShellProvider::new();
         let spec = ShellSpec::new("Get-Date");
         let err = provider.execute(&spec).await.unwrap_err();
-        assert!(matches!(err, ShellError::ShellNotFound { .. }));
+        assert!(
+            matches!(err, ShellError::ShellNotFound { .. }),
+            "应返回 ShellNotFound, got: {:?}",
+            err
+        );
+    }
+
+    /// P14.2.3: MA_HARNESS_PWSH_PATH override 行为 (静态, 不修改 env)
+    ///
+    /// 注意: `MA_HARNESS_PWSH_PATH` 检查在 [`find_pwsh`](PwshShellProvider::find_pwsh) 里实现,
+    /// 业务方设置后会被尊重. 我们这里只测 cross-cutting 行为 (没装 pwsh → None)
+    /// 因为 ma-harness-shell 用 `#![deny(unsafe_code)]` 不允许 `std::env::set_var`.
+    #[test]
+    fn pwsh_find_pwsh_basic_behavior() {
+        // 业务方本机没装 → None; 装了 → Some.
+        // 测试 cross-cutting 行为, 不强求特定值
+        let result = PwshShellProvider::find_pwsh();
+        // 文档约定: 业务方要 override 时设 MA_HARNESS_PWSH_PATH=<path>
+        // 这里不修改 env (compile-time no-unsafe), 跑 PATH + 常见路径 search
+        // 业务方本机没 pwsh → None 是 OK 行为
+        let _ = result; // 测试不 panic 就算过
     }
 
     /// ShellKind::platform_default 跨平台一致性

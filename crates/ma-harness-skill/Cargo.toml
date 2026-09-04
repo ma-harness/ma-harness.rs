@@ -1,0 +1,32 @@
+[package]
+name = "ma-harness-skill"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness skill catalog (ctx.skill): SKILL.md frontmatter parser + LocalSkillProvider + consumer pattern. P14.3 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# 内部
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# 外部
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+pretty_assertions = { workspace = true }
