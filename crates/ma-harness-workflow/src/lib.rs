@@ -55,21 +55,24 @@
 //! - 可测: 单元测试用 fake action runner, 不依赖真 shell
 //! - 可扩展: P15.4.2+ 加 parallel / conditional / sub-workflow
 //!
-//! # 限制 (Limitations) — P15.4.2.2
+//! # 限制 (Limitations) — P15.4.2.4
 //!
 //! - **没**conditional branching (`if` / `else` based on prior step result, P15.4.2.3+)
-//! - **没**CLI 集成 `mah workflow run <file>` (P15.4.3+)
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
 //!   业务方用 StepRunner 注入)
 //! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
 //!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
 //! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
-//! - **没**dep 失败时把 dependent 标 Skipped (P15.4.2.2 是 continue-on-fail, P15.4.2.3+ 加)
 //! - **没**跨 step 数据传递 (depends_on 只控顺序, 业务方用 env / 临时文件 / Arc<Mutex<>>)
 //! - **✅ P15.4.2.1**: `ParallelWorkflow` engine (tokio::spawn + Semaphore, 默认 4 并发,
 //!   一次性全并发跑所有 step)
 //! - **✅ P15.4.2.2**: `DagWorkflow` engine + `Step.depends_on` (拓扑排序 + in-degree 调度,
 //!   cycle detection 返 `WorkflowError::Parse`, 复用 `run_step_with_retry` helper)
+//! - **✅ P15.4.2.4**: dep-fail → Skipped 语义 (P15.4.2.2 是 continue-on-fail; 现在 DagWorkflow
+//!   在 dep Failed / TimedOut 时 cascade 标 dependent 为 `StepStatus::Skipped`, 跟 dsh 一致)
+//!   - ⚠️ P15.4.2.4 行为变更: 旧测试 `dag_workflow_runs_dependent_after_dep_fails` 已改名为
+//!     `dag_workflow_skips_dependent_when_dep_fails` (新语义: dependent 跑都不跑, 标 Skipped)
+//!   - `LocalWorkflow` / `ParallelWorkflow` 仍是 continue-on-fail (无 dep graph, 不参与 cascade)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -969,65 +972,118 @@ impl WorkflowEngine for DagWorkflow {
             }
         }
 
-        // ---- Phase 2: spawn + dispatch loop ----
+        // ---- Phase 2: spawn + dispatch loop (with Skipped propagation, P15.4.2.4) ----
 
         let mut results: Vec<Option<StepResult>> = (0..n).map(|_| None).collect();
+        // P15.4.2.4: failed_or_skipped[i] = true 意味着 step i 跑不了 (Failed/TimedOut/Skipped),
+        // 它的 dependents 应该 cascade 标 Skipped
+        let mut failed_or_skipped: Vec<bool> = vec![false; n];
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_concurrency));
         let mut set: tokio::task::JoinSet<(usize, StepResult)> = tokio::task::JoinSet::new();
 
-        // Initial spawn: in_degree == 0
+        // 检查 step 的 depends_on 是否含 failed_or_skipped step (P15.4.2.4).
+        // inline 而不用 closure, 避免 borrow conflict (failed_or_skipped 后面要 mutate)
+        let check_deps_failed = |step: &Step, fos: &[bool]| -> bool {
+            step.depends_on.iter().any(|dep_name| {
+                name_to_idx
+                    .get(dep_name.as_str())
+                    .map(|&i| fos[i])
+                    .unwrap_or(false)
+            })
+        };
+
+        // Initial spawn / cascade-skip
         for (i, deg) in in_degree.iter().enumerate() {
             if *deg == 0 {
-                spawn_dag_step(
-                    &mut set,
-                    &semaphore,
-                    self.runner.clone(),
-                    definition.steps[i].clone(),
-                    i,
-                );
-            }
-        }
-
-        while !set.is_empty() {
-            // 阻塞等任意一个 step 完成
-            let Some(joined) = set.join_next().await else {
-                break;
-            };
-            let (idx, step_result): (usize, StepResult) = match joined {
-                Ok(pair) => pair,
-                Err(join_err) => {
-                    // tokio task panic / cancel → 记为 Failed (不整个 workflow 崩)
-                    // (idx 已知: spawn_dag_step 总是 (idx, _))
-                    // 但 join error 拿不到 idx, 只能从 set 内部 metadata 拿
-                    // 简化处理: 用 0 兜底, 然后靠 results[0] 后置检查
-                    tracing::error!(error = %join_err, "dag step task join error (idx unknown)");
-                    (
-                        0,
-                        StepResult {
-                            name: String::from("<unknown>"),
-                            action: String::new(),
-                            status: StepStatus::Failed {
-                                reason: format!("task join error: {}", join_err),
-                            },
-                            attempts: 0,
-                            elapsed_ms: 0,
-                        },
-                    )
-                }
-            };
-            results[idx] = Some(step_result);
-
-            // 所有 dependent 减 in_degree, 减到 0 的立即 spawn
-            for &dep_idx in &dependents[idx] {
-                in_degree[dep_idx] = in_degree[dep_idx].saturating_sub(1);
-                if in_degree[dep_idx] == 0 {
+                let step = &definition.steps[i];
+                if check_deps_failed(step, &failed_or_skipped) {
+                    // 这种情况只在 depends_on 引用一个本身被 skip 的 step 时发生,
+                    // 正常初始 spawn 不会有 failed deps (没有 step 跑过). 防御性处理.
+                    results[i] = Some(StepResult {
+                        name: step.name.clone(),
+                        action: step.action.clone(),
+                        status: StepStatus::Skipped,
+                        attempts: 0,
+                        elapsed_ms: 0,
+                    });
+                    failed_or_skipped[i] = true;
+                } else {
                     spawn_dag_step(
                         &mut set,
                         &semaphore,
                         self.runner.clone(),
-                        definition.steps[dep_idx].clone(),
-                        dep_idx,
+                        definition.steps[i].clone(),
+                        i,
                     );
+                }
+            }
+        }
+
+        // 主循环: 等 task 完成, cascade 处理 dependents
+        // `just_completed` worklist 处理 cascade skip (不递归, 用 loop)
+        let mut just_completed: Vec<usize> = Vec::new();
+
+        while !set.is_empty() || !just_completed.is_empty() {
+            // 如果有 task 在跑, 等任意一个完成; 否则直接处理 cascade
+            if !set.is_empty() {
+                let Some(joined) = set.join_next().await else {
+                    break;
+                };
+                let (idx, step_result): (usize, StepResult) = match joined {
+                    Ok(pair) => pair,
+                    Err(join_err) => {
+                        tracing::error!(error = %join_err, "dag step task join error (idx unknown)");
+                        (
+                            0,
+                            StepResult {
+                                name: String::from("<unknown>"),
+                                action: String::new(),
+                                status: StepStatus::Failed {
+                                    reason: format!("task join error: {}", join_err),
+                                },
+                                attempts: 0,
+                                elapsed_ms: 0,
+                            },
+                        )
+                    }
+                };
+                results[idx] = Some(step_result.clone());
+                if matches!(
+                    step_result.status,
+                    StepStatus::Failed { .. } | StepStatus::TimedOut
+                ) {
+                    failed_or_skipped[idx] = true;
+                }
+                just_completed.push(idx);
+            }
+
+            // Cascade 处理所有 just_completed 的 dependents
+            while let Some(completed_idx) = just_completed.pop() {
+                for &dep_idx in &dependents[completed_idx] {
+                    in_degree[dep_idx] = in_degree[dep_idx].saturating_sub(1);
+                    if in_degree[dep_idx] == 0 {
+                        let dep_step = &definition.steps[dep_idx];
+                        if check_deps_failed(dep_step, &failed_or_skipped) {
+                            // Cascade: 标 Skipped, 加进 just_completed 继续 propagate
+                            results[dep_idx] = Some(StepResult {
+                                name: dep_step.name.clone(),
+                                action: dep_step.action.clone(),
+                                status: StepStatus::Skipped,
+                                attempts: 0,
+                                elapsed_ms: 0,
+                            });
+                            failed_or_skipped[dep_idx] = true;
+                            just_completed.push(dep_idx);
+                        } else {
+                            spawn_dag_step(
+                                &mut set,
+                                &semaphore,
+                                self.runner.clone(),
+                                dep_step.clone(),
+                                dep_idx,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1056,6 +1112,7 @@ impl WorkflowEngine for DagWorkflow {
 
         let step_results: Vec<StepResult> = results.into_iter().map(|r| r.unwrap()).collect();
         let finished_at = Utc::now();
+        // P15.4.2.4: Skipped 也算 "未 Succeeded", 整体 success = false
         let success = step_results
             .iter()
             .all(|r| matches!(r.status, StepStatus::Succeeded));
@@ -1827,9 +1884,9 @@ steps:
     }
 
     #[tokio::test]
-    async fn dag_workflow_runs_dependent_after_dep_fails() {
-        // P15.4.2.2 限制: dep 失败时, dependent 仍跑 (continue-on-fail 跟 Local/Parallel 一致).
-        // a 失败 → b (depends on a) 仍会跑, 也失败.
+    async fn dag_workflow_skips_dependent_when_dep_fails() {
+        // P15.4.2.4: dep 失败时, dependent 标 Skipped (不跑), 跟 dsh 实际语义对齐.
+        // a 失败 → b (depends on a) 标 Skipped, 不进 runner.
         let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
         let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    depends_on: [a]\n";
         let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
@@ -1840,8 +1897,99 @@ steps:
         // a ran (and failed)
         assert_eq!(result.steps[0].name, "a");
         assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
-        // b ran (and failed, because FailingStepRunner fails everything)
+        // b was Skipped (NOT Failed — P15.4.2.4 新语义)
         assert_eq!(result.steps[1].name, "b");
+        assert!(matches!(result.steps[1].status, StepStatus::Skipped));
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_skips_transitive_dependents() {
+        // P15.4.2.4: cascade — a fails → b (deps a) Skipped → c (deps b) 也 Skipped
+        let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let yaml = r#"
+name: cascade
+steps:
+  - name: a
+    action: x
+  - name: b
+    action: x
+    depends_on: [a]
+  - name: c
+    action: x
+    depends_on: [b]
+"#;
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.len(), 3);
+        // a failed
+        assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
+        // b and c both Skipped (cascade)
+        assert!(matches!(result.steps[1].status, StepStatus::Skipped));
+        assert!(matches!(result.steps[2].status, StepStatus::Skipped));
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_diamond_branch_failure_skips_merge() {
+        // P15.4.2.4: diamond a → {b, c} → d, a fail → 全 cascade Skipped (b, c, d 都不进 runner)
+        // 因为 a 是 b/c 的 dep, a fail 让 b/c cascade Skipped
+        // 因为 b/c 是 d 的 dep, b/c Skipped 让 d Skipped
+        let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let yaml = r#"
+name: diamond-fail
+steps:
+  - name: a
+    action: x
+  - name: b
+    action: x
+    depends_on: [a]
+  - name: c
+    action: x
+    depends_on: [a]
+  - name: d
+    action: x
+    depends_on: [b, c]
+"#;
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.len(), 4);
+        // a 是唯一真跑的 (没 deps), 失败
+        assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
+        // b, c, d 全 cascade Skipped (P15.4.2.4 新语义)
+        assert!(
+            matches!(result.steps[1].status, StepStatus::Skipped),
+            "b: {:?}",
+            result.steps[1].status
+        );
+        assert!(
+            matches!(result.steps[2].status, StepStatus::Skipped),
+            "c: {:?}",
+            result.steps[2].status
+        );
+        assert!(
+            matches!(result.steps[3].status, StepStatus::Skipped),
+            "d: {:?}",
+            result.steps[3].status
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_does_not_skip_independent_step_when_other_fails() {
+        // P15.4.2.4: independent step (没依赖) 不被其他 step 的 fail 影响.
+        // a 和 b 都没 deps. a fail, b 仍跑 (也 fail 因为用 FailingStepRunner).
+        let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.len(), 2);
+        // a failed
+        assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
+        // b ran (NOT Skipped — 没 deps, 不被其他 step 的 fail 影响)
         assert!(matches!(result.steps[1].status, StepStatus::Failed { .. }));
     }
 
