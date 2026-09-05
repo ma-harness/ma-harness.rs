@@ -503,6 +503,86 @@ pub fn webhook_to_session_event(
 }
 
 // ============================================================================
+// P15.3.4: Webhook → EventLog 持久化 dispatcher
+// ============================================================================
+
+/// Webhook dispatcher 后台任务 (P15.3.4).
+///
+/// **行为**: loop 调 `svc.take()`, 拿到 event → 转换 SessionEvent →
+/// 追加到 `log`. 空 queue 时 sleep 100ms 再试 (避免 busy spin).
+///
+/// **错误处理**:
+/// - `take()` 返 `None` (queue 空) → sleep, 不报错
+/// - `take()` 返 `Err` → tracing::error + sleep, 继续 (不退出)
+/// - `webhook_to_session_event` 返 `Err` → tracing::error + 跳过这 event
+///   (不 persist), 继续 (不退出)
+/// - `log.append` 返 `Err` (sqlite locked 等) → tracing::error,
+///   继续 (不退出, 下个 event 可能会成功)
+///
+/// **业务方用法**:
+/// ```ignore
+/// let svc = Arc::new(LocalWebhookProvider::new()
+///     .with_route(RouteConfig::new("/webhook/git", HmacSha256Verifier::new(b"..."))));
+/// let log = Arc::new(EventLog::open("webhook.db")?);
+/// tokio::spawn(run_webhook_dispatcher(svc, log));
+/// // 业务方在 main 里 serve_http
+/// tokio::spawn(serve_http("127.0.0.1:9090", svc));
+/// ```
+///
+/// **跟 P15.1.8 /api/sessions/<id>/events 集成**: 持久化后, 业务方
+/// `GET /api/sessions/<webhook_id>/events` 拿到 webhook 触发的 session events.
+///
+/// **返回**: never (无限循环直到 task 被 cancel). 业务方用 `tokio::spawn`
+/// + `JoinHandle::abort()` 取消.
+pub async fn run_webhook_dispatcher(
+    svc: Arc<dyn WebhookService>,
+    log: Arc<ma_harness_core::EventLog>,
+) {
+    use std::time::Duration;
+
+    tracing::info!("webhook dispatcher started");
+    loop {
+        match svc.take().await {
+            Ok(Some(event)) => {
+                tracing::debug!(
+                    event_id = %event.id,
+                    route = %event.route,
+                    "webhook dispatcher: persisting event"
+                );
+                match webhook_to_session_event(&event) {
+                    Ok(session_event) => {
+                        let session_id = session_event.session_id.clone();
+                        // EventLog::append 当前是 infallible (validate 失败 panic);
+                        // 业务方用 open_in_memory / 严格 input 时通常 OK.
+                        // 如果未来 EventLog 改返 Result, 这里加 ? 或 unwrap.
+                        let _seq = log.append(session_event);
+                        tracing::debug!(
+                            session_id = %session_id,
+                            "webhook dispatcher: persisted"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            event_id = %event.id,
+                            "webhook dispatcher: conversion failed, skipping"
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                // Queue 空, 等 100ms 避免 busy spin
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "webhook dispatcher: take() failed");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+// ============================================================================
 // P15.3.2: HTTP server (POST /webhook/{route})
 // ============================================================================
 
@@ -1422,5 +1502,130 @@ mod tests {
             stored.payload_json.as_deref(),
             Some(r#"{"ref":"refs/heads/main"}"#)
         );
+    }
+
+    // ========================================================================
+    // P15.3.4 tests: run_webhook_dispatcher (background persistence task)
+    // ========================================================================
+
+    /// Submit 一个 valid webhook 到 provider (helper, 准备 queue content).
+    async fn submit_one_webhook(provider: &LocalWebhookProvider, body: &[u8]) -> String {
+        let v = HmacSha256Verifier::new(test_secret());
+        let sig = v.compute_signature(body);
+        let event = WebhookEvent::new("/webhook/git", body.to_vec()).with_signature(sig);
+        let id = event.id.clone();
+        provider.submit(event).await.expect("submit");
+        id
+    }
+
+    #[tokio::test]
+    async fn run_webhook_dispatcher_persists_event_to_log() {
+        // 1. submit webhook → provider queue
+        // 2. 启 dispatcher 跑 ~200ms (拉 queue + persist)
+        // 3. query log 验 event 在
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/git",
+            HmacSha256Verifier::new(test_secret()),
+        ));
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().expect("log"));
+
+        let event_id = submit_one_webhook(&provider, br#"{"action":"opened"}"#).await;
+        assert_eq!(provider.queue_len(), 1);
+
+        // 启 dispatcher, 跑 200ms
+        let svc: Arc<dyn WebhookService> = Arc::new(provider);
+        let dispatcher_handle = {
+            let svc = Arc::clone(&svc);
+            let log = Arc::clone(&log);
+            tokio::spawn(async move { run_webhook_dispatcher(svc, log).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        dispatcher_handle.abort();
+
+        // query log 验
+        let q = ma_harness_core::EventQuery {
+            session_id: event_id.clone(),
+            ..Default::default()
+        };
+        let page = log.query(&q).expect("query");
+        assert_eq!(
+            page.events.len(),
+            1,
+            "expected 1 event in log for session {event_id}"
+        );
+        let stored = &page.events[0].event;
+        assert_eq!(stored.plugin_name.as_deref(), Some("webhook"));
+        assert_eq!(
+            stored.payload_json.as_deref(),
+            Some(r#"{"action":"opened"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn run_webhook_dispatcher_processes_multiple_events() {
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/git",
+            HmacSha256Verifier::new(test_secret()),
+        ));
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().expect("log"));
+
+        let id1 = submit_one_webhook(&provider, br#"{"i":1}"#).await;
+        let id2 = submit_one_webhook(&provider, br#"{"i":2}"#).await;
+        let id3 = submit_one_webhook(&provider, br#"{"i":3}"#).await;
+        assert_eq!(provider.queue_len(), 3);
+
+        let svc: Arc<dyn WebhookService> = Arc::new(provider);
+        let dispatcher_handle = {
+            let svc = Arc::clone(&svc);
+            let log = Arc::clone(&log);
+            tokio::spawn(async move { run_webhook_dispatcher(svc, log).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        dispatcher_handle.abort();
+
+        // 3 个 session_id 都应该被持久化
+        for id in [&id1, &id2, &id3] {
+            let q = ma_harness_core::EventQuery {
+                session_id: id.clone(),
+                ..Default::default()
+            };
+            let page = log.query(&q).expect("query");
+            assert_eq!(page.events.len(), 1, "expected 1 event for {id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_webhook_dispatcher_with_empty_queue_does_not_panic() {
+        // 空 queue 启 dispatcher, 跑 200ms, 没 panic
+        let provider = LocalWebhookProvider::new();
+        let svc: Arc<dyn WebhookService> = Arc::new(provider);
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().expect("log"));
+
+        let dispatcher_handle = {
+            let svc = Arc::clone(&svc);
+            let log = Arc::clone(&log);
+            tokio::spawn(async move { run_webhook_dispatcher(svc, log).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // 没 panic 就 OK (空 queue → sleep, 不退)
+        dispatcher_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn run_webhook_dispatcher_does_not_exit_on_empty_queue() {
+        // 空 queue 跑 150ms, dispatcher 还活着 (没 panic / 退出)
+        let provider = LocalWebhookProvider::new();
+        let svc: Arc<dyn WebhookService> = Arc::new(provider);
+        let log = Arc::new(ma_harness_core::EventLog::open_in_memory().expect("log"));
+
+        let dispatcher_handle = {
+            let svc = Arc::clone(&svc);
+            let log = Arc::clone(&log);
+            tokio::spawn(async move { run_webhook_dispatcher(svc, log).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // abort 前 dispatcher 还活着
+        assert!(!dispatcher_handle.is_finished());
+        dispatcher_handle.abort();
     }
 }
