@@ -2821,6 +2821,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-settings"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "ma-harness-cordis",
+ "ma-harness-seam",
+ "pretty_assertions",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ma-harness-shell"
 version = "0.1.1"
 dependencies = [

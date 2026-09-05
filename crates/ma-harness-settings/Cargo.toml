@@ -1,0 +1,31 @@
+[package]
+name = "ma-harness-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness user settings (ctx.settings): YAML-backed Settings store with atomic save, dotted-key get/set, default ~/.ma-harness/settings.yaml. P15.5.1 dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Internal — ctx key plumbing
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# External
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["fs", "sync", "io-util"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
