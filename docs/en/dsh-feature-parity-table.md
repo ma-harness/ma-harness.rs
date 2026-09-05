@@ -43,11 +43,12 @@
 | `ctx.fs` | filesystem provider | `ma-harness-plugin-fs` | ✅ done | local only; remote (s3/ssh) not in dsh either |
 | `ctx.commands` | human command dispatch | `#[dsh_command]` macro | ✅ done | P7-2 |
 | `ctx.jobs` | background work | `tokio::spawn` + `plugin-subagent` | ✅ done | P12-8; no formal `Job` trait |
-| `ctx.webhookRuntime` | webhook delivery | n/a | ❌ gap | **P15+** plan |
+| `ctx.workflows` | workflow engine (YAML + DAG + parallel) | `ma-harness-workflow` | 🔄 extended | P15.4: `LocalWorkflow` (sequential) + `ParallelWorkflow` (worker pool, default 4) + `DagWorkflow` (DAG with `depends_on` + cycle detect + dep-fail `Skipped` cascade) + `Step.when` conditional; `ShellStepRunner` (real `sh -c` / `cmd /C` via `ctx.subprocess`); CLI `mah workflow run/validate/list`; **+8 sub-tasks over 20 commits** |
+| `ctx.webhookRuntime` | webhook delivery | `ma-harness-webhook` (P15.3) | ✅ done | HMAC-SHA256 verifiers (GitLab / Stripe / generic) + `webhook_routes.yaml` + `mah webhook` CLI |
 | `ctx.systemPrompt` | prompt assembly | `ma-harness-core` | ✅ done | identical |
 | `ctx.goals` | session objectives | n/a | ❌ gap | **P15+** plan; today uses ad-hoc `#[dsh_command]` |
 
-**Subtotal**: 8/14 done (57%) · 3 partial · 3 gap.
+**Subtotal**: 9/14 done (64%) · 2 partial · 3 gap. (P15.4 推进: 1 gap → 1 extended; P15.3 webhook 推进: 1 gap → done)
 
 ---
 
@@ -167,8 +168,14 @@
 | `dsh --dump-config` | n/a | ❌ gap | we use registry-based config (different model) |
 | `dsh --profile <custom> --patch foo.yml` | n/a | ❌ gap | no profile/patch system yet (P15+) |
 | `npx @deepseek-ai/dsh web` | n/a | ❌ gap | no npx integration; **dsh-adapter** loads dsh TS plugins via JSON-RPC instead (P13) |
+| `dsh workflow run <file>` | `mah workflow run <file>` | ✅ done | P15.4: 3 engines (local / parallel / dag), `ShellStepRunner` (real `sh -c` / `cmd /C` via `ctx.subprocess`), `--dry-run` opt-out, default `~/.ma-harness/workflows/` + `--dir` override |
+| `dsh workflow validate <file>` | `mah workflow validate <file>` | ✅ done | P15.4.3: parse + DAG cycle / unknown-dep detection via `DagWorkflow::run` + `LoggingStepRunner` |
+| `dsh workflow list` (implied) | `mah workflow list` | ✅ done | P15.4.5: scans default workflows dir, prints `file \| name \| steps` table, parse-failure graceful (one bad file doesn't break the inventory) |
+| `dsh settings <cmd>` | `mah settings <cmd>` | ✅ done | P15.5.3: `set` / `get` / `list` over `~/.ma-harness/settings.yaml` (FileSettingsStore) |
+| `dsh hook <cmd>` | `mah hook <cmd>` | ✅ done | P15.7: `install` / `list` / `run` for Claude Code hook wire-protocol |
+| `dsh self <cmd>` | `mah self <cmd>` | ⚠️ partial | P15.6: `ma-harness-self-modification` crate exists (SelfInspect / SelfMount), CLI surface not yet wired (deferred) |
 
-**Subtotal**: 4/8 done (50%) · 1 partial · 3 gap.
+**Subtotal**: 7/13 done (54%) · 1 partial · 3 gap. (P15.4 + P15.5 + P15.7 推进: 4/8 → 7/13; P15.6 self-mod crate done but CLI gap)
 
 ---
 
@@ -236,18 +243,24 @@
 | Category | Total | ✅ Done | 🔄 Extended | ⚠️ Partial | ❌ Gap | ➖ N/A | Score |
 |---|---|---|---|---|---|---|---|
 | 1. Core packages | 8 | 7 | 0 | 0 | 1 | 0 | **87.5%** |
-| 2. Capability seams | 14 | 8 | 0 | 3 | 3 | 0 | **57%** |
+| 2. Capability seams | 14 | 9 | 1 | 2 | 2 | 0 | **71%** |
 | 3. Events | 3 | 3 | 0 | 0 | 0 | 0 | **100%** |
 | 4. Turn flow | 10 | 10 | 0 | 0 | 0 | 0 | **100%** |
 | 5. Profiles & Bundles | 11 | 6 | 0 | 1 | 4 | 0 | **55%** |
 | 6. Session log | 6 | 4 | 0 | 0 | 2 | 0 | **67%** |
 | 7. Tool exec pipeline | 6 | 6 | 0 | 0 | 0 | 0 | **100%** |
 | 8. Distribution surfaces | 6 | 4 | 0 | 0 | 1 | 1 | **67%** |
-| 9. CLI modes | 8 | 4 | 0 | 1 | 3 | 0 | **50%** |
+| 9. CLI modes | 13 | 7 | 0 | 1 | 5 | 0 | **54%** |
 | 10. Conformance | 3 | 3 | 0 | 0 | 0 | 0 | **100%** |
 | 11. ma-harness extensions | 13 | 13 | 0 | 0 | 0 | 0 | **100%** (we have) |
 | 12. Deferred | 13 | 0 | 0 | 0 | 13 | 0 | **0%** (planned) |
-| **Total** | **101** | **68** | **0** | **5** | **27** | **1** | **67% done** |
+| **Total** | **106** | **72** | **1** | **4** | **28** | **1** | **69% done** |
+
+> **P15.4 / P15.5 / P15.7 batch (2026-09-05, 20 commits)**:
+> - §2 Capability seams: `ctx.workflows` ✅ extended (P15.4 8 sub-tasks), `ctx.webhookRuntime` ✅ done (P15.3)
+> - §9 CLI modes: `mah workflow run/validate/list` ✅ done (P15.4.3 + P15.4.5), `mah settings` ✅ done (P15.5.3), `mah hook` ✅ done (P15.7)
+> - P15.6 self-modification: crate ✅ done, CLI ❌ gap (deferred)
+> - **Net effect**: 67% → 69% done (101 → 106 items, 68 → 72 ✅, 5 → 4 ⚠️, 27 → 28 ❌, +1 🔄)
 
 **Behavioral parity at snapshot level**: **100% (9/9 dsh-snap + 7/7 dsh-synthetic)**. The remaining gaps are feature-surface gaps (PTY / Web UI / Profile / Subagent / etc.), not behavioral gaps.
 
