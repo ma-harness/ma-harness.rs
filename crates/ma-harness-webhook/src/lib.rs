@@ -113,6 +113,17 @@ pub enum WebhookError {
     #[error("duplicate webhook event id: {0}")]
     DuplicateEvent(String),
 
+    /// Rate limit 拒收 (P15.3.5)
+    #[error("webhook rate limit exceeded for {key}: {count} in {window_secs}s window")]
+    RateLimited {
+        /// 被限流的 key (e.g. route path)
+        key: String,
+        /// 当前 count
+        count: u32,
+        /// 窗口大小 (秒)
+        window_secs: u32,
+    },
+
     /// Queue 满 (P15.3.1 默认 unbounded, 但 future rate limit 可能返)
     #[error("webhook queue full (size: {0}, cap: {1})")]
     QueueFull(usize, usize),
@@ -120,6 +131,106 @@ pub enum WebhookError {
     /// HMAC 错误 (key parse / internal)
     #[error("webhook internal error: {0}")]
     Internal(String),
+}
+
+// ============================================================================
+// P15.3.5: RateLimiter (per-key sliding window)
+// ============================================================================
+
+/// Per-key sliding-window rate limiter (P15.3.5).
+///
+/// **行为**:
+/// - 每个 key 独立计数
+/// - 窗口期内超过 `max_per_window` 个 event → 拒收 (`Err(WebhookError::RateLimited)`)
+/// - 窗口结束 (距离首次计数 ≥ `window`) → 重置计数
+///
+/// **实现**: HashMap<key, (window_start, count)>. Lock 短暂, 跨 await 安全.
+/// (跟 `LocalWebhookProvider::active_sse_subs` 同模式).
+///
+/// **业务方用法**:
+/// ```ignore
+/// // 限制每个 route 1 分钟最多 60 个 webhook
+/// let limiter = Arc::new(RateLimiter::new(60, Duration::from_secs(60)));
+/// let provider = LocalWebhookProvider::new()
+///     .with_route(RouteConfig::new("/webhook/git", verifier))
+///     .with_rate_limit(limiter);
+/// ```
+///
+/// **多 verifier / 高级策略**: P15.3.5.1+ 可以加 per-IP / token bucket /
+/// 滑动 window 细分 (1m/1h/1d), 当前 P15.3.5 只做最简的 sliding window.
+pub struct RateLimiter {
+    /// (window_start_instant, count_in_window)
+    state: parking_lot::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>,
+    /// 窗口大小 (秒)
+    window_secs: u32,
+    /// 每窗口最大 event 数
+    max_per_window: u32,
+}
+
+impl std::fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("window_secs", &self.window_secs)
+            .field("max_per_window", &self.max_per_window)
+            .field("tracked_keys", &self.state.lock().len())
+            .finish()
+    }
+}
+
+impl RateLimiter {
+    /// 创建一个 rate limiter.
+    ///
+    /// - `max_per_window`: 每窗口允许的最大 event 数
+    /// - `window`: 窗口大小 (业务方 `Duration::from_secs(60)` = 1 分钟)
+    pub fn new(max_per_window: u32, window: std::time::Duration) -> Self {
+        Self {
+            state: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            window_secs: window.as_secs() as u32,
+            max_per_window,
+        }
+    }
+
+    /// 检查 + 计数 (通过 = 在 limit 内, 拒收 = 返 RateLimited).
+    ///
+    /// **注**: 业务方调 `submit` 时, 我们自动调这个, 不需要手动调.
+    /// 单独 `check` 是为测试 + 高级用法 (e.g. 业务方先 dry-run).
+    pub fn check(&self, key: &str) -> Result<(), WebhookError> {
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(self.window_secs as u64);
+
+        let mut state = self.state.lock();
+        let entry = state.entry(key.to_string()).or_insert((now, 0));
+
+        // 窗口过期 → 重置
+        if now.duration_since(entry.0) >= window {
+            entry.0 = now;
+            entry.1 = 0;
+        }
+
+        entry.1 += 1;
+        if entry.1 > self.max_per_window {
+            return Err(WebhookError::RateLimited {
+                key: key.to_string(),
+                count: entry.1,
+                window_secs: self.window_secs,
+            });
+        }
+        Ok(())
+    }
+
+    /// 拿当前 count (for metrics / tests).
+    pub fn current_count(&self, key: &str) -> u32 {
+        self.state
+            .lock()
+            .get(key)
+            .map(|(_, count)| *count)
+            .unwrap_or(0)
+    }
+
+    /// 清空状态 (tests 用).
+    pub fn reset(&self) {
+        self.state.lock().clear();
+    }
 }
 
 // ============================================================================
@@ -351,13 +462,16 @@ pub trait WebhookService: Send + Sync + 'static {
 /// 1. 找 route → 找不到返 `UnknownRoute`
 /// 2. 验签 → 失败返 `InvalidSignature`
 /// 3. dedup by id → 已见返 `DuplicateEvent`
-/// 4. 入队 → 返 id
+/// 4. (P15.3.5 可选) rate limit per key (route / IP) — 超过返 `RateLimited`
+/// 5. 入队 → 返 id
 ///
 /// **take 流程**: 从队首 pop 一个 event (业务方自己 loop + sleep).
 pub struct LocalWebhookProvider {
     routes: HashMap<String, RouteConfig>,
     queue: Mutex<VecDeque<WebhookEvent>>,
     seen: Mutex<HashSet<String>>,
+    /// P15.3.5: 可选 rate limiter (per-key sliding window). None = 不限流.
+    rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl std::fmt::Debug for LocalWebhookProvider {
@@ -366,6 +480,7 @@ impl std::fmt::Debug for LocalWebhookProvider {
             .field("routes", &self.routes.keys().collect::<Vec<_>>())
             .field("queue_len", &self.queue.lock().len())
             .field("seen_count", &self.seen.lock().len())
+            .field("rate_limited", &self.rate_limiter.is_some())
             .finish()
     }
 }
@@ -383,6 +498,7 @@ impl LocalWebhookProvider {
             routes: HashMap::new(),
             queue: Mutex::new(VecDeque::new()),
             seen: Mutex::new(HashSet::new()),
+            rate_limiter: None,
         }
     }
 
@@ -391,6 +507,16 @@ impl LocalWebhookProvider {
     /// 注: `self` 拿 ownership 返回新 provider, 不修改自身 (业务方链式调用).
     pub fn with_route(mut self, route: RouteConfig) -> Self {
         self.routes.insert(route.path.clone(), route);
+        self
+    }
+
+    /// Builder: 启用 rate limit (P15.3.5).
+    ///
+    /// **行为**: 每个 key (e.g. route path) 在 `max_per_window` 个 event
+    /// 之内 `window` 秒; 超过返 `WebhookError::RateLimited`. 业务方可选
+    /// `key_fn` 自定义 (e.g. 从 header 抽 IP), 默认用 `event.route` 作 key.
+    pub fn with_rate_limit(mut self, limiter: Arc<RateLimiter>) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 }
@@ -410,7 +536,12 @@ impl WebhookService for LocalWebhookProvider {
         })?;
         route.verifier.verify(&event.body, sig).await?;
 
-        // 3. Dedup by event id
+        // 3. Rate limit (P15.3.5): 默认按 route 限流
+        if let Some(limiter) = &self.rate_limiter {
+            limiter.check(&event.route)?;
+        }
+
+        // 4. Dedup by event id
         {
             let mut seen = self.seen.lock();
             if !seen.insert(event.id.clone()) {
@@ -418,7 +549,7 @@ impl WebhookService for LocalWebhookProvider {
             }
         }
 
-        // 4. 入队
+        // 5. 入队
         let id = event.id.clone();
         self.queue.lock().push_back(event);
 
@@ -784,6 +915,20 @@ pub async fn handle_request(
             body: serde_json::json!({
                 "error": "internal",
                 "message": msg,
+            })
+            .to_string(),
+        },
+        Err(WebhookError::RateLimited {
+            key,
+            count,
+            window_secs,
+        }) => WebhookResponse {
+            status: 429, // Too Many Requests
+            body: serde_json::json!({
+                "error": "rate_limited",
+                "key": key,
+                "count": count,
+                "window_secs": window_secs,
             })
             .to_string(),
         },
@@ -1627,5 +1772,165 @@ mod tests {
         // abort 前 dispatcher 还活着
         assert!(!dispatcher_handle.is_finished());
         dispatcher_handle.abort();
+    }
+
+    // ========================================================================
+    // P15.3.5 tests: RateLimiter + with_rate_limit integration
+    // ========================================================================
+
+    #[test]
+    fn rate_limiter_under_limit_returns_ok() {
+        let limiter = RateLimiter::new(5, std::time::Duration::from_secs(60));
+        for i in 0..5 {
+            limiter
+                .check("/webhook/git")
+                .unwrap_or_else(|_| panic!("call {i}"));
+        }
+        assert_eq!(limiter.current_count("/webhook/git"), 5);
+    }
+
+    #[test]
+    fn rate_limiter_over_limit_returns_rate_limited() {
+        let limiter = RateLimiter::new(3, std::time::Duration::from_secs(60));
+        limiter.check("/webhook/git").unwrap(); // 1
+        limiter.check("/webhook/git").unwrap(); // 2
+        limiter.check("/webhook/git").unwrap(); // 3
+        // 4th 应被拒
+        let err = limiter.check("/webhook/git").unwrap_err();
+        match err {
+            WebhookError::RateLimited {
+                key,
+                count,
+                window_secs,
+            } => {
+                assert_eq!(key, "/webhook/git");
+                assert_eq!(count, 4);
+                assert_eq!(window_secs, 60);
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rate_limiter_keys_are_independent() {
+        // 3 个 key 各自 3 个限, 互不影响
+        let limiter = RateLimiter::new(3, std::time::Duration::from_secs(60));
+        for key in ["/webhook/a", "/webhook/b", "/webhook/c"] {
+            for _ in 0..3 {
+                limiter.check(key).unwrap();
+            }
+            // 第 4 个应被拒
+            assert!(matches!(
+                limiter.check(key).unwrap_err(),
+                WebhookError::RateLimited { .. }
+            ));
+        }
+        assert_eq!(limiter.current_count("/webhook/a"), 4);
+        assert_eq!(limiter.current_count("/webhook/b"), 4);
+        assert_eq!(limiter.current_count("/webhook/c"), 4);
+    }
+
+    #[test]
+    fn rate_limiter_reset_clears_state() {
+        let limiter = RateLimiter::new(3, std::time::Duration::from_secs(60));
+        limiter.check("/webhook/git").unwrap();
+        limiter.check("/webhook/git").unwrap();
+        assert_eq!(limiter.current_count("/webhook/git"), 2);
+        limiter.reset();
+        assert_eq!(limiter.current_count("/webhook/git"), 0);
+        // 重置后又能用
+        limiter.check("/webhook/git").unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_rate_limit_over_limit_rejects() {
+        // 业务方: rate limit 3/min, 1 个 route
+        // submit 4 个 event, 第 4 个应被 RateLimited 拒收
+        let limiter = Arc::new(RateLimiter::new(3, std::time::Duration::from_secs(60)));
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = LocalWebhookProvider::new()
+            .with_route(RouteConfig::new("/webhook/git", v))
+            .with_rate_limit(Arc::clone(&limiter));
+
+        let mut event_ids = Vec::new();
+        for i in 0..3 {
+            let body = format!(r#"{{"i":{i}}}"#);
+            let sig = HmacSha256Verifier::new(test_secret()).compute_signature(body.as_bytes());
+            let event = WebhookEvent::new("/webhook/git", body.into_bytes()).with_signature(sig);
+            event_ids.push(event.id.clone());
+            provider.submit(event).await.expect("submit");
+        }
+        assert_eq!(provider.queue_len(), 3);
+
+        // 第 4 个被 rate limit 拒
+        let body = r#"{"i":3}"#.to_string();
+        let sig = HmacSha256Verifier::new(test_secret()).compute_signature(body.as_bytes());
+        let event = WebhookEvent::new("/webhook/git", body.into_bytes()).with_signature(sig);
+        let err = provider.submit(event).await.unwrap_err();
+        match err {
+            WebhookError::RateLimited { key, count, .. } => {
+                assert_eq!(key, "/webhook/git");
+                assert_eq!(count, 4);
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+        // queue 仍 3 (没入队)
+        assert_eq!(provider.queue_len(), 3);
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_without_rate_limit_accepts_many() {
+        // 业务方: 不设 rate limit, 默认 unlimited
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new("/webhook/git", v));
+
+        for i in 0..10 {
+            let body = format!(r#"{{"i":{i}}}"#);
+            let sig = HmacSha256Verifier::new(test_secret()).compute_signature(body.as_bytes());
+            let event = WebhookEvent::new("/webhook/git", body.into_bytes()).with_signature(sig);
+            provider.submit(event).await.expect("submit");
+        }
+        assert_eq!(provider.queue_len(), 10);
+    }
+
+    #[tokio::test]
+    async fn serve_http_returns_429_on_rate_limited() {
+        // 真 HTTP server: rate limit 拒收 → 429
+        let limiter = Arc::new(RateLimiter::new(2, std::time::Duration::from_secs(60)));
+        let v = HmacSha256Verifier::new(test_secret());
+        let provider = Arc::new(
+            LocalWebhookProvider::new()
+                .with_route(RouteConfig::new("/webhook/git", v))
+                .with_rate_limit(Arc::clone(&limiter)),
+        );
+        let svc: Arc<dyn WebhookService> = provider.clone();
+        let port = free_port().await;
+        let addr = format!("127.0.0.1:{port}");
+        let addr_for_task = addr.clone();
+        tokio::spawn(async move {
+            let _ = serve_http(&addr_for_task, svc).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // POST 3 个 (limit=2), 第 3 个应 429
+        for i in 0..3 {
+            let body = format!(r#"{{"i":{i}}}"#);
+            let sig = HmacSha256Verifier::new(test_secret()).compute_signature(body.as_bytes());
+            let resp = reqwest::Client::new()
+                .post(format!("http://{addr}/webhook/git"))
+                .header("x-hub-signature-256", sig)
+                .body(body)
+                .send()
+                .await
+                .expect("POST");
+            if i < 2 {
+                assert_eq!(resp.status(), 200, "call {i}");
+            } else {
+                assert_eq!(resp.status(), 429, "call {i} (rate limited)");
+                let body: serde_json::Value = resp.json().await.expect("json");
+                assert_eq!(body["error"], "rate_limited");
+                assert_eq!(body["key"], "/webhook/git");
+            }
+        }
     }
 }
