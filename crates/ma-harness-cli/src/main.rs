@@ -234,6 +234,19 @@ enum Commands {
         #[arg(long)]
         store_path: Option<std::path::PathBuf>,
     },
+    /// **P15.5.3 (Day 101+33)**: 读 / 写 user-level settings (`~/.ma-harness/settings.yaml`)
+    ///
+    /// 业务方 workflow:
+    ///   `mah settings set api.openai_key sk-...` — 改 setting, 立即生效 (走 hot-reload)
+    ///   `mah settings get models.default`        — 读单个 key
+    ///   `mah settings list`                       — 列所有 keys + values (YAML dump)
+    ///
+    /// 底层走 ma-harness-settings crate (P15.5.1 + P15.5.2 hot-reload). 改完不需
+    /// 重启 `mah` 进程, 运行中 agent loop 通过 SettingsWatcher 自动 reload.
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
 }
 
 /// **P5-5 (Day 94)**: Session CRUD sub-actions
@@ -300,6 +313,43 @@ enum RegistryAction {
         /// Registry JSON file (默认 `~/.ma-harness/registry.json`)
         #[arg(long)]
         registry: Option<std::path::PathBuf>,
+    },
+}
+
+/// **P15.5.3 (Day 101+33)**: Settings CLI sub-actions
+///
+/// 业务方:
+///   `mah settings set api.openai_key sk-...`
+///   `mah settings get models.default`
+///   `mah settings list`
+#[derive(Subcommand, Debug)]
+enum SettingsAction {
+    /// Set 一个 dot-notation key (覆盖已有 / 创建 nested mapping)
+    ///
+    /// Example: `mah settings set api.openai_key sk-...`
+    /// Example: `mah settings set models.default gpt-4`
+    Set {
+        /// Dot-notation key (e.g. `api.openai_key`, `models.default`)
+        key: String,
+        /// Value (字符串; 业务方自己负责 type — booleans/numbers 也存成 string)
+        value: String,
+        /// Override settings file path (默认 `~/.ma-harness/settings.yaml`)
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
+    /// Get 一个 dot-notation key 的 value (打到 stdout, missing key 返 non-zero exit)
+    Get {
+        /// Dot-notation key
+        key: String,
+        /// Override settings file path
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
+    /// List 所有 keys + values (YAML dump 整个 settings)
+    List {
+        /// Override settings file path
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
     },
 }
 
@@ -407,6 +457,11 @@ async fn main() -> Result<()> {
             SandboxAction::Status => print_sandbox_status(),
         },
         Commands::Tui { log, store_path } => run_tui(log.as_deref(), store_path.as_deref()),
+        Commands::Settings { action } => match action {
+            SettingsAction::Set { key, value, file } => settings_set(&key, &value, file.as_deref()),
+            SettingsAction::Get { key, file } => settings_get(&key, file.as_deref()),
+            SettingsAction::List { file } => settings_list(file.as_deref()),
+        },
         Commands::RunStream {
             prompt,
             grpc_url,
@@ -1399,6 +1454,182 @@ fn print_sandbox_status() -> Result<()> {
         println!("  - warn + no-op, 业务方 fs 不受限制");
     }
     Ok(())
+}
+
+// ============================================================================
+// P15.5.3: Settings CLI handlers
+// ============================================================================
+
+/// 拿 settings file 路径 (override or default).
+fn resolve_settings_path(override_path: Option<&std::path::Path>) -> Result<std::path::PathBuf> {
+    match override_path {
+        Some(p) => Ok(p.to_path_buf()),
+        None => ma_harness_settings::default_settings_path()
+            .context("compute default settings path (set MA_HARNESS_SETTINGS or HOME)"),
+    }
+}
+
+/// `mah settings set <key> <value>` -- load, mutate, save (atomic).
+fn settings_set(key: &str, value: &str, file: Option<&std::path::Path>) -> Result<()> {
+    use ma_harness_settings::{FileSettingsStore, Settings, SettingsStore};
+
+    let path = resolve_settings_path(file)?;
+    let store = FileSettingsStore::new(&path);
+
+    let handle = tokio::runtime::Handle::try_current();
+    let result: Result<()> = match handle {
+        Ok(h) => h.block_on(async {
+            let mut s: Settings = store.load().await.context("load settings")?;
+            s.set(key, value);
+            store.save(&s).await.context("save settings")?;
+            Ok::<(), anyhow::Error>(())
+        }),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("build tokio runtime")?
+            .block_on(async {
+                let mut s: Settings = store.load().await.context("load settings")?;
+                s.set(key, value);
+                store.save(&s).await.context("save settings")?;
+                Ok::<(), anyhow::Error>(())
+            }),
+    };
+
+    result?;
+
+    println!("{} = {}", key, value);
+    eprintln!(
+        "[settings] saved to {} (running agents will hot-reload within 100ms)",
+        path.display()
+    );
+    Ok(())
+}
+
+/// `mah settings get <key>` -- load, print value (or error if missing).
+fn settings_get(key: &str, file: Option<&std::path::Path>) -> Result<()> {
+    use ma_harness_settings::{FileSettingsStore, SettingsStore};
+
+    let path = resolve_settings_path(file)?;
+    let store = FileSettingsStore::new(&path);
+
+    let handle = tokio::runtime::Handle::try_current();
+    let value: Option<String> = match handle {
+        Ok(h) => h.block_on(async {
+            let s = store.load().await.context("load settings")?;
+            Ok::<Option<String>, anyhow::Error>(s.get_str(key).map(|s| s.to_string()))
+        })?,
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("build tokio runtime")?
+            .block_on(async {
+                let s = store.load().await.context("load settings")?;
+                Ok::<Option<String>, anyhow::Error>(s.get_str(key).map(|s| s.to_string()))
+            })?,
+    };
+
+    match value {
+        Some(v) => {
+            println!("{v}");
+            Ok(())
+        }
+        None => {
+            eprintln!("[settings] key not found: {key:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `mah settings list` -- load, print all settings (YAML dump).
+fn settings_list(file: Option<&std::path::Path>) -> Result<()> {
+    use ma_harness_settings::{FileSettingsStore, SettingsStore};
+
+    let path = resolve_settings_path(file)?;
+    let store = FileSettingsStore::new(&path);
+
+    let handle = tokio::runtime::Handle::try_current();
+    let yaml: String = match handle {
+        Ok(h) => h.block_on(async {
+            let s = store.load().await.context("load settings")?;
+            s.to_yaml().context("serialize settings")
+        })?,
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("build tokio runtime")?
+            .block_on(async {
+                let s = store.load().await.context("load settings")?;
+                s.to_yaml().context("serialize settings")
+            })?,
+    };
+
+    if yaml.trim().is_empty() {
+        eprintln!(
+            "[settings] no settings found at {} (use `mah settings set <key> <value>` to add one)",
+            path.display()
+        );
+        std::process::exit(0);
+    }
+
+    print!("{yaml}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod settings_cli_tests {
+    use super::*;
+    use ma_harness_settings::Settings;
+
+    /// 测 P15.5.3 业务流程 (直接走 Settings API, 不走 CLI dispatch)
+    #[test]
+    fn settings_set_then_get_via_settings_api() {
+        let mut s = Settings::empty();
+        s.set("api.openai_key", "sk-test-123");
+        s.set("models.default", "gpt-4");
+
+        assert_eq!(s.get_str("api.openai_key"), Some("sk-test-123"));
+        assert_eq!(s.get_str("models.default"), Some("gpt-4"));
+
+        let mut keys = s.keys();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["api.openai_key".to_string(), "models.default".to_string()]
+        );
+    }
+
+    #[test]
+    fn settings_set_overwrites_existing_value() {
+        let mut s = Settings::empty();
+        s.set("api.key", "old");
+        s.set("api.key", "new");
+        assert_eq!(s.get_str("api.key"), Some("new"));
+    }
+
+    #[test]
+    fn settings_get_missing_key_returns_none() {
+        let s = Settings::empty();
+        assert_eq!(s.get_str("missing.key"), None);
+    }
+
+    /// 测 CLI handler 不依赖真 async runtime
+    #[test]
+    fn resolve_settings_path_uses_override() {
+        let p = std::path::PathBuf::from("/tmp/custom.yaml");
+        let result = resolve_settings_path(Some(&p)).expect("resolve");
+        assert_eq!(result, p);
+    }
+
+    #[test]
+    fn resolve_settings_path_uses_default_when_no_override() {
+        let result = resolve_settings_path(None).expect("resolve");
+        assert!(
+            result.ends_with(".ma-harness/settings.yaml"),
+            "default path should end with .ma-harness/settings.yaml, got {}",
+            result.display()
+        );
+    }
 }
 
 /// **P14 (2026-08-20)**: 业务方 publish 后的 plugin list (给 GH Pages 静态站消费)

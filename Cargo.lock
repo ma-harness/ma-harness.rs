@@ -2380,6 +2380,7 @@ dependencies = [
  "ma-harness-sandbox",
  "ma-harness-seam",
  "ma-harness-server",
+ "ma-harness-settings",
  "ma-harness-tui",
  "prost-types",
  "salvo",
