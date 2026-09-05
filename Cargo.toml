@@ -45,6 +45,7 @@ members = [
     "crates/ma-harness-credentials",  # 2026-09-05: P15.5.6 ctx.credentials (env + .env providers)
     "crates/ma-harness-hooks",  # 2026-09-05: P15.7 ctx.hooks (Claude Code wire protocol)
     "crates/ma-harness-self-modification",  # 2026-09-05: P15.6 ctx.selfMod (runtime plugin mount)
+    "crates/ma-harness-workflow",  # 2026-09-05: P15.4.1 ctx.workflows (sequential executor scaffold)
 ]
 
 [workspace.package]

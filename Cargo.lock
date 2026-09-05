@@ -3127,6 +3127,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ma-harness-workflow"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "ma-harness-cordis",
+ "ma-harness-seam",
+ "pretty_assertions",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mach2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
