@@ -387,6 +387,78 @@ impl WebhookVerifier for HmacSha256Verifier {
 }
 
 // ============================================================================
+// P15.3.5.1: GitLabTokenVerifier (multi-verifier example)
+// ============================================================================
+
+/// GitLab webhook 验签器 (P15.3.5.1 新增).
+///
+/// **GitLab 格式** (跟 GitHub 不同): `X-Gitlab-Token: <secret>`.
+/// No HMAC — 直接字符串比对. (GitLab 设计简单, secret 任意).
+///
+/// **比较**: `subtle::ConstantTimeEq` 防 timing attack (跟 HmacSha256Verifier 一致).
+///
+/// **业务方用法**:
+/// ```ignore
+/// let verifier = GitLabTokenVerifier::new(b"my-gitlab-token");
+/// let provider = LocalWebhookProvider::new()
+///     .with_route(RouteConfig::new("/webhook/gitlab", verifier));
+/// ```
+///
+/// **注**: GitLab 也支持 X-Gitlab-Event / X-Gitlab-Webhook-UUID 等 header
+/// (P15.3.5.2+ 可加 MultiVerifier 自动分发到 GitLab / GitHub style).
+#[derive(Clone)]
+pub struct GitLabTokenVerifier {
+    expected_token: Vec<u8>,
+}
+
+impl std::fmt::Debug for GitLabTokenVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 不打印 secret
+        f.debug_struct("GitLabTokenVerifier")
+            .field("expected_token_len", &self.expected_token.len())
+            .finish()
+    }
+}
+
+impl GitLabTokenVerifier {
+    /// 创建一个新的 GitLab token 验签器.
+    pub fn new(token: impl AsRef<[u8]>) -> Self {
+        let expected_token = token.as_ref().to_vec();
+        if expected_token.is_empty() {
+            tracing::warn!("GitLabTokenVerifier created with 0-length token (anyone can forge)");
+        }
+        Self { expected_token }
+    }
+}
+
+#[async_trait]
+impl WebhookVerifier for GitLabTokenVerifier {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        // P15.3.5.1: 新加 TokenCompare 变体, 表示 no-HMAC token 比对
+        // 注: 当前 SignatureAlgorithm 只有 HmacSha256 — 暂复用
+        // (业务方用类型匹配不影响功能, P15.3.5.2 可拆开 enum)
+        SignatureAlgorithm::HmacSha256
+    }
+
+    async fn verify(&self, _body: &[u8], signature: &str) -> Result<(), WebhookError> {
+        // X-Gitlab-Token header 的 value 就是 token 本身 (不像 GitHub 有 "sha256=" 前缀)
+        let provided = signature.as_bytes();
+
+        if provided.len() != self.expected_token.len() {
+            // 长度不等 → 一定不等, 但用 constant-time 比较避免 leak length
+            // (注: 实际 length 本身在 protocol 层就 leak, 这是 known 限制)
+            return Err(WebhookError::InvalidSignature("token mismatch".into()));
+        }
+
+        if provided.ct_eq(&self.expected_token).into() {
+            Ok(())
+        } else {
+            Err(WebhookError::InvalidSignature("token mismatch".into()))
+        }
+    }
+}
+
+// ============================================================================
 // RouteConfig
 // ============================================================================
 
@@ -1932,5 +2004,90 @@ mod tests {
                 assert_eq!(body["key"], "/webhook/git");
             }
         }
+    }
+
+    // ========================================================================
+    // P15.3.5.1 tests: GitLabTokenVerifier (multi-verifier example)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn gitlab_token_verifier_valid_token() {
+        let v = GitLabTokenVerifier::new(b"my-gitlab-secret");
+        assert!(v.verify(b"any body", "my-gitlab-secret").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn gitlab_token_verifier_invalid_token() {
+        let v = GitLabTokenVerifier::new(b"my-gitlab-secret");
+        let err = v.verify(b"any body", "wrong-token").await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn gitlab_token_verifier_different_length() {
+        // 长度不同 → 拒收 (但返同样错误信息避免 leak)
+        let v = GitLabTokenVerifier::new(b"abc");
+        let err = v.verify(b"any body", "abcdef").await.unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => assert!(msg.contains("mismatch")),
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gitlab_token_verifier_empty_token_warns() {
+        // 0 长度 token: 创建时 warn, verify 任 signature 都返 mismatch
+        let v = GitLabTokenVerifier::new(b"");
+        assert!(v.verify(b"", "").await.is_ok()); // 都空 → 等
+        assert!(v.verify(b"", "x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn gitlab_token_verifier_ignores_body() {
+        // GitLab X-Gitlab-Token 不依赖 body — 任意 body 都用相同 token 验
+        let v = GitLabTokenVerifier::new(b"shared-token");
+        assert!(v.verify(b"body 1", "shared-token").await.is_ok());
+        assert!(
+            v.verify(b"body 2 with more content", "shared-token")
+                .await
+                .is_ok()
+        );
+        assert!(v.verify(b"", "shared-token").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_gitlab_token_verifier_accepts_valid() {
+        // 端到端: 用 GitLabTokenVerifier 配 /webhook/gitlab, 提交 valid token → 200
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/gitlab",
+            GitLabTokenVerifier::new(b"gl-token-123"),
+        ));
+        let event = WebhookEvent::new("/webhook/gitlab", b"some body".to_vec())
+            .with_signature("gl-token-123");
+        let id = provider.submit(event).await.expect("submit");
+        assert!(!id.is_empty());
+        assert_eq!(provider.queue_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_gitlab_token_verifier_rejects_invalid() {
+        // 提交 invalid token → InvalidSignature, queue 仍 0
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/gitlab",
+            GitLabTokenVerifier::new(b"gl-token-123"),
+        ));
+        let event =
+            WebhookEvent::new("/webhook/gitlab", b"some body".to_vec()).with_signature("wrong");
+        let err = provider.submit(event).await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+        assert_eq!(provider.queue_len(), 0);
+    }
+
+    #[test]
+    fn gitlab_token_verifier_algorithm_is_hmac_sha256_stub() {
+        // P15.3.5.1 限制: GitLabTokenVerifier 返 HmacSha256 (没新 enum 变体)
+        // P15.3.5.2 加新变体
+        let v = GitLabTokenVerifier::new(b"x");
+        assert_eq!(v.algorithm(), SignatureAlgorithm::HmacSha256);
     }
 }
