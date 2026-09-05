@@ -320,6 +320,39 @@ impl Settings {
     pub fn is_empty(&self) -> bool {
         self.root.is_empty()
     }
+
+    /// Merge `other` into `self` (other wins on conflict).
+    ///
+    /// **算法**: 递归 walk `other.root` 的 mapping 树. 对每个 leaf key:
+    /// - `self` 没该 key → 直接插入
+    /// - `self` 有该 key, **双方都是 mapping** → 递归 merge
+    /// - **类型冲突** (一个 mapping 一个 scalar, 或两个不同 scalar) → `other` 覆盖
+    ///
+    /// **用途** (P15.5.4): `LayeredSettingsStore` 业务方加载多层 settings
+    /// (file + env) 时, 用 `merge` 合成最终 view. 后加载的 layer 覆盖前面的.
+    pub fn merge(&mut self, other: &Settings) {
+        merge_mapping(&mut self.root, &other.root);
+    }
+}
+
+/// 递归 merge helper: 把 `source` 树合并到 `target` 里, source 覆盖 target.
+fn merge_mapping(target: &mut Mapping, source: &Mapping) {
+    for (k, v) in source {
+        let key = k.clone();
+        let value = v.clone();
+        // 双方都是 mapping → recurse; 否则 source 覆盖 target
+        let both_mapping = matches!(target.get(&key), Some(Value::Mapping(_)))
+            && matches!(&value, Value::Mapping(_));
+        if both_mapping {
+            if let Value::Mapping(src_m) = value {
+                if let Some(Value::Mapping(target_m)) = target.get_mut(&key) {
+                    merge_mapping(target_m, &src_m);
+                }
+            }
+        } else {
+            target.insert(key, value);
+        }
+    }
 }
 
 /// 拆 key 为 parts (空 key 返 None).
@@ -490,6 +523,207 @@ impl SettingsStore for FileSettingsStore {
 
     fn provider_name(&self) -> &'static str {
         "file"
+    }
+}
+
+// ============================================================================
+// P15.5.4: EnvSettingsStore (env var override layer)
+// ============================================================================
+
+/// Env-var based SettingsStore (P15.5.4).
+///
+/// **行为**: 在 `load()` 时扫 process 的所有 env vars, 把匹配 `prefix` 的
+/// 变量转成 Settings entries. `save()` 不允许 (env 是只读的, 改 env 没意义
+/// 在 P15.5.4 范围; 业务方改 env 应该在 shell 启动进程前).
+///
+/// **Key mapping 约定**: `prefix` 后的部分:
+/// - 全部 lower-case
+/// - `__` (double underscore) → `.` (dot)
+/// - `_` (single underscore) → 保持 `_` (跟 double underscore 区分)
+///
+/// **例** (prefix = `MA_HARNESS_`):
+/// - `MA_HARNESS_API__OPENAI_KEY=sk-...` → `api.openai_key=sk-...`
+/// - `MA_HARNESS_DEBUG=true` → `debug=true`
+/// - `MA_HARNESS_MODELS__DEFAULT=gpt-4` → `models.default=gpt-4`
+/// - `MA_HARNESS_DB_URL_PRIMARY=postgres://...` → `db_url_primary=postgres://...`
+///   (single underscore preserved as literal `_`)
+///
+/// **业务方 workflow**:
+/// ```bash
+/// # Override file settings via env
+/// MA_HARNESS_API__OPENAI_KEY=sk-prod-key mah run "task"
+/// ```
+///
+/// **顺序**: env 在 `LayeredSettingsStore` 列表中越靠后, 优先级越高
+/// (覆盖前面的). 见 `LayeredSettingsStore`.
+pub struct EnvSettingsStore {
+    /// Env var prefix (e.g. `"MA_HARNESS_"`)
+    prefix: String,
+}
+
+impl std::fmt::Debug for EnvSettingsStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvSettingsStore")
+            .field("prefix", &self.prefix)
+            .finish()
+    }
+}
+
+impl EnvSettingsStore {
+    /// 创建一个新的 EnvSettingsStore, 绑 env var prefix.
+    ///
+    /// **Default convention**: `MA_HARNESS_` (跟 `default_settings_path` 风格一致).
+    pub fn new(prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+        }
+    }
+
+    /// Default prefix `MA_HARNESS_` (跟其它 settings 路径风格一致).
+    pub fn ma_harness() -> Self {
+        Self::new("MA_HARNESS_")
+    }
+
+    /// 把 env var name 转成 settings key (strip prefix + lowercase + `__` → `.`).
+    ///
+    /// **Example**:
+    /// - `MA_HARNESS_API__OPENAI_KEY` + prefix `MA_HARNESS_` → `api.openai_key`
+    /// - `MA_HARNESS_DEBUG` + prefix `MA_HARNESS_` → `debug`
+    /// - `MA_HARNESS_DB_URL_PRIMARY` + prefix `MA_HARNESS_` → `db_url_primary`
+    fn env_to_key(env_name: &str, prefix: &str) -> Option<String> {
+        env_name
+            .strip_prefix(prefix)
+            .map(|stripped| stripped.to_lowercase().replace("__", "."))
+    }
+}
+
+#[async_trait]
+impl SettingsStore for EnvSettingsStore {
+    async fn load(&self) -> Result<Settings, SettingsError> {
+        let mut settings = Settings::empty();
+        // std::env::vars() 在 edition 2024 是 safe 的 (跟 set_var 不一样)
+        for (env_name, value) in std::env::vars() {
+            if let Some(key) = Self::env_to_key(&env_name, &self.prefix) {
+                if !key.is_empty() {
+                    settings.set(&key, value);
+                }
+            }
+        }
+        tracing::debug!(
+            prefix = %self.prefix,
+            keys = settings.keys().len(),
+            "EnvSettingsStore loaded from env"
+        );
+        Ok(settings)
+    }
+
+    async fn save(&self, _settings: &Settings) -> Result<(), SettingsError> {
+        // Env is read-only at the runtime level. 业务方要改 env 应该在进程
+        // 启动前 (shell export / .env file / systemd unit).
+        Err(SettingsError::Config(
+            "EnvSettingsStore is read-only (env vars are process-level, set before launch)".into(),
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        Path::new("(env)")
+    }
+
+    fn provider_name(&self) -> &'static str {
+        "env"
+    }
+}
+
+// ============================================================================
+// P15.5.4: LayeredSettingsStore (priority-based composition)
+// ============================================================================
+
+/// 多层 SettingsStore 组合 (P15.5.4).
+///
+/// **行为**: `load()` 时按列表顺序加载每一层, 后加载的 layer 通过
+/// `Settings::merge` 覆盖前面的. 业务方用这个把 `FileSettingsStore` (低优先级)
+/// 跟 `EnvSettingsStore` (高优先级) 组合成 "env > file > defaults" 的 view.
+///
+/// **Save**: 不支持 (read-only composition). 业务方要 save 应直接调底层
+/// 的 `FileSettingsStore` (用 `provider.path()` 拿路径).
+///
+/// **业务方用法**:
+/// ```ignore
+/// use std::sync::Arc;
+/// use ma_harness_settings::{FileSettingsStore, EnvSettingsStore, LayeredSettingsStore, SettingsStore};
+///
+/// let layered = LayeredSettingsStore::new(vec![
+///     Arc::new(FileSettingsStore::at_default()?),
+///     Arc::new(EnvSettingsStore::ma_harness()),
+/// ]);
+/// let settings = layered.load().await?;
+/// // settings 现在是 env-override-file 的合并结果
+/// ```
+///
+/// **Error 处理**: 任一层 `load()` 失败 → 整个 `load()` 返错 (fail-fast).
+/// 业务方可选 wrap 每层来 graceful degradation (P15.5.4+).
+pub struct LayeredSettingsStore {
+    /// Layer 列表: 索引 0 = 最低优先级, 最后一个 = 最高优先级.
+    layers: Vec<std::sync::Arc<dyn SettingsStore>>,
+}
+
+impl std::fmt::Debug for LayeredSettingsStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.layers.iter().map(|l| l.provider_name()).collect();
+        f.debug_struct("LayeredSettingsStore")
+            .field("layers", &names)
+            .field("count", &self.layers.len())
+            .finish()
+    }
+}
+
+impl LayeredSettingsStore {
+    /// 创建一个 LayeredSettingsStore, 绑 layer 列表.
+    ///
+    /// **顺序约定**: 第一个 = 最低优先级, 最后一个 = 最高优先级. 例如
+    /// `[file, env]` 意味着 env 覆盖 file, file 覆盖 defaults.
+    pub fn new(layers: Vec<std::sync::Arc<dyn SettingsStore>>) -> Self {
+        Self { layers }
+    }
+}
+
+#[async_trait]
+impl SettingsStore for LayeredSettingsStore {
+    async fn load(&self) -> Result<Settings, SettingsError> {
+        let mut merged = Settings::empty();
+        for (i, layer) in self.layers.iter().enumerate() {
+            let s = layer.load().await.map_err(|e| {
+                tracing::error!(
+                    layer = layer.provider_name(),
+                    index = i,
+                    error = %e,
+                    "LayeredSettingsStore: layer load failed"
+                );
+                e
+            })?;
+            merged.merge(&s);
+            tracing::debug!(
+                layer = layer.provider_name(),
+                index = i,
+                total_keys = merged.keys().len(),
+                "LayeredSettingsStore: layer merged"
+            );
+        }
+        Ok(merged)
+    }
+
+    async fn save(&self, _settings: &Settings) -> Result<(), SettingsError> {
+        Err(SettingsError::Config(
+            "LayeredSettingsStore is read-only (compose multiple read-only layers)".into(),
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        Path::new("(layered)")
+    }
+
+    fn provider_name(&self) -> &'static str {
+        "layered"
     }
 }
 
@@ -1357,5 +1591,343 @@ mod tests {
         let debug = format!("{watcher:?}");
         assert!(debug.contains("SettingsWatcher"));
         assert!(debug.contains("active"));
+    }
+
+    // ========================================================================
+    // P15.5.4 tests: Settings::merge + EnvSettingsStore + LayeredSettingsStore
+    // ========================================================================
+
+    // ----- Settings::merge -----
+
+    #[test]
+    fn settings_merge_overrides_existing_leaf() {
+        let mut base = Settings::empty();
+        base.set("api.key", "from-base");
+        let mut other = Settings::empty();
+        other.set("api.key", "from-other");
+        base.merge(&other);
+        assert_eq!(base.get_str("api.key"), Some("from-other"));
+    }
+
+    #[test]
+    fn settings_merge_adds_new_keys() {
+        let mut base = Settings::empty();
+        base.set("api.key", "v");
+        let mut other = Settings::empty();
+        other.set("debug", "true");
+        other.set("models.default", "gpt-4");
+        base.merge(&other);
+        assert_eq!(base.get_str("api.key"), Some("v"));
+        assert_eq!(base.get_str("debug"), Some("true"));
+        assert_eq!(base.get_str("models.default"), Some("gpt-4"));
+    }
+
+    #[test]
+    fn settings_merge_recurses_into_nested_mappings() {
+        // 双方都有 nested mapping → 递归 merge
+        let mut base = Settings::empty();
+        base.set("api.openai_key", "sk-file");
+        base.set("api.anthropic_key", "sk-ant-file");
+        let mut other = Settings::empty();
+        other.set("api.openai_key", "sk-env");
+        other.set("models.default", "gpt-4");
+        base.merge(&other);
+        // openai_key: env 覆盖 file
+        assert_eq!(base.get_str("api.openai_key"), Some("sk-env"));
+        // anthropic_key: 只在 file 有, 保留
+        assert_eq!(base.get_str("api.anthropic_key"), Some("sk-ant-file"));
+        // models.default: 只在 env 有, 新增
+        assert_eq!(base.get_str("models.default"), Some("gpt-4"));
+    }
+
+    #[test]
+    fn settings_merge_empty_other_is_noop() {
+        let mut base = Settings::empty();
+        base.set("a", "1");
+        base.set("b.c", "2");
+        let other = Settings::empty();
+        base.merge(&other);
+        assert_eq!(base.get_str("a"), Some("1"));
+        assert_eq!(base.get_str("b.c"), Some("2"));
+    }
+
+    #[test]
+    fn settings_merge_empty_base_just_copies() {
+        let mut base = Settings::empty();
+        let mut other = Settings::empty();
+        other.set("x.y.z", "deep");
+        other.set("a", "1");
+        base.merge(&other);
+        assert_eq!(base.get_str("x.y.z"), Some("deep"));
+        assert_eq!(base.get_str("a"), Some("1"));
+    }
+
+    #[test]
+    fn settings_merge_type_conflict_overrides() {
+        // base 有 "api" 是 string, other 有 "api.foo" 是 nested
+        // → "api" 应被替换为 mapping (other wins)
+        let mut base = Settings::empty();
+        base.set("api", "scalar-value");
+        let mut other = Settings::empty();
+        other.set("api.foo", "nested-value");
+        base.merge(&other);
+        assert_eq!(base.get_str("api.foo"), Some("nested-value"));
+        // base 原 scalar "api" 应被丢弃 (other 是 mapping, override 整个 key)
+    }
+
+    // ----- EnvSettingsStore -----
+
+    /// Helper: 设 env var, 跑 closure, 恢复原值
+    #[allow(unsafe_code)]
+    fn with_env_var<F: FnOnce()>(name: &str, value: Option<&str>, f: F) {
+        let original = std::env::var_os(name);
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+        f();
+        unsafe {
+            match original {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
+    fn env_settings_store_reads_matching_vars() {
+        // 业务方: MA_HARNESS_API__OPENAI_KEY → api.openai_key
+        with_env_var("MA_HARNESS_API__OPENAI_KEY", Some("sk-from-env"), || {
+            let store = EnvSettingsStore::ma_harness();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let s = rt.block_on(store.load()).expect("load");
+            assert_eq!(s.get_str("api.openai_key"), Some("sk-from-env"));
+        });
+    }
+
+    #[test]
+    fn env_settings_store_double_underscore_maps_to_dot() {
+        with_env_var("MA_HARNESS_MODELS__DEFAULT", Some("gpt-4"), || {
+            with_env_var("MA_HARNESS_DEBUG", Some("true"), || {
+                let store = EnvSettingsStore::ma_harness();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let s = rt.block_on(store.load()).expect("load");
+                assert_eq!(s.get_str("models.default"), Some("gpt-4"));
+                assert_eq!(s.get_str("debug"), Some("true"));
+            });
+        });
+    }
+
+    #[test]
+    fn env_settings_store_ignores_non_matching_prefix() {
+        // 业务方设了 NON_PREFIX var, store 不应读
+        with_env_var("OTHER_API__KEY", Some("sk-other"), || {
+            with_env_var("MA_HARNESS_DEBUG", Some("true"), || {
+                let store = EnvSettingsStore::ma_harness();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let s = rt.block_on(store.load()).expect("load");
+                // MA_HARNESS_DEBUG 读到
+                assert_eq!(s.get_str("debug"), Some("true"));
+                // OTHER_API__KEY 不读
+                assert!(!s.has("other_api.key"));
+                assert!(!s.has("api.key"));
+            });
+        });
+    }
+
+    #[test]
+    fn env_settings_store_custom_prefix() {
+        // 业务方用 MYAPP_ 前缀
+        with_env_var("MYAPP_API__KEY", Some("custom-secret"), || {
+            with_env_var("MA_HARNESS_DEBUG", Some("ignored"), || {
+                let store = EnvSettingsStore::new("MYAPP_");
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let s = rt.block_on(store.load()).expect("load");
+                assert_eq!(s.get_str("api.key"), Some("custom-secret"));
+                // MA_HARNESS_DEBUG 不读 (prefix 不匹配)
+                assert!(!s.has("debug"));
+            });
+        });
+    }
+
+    #[test]
+    fn env_settings_store_save_is_rejected() {
+        let store = EnvSettingsStore::ma_harness();
+        let s = Settings::empty();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt.block_on(store.save(&s)).unwrap_err();
+        assert!(matches!(err, SettingsError::Config(_)));
+    }
+
+    #[test]
+    fn env_settings_store_env_to_key_strips_prefix() {
+        let key = EnvSettingsStore::env_to_key("MA_HARNESS_API__OPENAI_KEY", "MA_HARNESS_");
+        assert_eq!(key, Some("api.openai_key".to_string()));
+    }
+
+    #[test]
+    fn env_settings_store_env_to_key_lowercases() {
+        let key = EnvSettingsStore::env_to_key("MA_HARNESS_DEBUG", "MA_HARNESS_");
+        assert_eq!(key, Some("debug".to_string()));
+    }
+
+    #[test]
+    fn env_settings_store_env_to_key_preserves_single_underscore() {
+        // single underscore 保持 (跟 double underscore 区分)
+        let key = EnvSettingsStore::env_to_key("MA_HARNESS_DB_URL_PRIMARY", "MA_HARNESS_");
+        assert_eq!(key, Some("db_url_primary".to_string()));
+    }
+
+    #[test]
+    fn env_settings_store_env_to_key_rejects_non_matching() {
+        let key = EnvSettingsStore::env_to_key("OTHER_API__KEY", "MA_HARNESS_");
+        assert_eq!(key, None);
+    }
+
+    // ----- LayeredSettingsStore -----
+
+    #[tokio::test]
+    async fn layered_settings_store_single_layer() {
+        // 单层等价于直接用 file store
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        tokio::fs::write(
+            &path,
+            "api:
+  key: from-file
+",
+        )
+        .await
+        .expect("write");
+
+        let file_store: std::sync::Arc<dyn SettingsStore> =
+            std::sync::Arc::new(FileSettingsStore::new(&path));
+        let layered = LayeredSettingsStore::new(vec![file_store]);
+        let s = layered.load().await.expect("load");
+        assert_eq!(s.get_str("api.key"), Some("from-file"));
+    }
+
+    #[test]
+    fn layered_settings_store_file_plus_env_env_wins() {
+        // File 有 api.key, env 也设 api.key → env wins
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        std::fs::write(&path, "api:\n  key: from-file\n").expect("write");
+
+        with_env_var("MA_HARNESS_API__KEY", Some("from-env"), || {
+            let file_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(FileSettingsStore::new(&path));
+            let env_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(EnvSettingsStore::ma_harness());
+            // env 在 list 后 (高优先级)
+            let layered = LayeredSettingsStore::new(vec![file_store, env_store]);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let s = rt.block_on(layered.load()).expect("load");
+            assert_eq!(s.get_str("api.key"), Some("from-env"));
+        });
+    }
+
+    #[test]
+    fn layered_settings_store_file_only_keys_preserved() {
+        // File 有 anthropic_key, env 没有 → file 保留
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        std::fs::write(
+            &path,
+            "api:\n  openai_key: sk-file\n  anthropic_key: sk-ant-file\n",
+        )
+        .expect("write");
+
+        with_env_var("MA_HARNESS_API__OPENAI_KEY", Some("sk-env"), || {
+            let file_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(FileSettingsStore::new(&path));
+            let env_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(EnvSettingsStore::ma_harness());
+            let layered = LayeredSettingsStore::new(vec![file_store, env_store]);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let s = rt.block_on(layered.load()).expect("load");
+            // openai_key: env 覆盖 file
+            assert_eq!(s.get_str("api.openai_key"), Some("sk-env"));
+            // anthropic_key: file 保留 (env 没设)
+            assert_eq!(s.get_str("api.anthropic_key"), Some("sk-ant-file"));
+        });
+    }
+
+    #[test]
+    fn layered_settings_store_env_only_keys_added() {
+        // File 没有 debug, env 有 debug → 新增
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        std::fs::write(&path, "api:\n  key: from-file\n").expect("write");
+
+        with_env_var("MA_HARNESS_TEST_ENV_ONLY", Some("added"), || {
+            let file_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(FileSettingsStore::new(&path));
+            let env_store: std::sync::Arc<dyn SettingsStore> =
+                std::sync::Arc::new(EnvSettingsStore::ma_harness());
+            let layered = LayeredSettingsStore::new(vec![file_store, env_store]);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let s = rt.block_on(layered.load()).expect("load");
+            assert_eq!(s.get_str("api.key"), Some("from-file"));
+            assert_eq!(s.get_str("test_env_only"), Some("added"));
+        });
+    }
+
+    #[tokio::test]
+    async fn layered_settings_store_empty_layers() {
+        // 0 层 → empty settings
+        let layered = LayeredSettingsStore::new(vec![]);
+        let s = layered.load().await.expect("load");
+        assert!(s.is_empty());
+    }
+
+    #[tokio::test]
+    async fn layered_settings_store_save_is_rejected() {
+        let file_store: std::sync::Arc<dyn SettingsStore> =
+            std::sync::Arc::new(FileSettingsStore::new("/tmp/nonexistent.yaml"));
+        let layered = LayeredSettingsStore::new(vec![file_store]);
+        let s = Settings::empty();
+        let err = layered.save(&s).await.unwrap_err();
+        assert!(matches!(err, SettingsError::Config(_)));
+    }
+
+    #[test]
+    fn layered_settings_store_debug_shows_layer_names() {
+        let file_store: std::sync::Arc<dyn SettingsStore> =
+            std::sync::Arc::new(FileSettingsStore::new("/tmp/foo.yaml"));
+        let env_store: std::sync::Arc<dyn SettingsStore> =
+            std::sync::Arc::new(EnvSettingsStore::ma_harness());
+        let layered = LayeredSettingsStore::new(vec![file_store, env_store]);
+        let debug = format!("{layered:?}");
+        assert!(debug.contains("LayeredSettingsStore"));
+        assert!(debug.contains("file"));
+        assert!(debug.contains("env"));
+        assert!(debug.contains("count"));
     }
 }
