@@ -3135,6 +3135,7 @@ dependencies = [
  "chrono",
  "ma-harness-cordis",
  "ma-harness-seam",
+ "ma-harness-subprocess",
  "pretty_assertions",
  "serde",
  "serde_yaml",

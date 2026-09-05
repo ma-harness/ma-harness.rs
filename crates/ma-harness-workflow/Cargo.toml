@@ -16,6 +16,7 @@ workspace = true
 # Internal — ctx key plumbing
 ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
 ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+ma-harness-subprocess = { path = "../ma-harness-subprocess", version = "0.1.0" }  # 2026-09-05 (P15.4.4): ShellStepRunner 走 ctx.subprocess
 
 # External
 async-trait = { workspace = true }

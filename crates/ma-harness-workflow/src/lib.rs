@@ -459,6 +459,106 @@ impl StepRunner for FlakyStepRunner {
     }
 }
 
+/// Real shell runner (P15.4.4).
+///
+/// 走 `ctx.subprocess` (via `ma-harness-subprocess::LocalSubprocessProvider`) 真跑 shell 命令:
+/// - Unix: `sh -c <action>`
+/// - Windows: `cmd /C <action>`
+///
+/// **业务方**:
+/// ```ignore
+/// let engine = LocalWorkflow::with_runner(Arc::new(ShellStepRunner::new()));
+/// let def = WorkflowDefinition::from_yaml(r#"
+/// name: ci
+/// steps:
+///   - name: build
+///     action: cargo build --release
+///     timeout_secs: 600
+/// "#)?;
+/// let result = engine.run(&def).await?;
+/// ```
+///
+/// **行为**:
+/// - `step.action` 是 shell 命令字符串 (opaque 给 framework)
+/// - stdout / stderr 走 subprocess 的 Piped, 失败时把 stderr 加进 error reason
+/// - `step.timeout_secs > 0` 时用 `CommandSpec::timeout` 让 subprocess 内部 abort
+///   (跟 workflow crate 外层 `tokio::time::timeout` 是双层保护, 正常情况 subprocess 先 kill)
+///
+/// **P15.4.4 限制**:
+/// - **没**shell escape / argument splitting (action 整串当 -c 参数, 业务方自己 wrap quote)
+/// - **没**env 注入 (继承父进程 env, P15.4.4+ 允许 `Step.env: BTreeMap<String, String>`)
+/// - **没**工作目录指定 (走 `std::env::current_dir()`, P15.4.4+ 加 `Step.cwd`)
+/// - **没**PTY (`cmd /C` / `sh -c` 不是交互式, P15.2 portable-pty 集成是 P15.4.5+ 计划)
+pub struct ShellStepRunner {
+    provider: std::sync::Arc<ma_harness_subprocess::LocalSubprocessProvider>,
+}
+
+impl std::fmt::Debug for ShellStepRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellStepRunner").finish_non_exhaustive()
+    }
+}
+
+impl Default for ShellStepRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShellStepRunner {
+    /// 创建一个 default ShellStepRunner (走 `LocalSubprocessProvider`).
+    pub fn new() -> Self {
+        Self {
+            provider: std::sync::Arc::new(ma_harness_subprocess::LocalSubprocessProvider::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl StepRunner for ShellStepRunner {
+    async fn run(&self, step: &Step) -> Result<(), String> {
+        use std::ffi::OsString;
+        use ma_harness_subprocess::{CommandSpec, StdioConfig, SubprocessService};
+
+        // 平台默认 shell + flag
+        let (prog, flag): (&str, &str) = if cfg!(windows) {
+            ("cmd", "/C")
+        } else {
+            ("sh", "-c")
+        };
+
+        let mut spec = CommandSpec::new(
+            prog,
+            vec![OsString::from(flag), OsString::from(step.action.as_str())],
+        )
+        .stdout(StdioConfig::Piped)
+        .stderr(StdioConfig::Piped);
+
+        if step.timeout_secs > 0 {
+            spec = spec.timeout(std::time::Duration::from_secs(step.timeout_secs));
+        }
+
+        let output = self
+            .provider
+            .output(&spec)
+            .await
+            .map_err(|e| format!("subprocess spawn failed: {}", e))?;
+
+        if !output.status.success {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "shell command failed: exit={:?}, stderr={}",
+                output.status.code,
+                stderr.trim_end()
+            ));
+        }
+        Ok(())
+    }
+    fn name(&self) -> &'static str {
+        "shell"
+    }
+}
+
 // ============================================================================
 // WorkflowEngine trait
 // ============================================================================
@@ -1791,5 +1891,111 @@ steps:
         let yaml2 = d.to_yaml().expect("serialize");
         let d2 = WorkflowDefinition::from_yaml(&yaml2).expect("re-parse");
         assert_eq!(d, d2);
+    }
+
+    // ----- P15.4.4: ShellStepRunner (real shell exec) -----
+
+    /// 测 ShellStepRunner 跨平台 — Unix 走 `sh -c`, Windows 走 `cmd /C`.
+    /// 跨平台命令: `echo hello` (在 cmd 和 sh 都存在, 都返 0)
+    #[tokio::test]
+    async fn shell_step_runner_runs_echo_hello() {
+        let runner = ShellStepRunner::new();
+        let s = Step::new("echo", "echo hello");
+        let result = runner.run(&s).await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn shell_step_runner_captures_exit_code_one() {
+        // 跨平台: 退出码 1 (false 在 cmd 和 sh 都返 1)
+        let runner = ShellStepRunner::new();
+        let s = Step::new("fail", "false");
+        let err = runner.run(&s).await.unwrap_err();
+        assert!(
+            err.contains("shell command failed") && err.contains("exit="),
+            "expected shell-failed message, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_step_runner_captures_stderr_in_error() {
+        // 跨平台: 写 stderr, 返非 0
+        let runner = ShellStepRunner::new();
+        let s = Step::new(
+            "stderr",
+            if cfg!(windows) {
+                "echo oops 1>&2 & exit /b 1"
+            } else {
+                "echo oops >&2; exit 1"
+            },
+        );
+        let err = runner.run(&s).await.unwrap_err();
+        assert!(
+            err.contains("oops"),
+            "expected stderr in error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_step_runner_respects_timeout_secs() {
+        // 跑一个比 timeout 长得多的命令, 验 timeout 触发
+        let runner = ShellStepRunner::new();
+        let s = Step::new(
+            "sleep",
+            if cfg!(windows) {
+                // ping localhost -n 3 ≈ 2s (Windows 没有 portable sleep)
+                "ping -n 3 127.0.0.1 > nul"
+            } else {
+                "sleep 5"
+            },
+        )
+        .with_timeout(1);
+        let started = std::time::Instant::now();
+        let err = runner.run(&s).await.unwrap_err();
+        let elapsed = started.elapsed();
+        // 应该在 ~1s 内 fail (timeout 触发), 不是 5s
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "timeout should fire within 1s, got {:?}",
+            elapsed
+        );
+        assert!(
+            err.contains("shell command failed")
+                || err.contains("timed out")
+                || err.contains("timeout"),
+            "expected timeout-related error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn local_workflow_with_shell_runner_executes_real_command() {
+        // 端到端: 跑一个真命令 (跨平台, 不依赖 filesystem 副作用)
+        // - Unix: `which sh` (path lookup, 返 0)
+        // - Windows: `where cmd` (path lookup, 返 0)
+        let runner = std::sync::Arc::new(ShellStepRunner::new());
+        let engine = LocalWorkflow::with_runner(runner);
+
+        let action = if cfg!(windows) {
+            "where cmd"
+        } else {
+            "which sh"
+        };
+        let yaml = format!(
+            "name: shell-test\nsteps:\n  - name: lookup\n    action: '{}'\n",
+            action
+        );
+        let def = WorkflowDefinition::from_yaml(&yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        if !result.success {
+            eprintln!("DEBUG: step status = {:?}", result.steps[0].status);
+        }
+        assert!(
+            result.success,
+            "workflow failed; step status: {:?}",
+            result.steps[0].status
+        );
     }
 }

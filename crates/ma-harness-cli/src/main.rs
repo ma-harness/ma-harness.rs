@@ -281,6 +281,7 @@ enum WorkflowAction {
     /// Example:
     ///   `mah workflow run ~/.ma-harness/workflows/ci.yaml`
     ///   `mah workflow run ci.yaml --engine parallel --concurrency 8`
+    ///   `mah workflow run ci.yaml --dry-run` (用 LoggingStepRunner, 不真跑 shell)
     Run {
         /// Workflow YAML 文件路径 (绝对 / 相对 / `~/.ma-harness/workflows/<name>` 短名)
         file: PathBuf,
@@ -293,6 +294,12 @@ enum WorkflowAction {
         /// 即使 workflow 失败也 exit 0 (默认 exit 1 if !success)
         #[arg(long)]
         no_fail_on_step: bool,
+        /// Dry-run: 用 LoggingStepRunner 而不真跑 shell (P15.4.4)
+        ///
+        /// 默认是 real shell runner (走 `ma-harness-subprocess::LocalSubprocessProvider`).
+        /// `--dry-run` 用来 preview 跑什么, 或在 sandbox 跑测试.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// 解析 + DAG 校验 (不跑 step)
     ///
@@ -576,7 +583,8 @@ async fn main() -> Result<()> {
                 engine,
                 concurrency,
                 no_fail_on_step,
-            } => workflow_run(&file, engine, concurrency, no_fail_on_step).await,
+                dry_run,
+            } => workflow_run(&file, engine, concurrency, no_fail_on_step, dry_run).await,
             WorkflowAction::Validate { file } => workflow_validate(&file).await,
         },
         Commands::RunStream {
@@ -1776,42 +1784,52 @@ fn settings_list(file: Option<&std::path::Path>) -> Result<()> {
 
 /// `mah workflow run <file>` — load + run + print summary.
 ///
-/// **P15.4.3 minimal**: 用 `LoggingStepRunner` (dry-run). 业务方自己 wrap 一个
-/// 真实 shell runner 走 programmatic API (`LocalWorkflow::with_runner(...)`).
+/// **P15.4.4**: 默认跑 real shell (走 `ShellStepRunner` → `ma-harness-subprocess`).
+/// `--dry-run` flag 退回 `LoggingStepRunner` (只 log, 不跑)。
 async fn workflow_run(
     file: &std::path::Path,
     engine: WorkflowEngineArg,
     concurrency: usize,
     no_fail_on_step: bool,
+    dry_run: bool,
 ) -> Result<()> {
     use ma_harness_workflow::{
-        DagWorkflow, LocalWorkflow, ParallelWorkflow, StepRunner, WorkflowDefinition,
-        WorkflowEngine,
+        DagWorkflow, LocalWorkflow, ParallelWorkflow, ShellStepRunner, StepRunner,
+        WorkflowDefinition, WorkflowEngine,
     };
 
     // 1. load YAML
     let def = WorkflowDefinition::from_file(file)
         .with_context(|| format!("load workflow from {}", file.display()))?;
     eprintln!(
-        "[workflow] loaded: name={}, steps={}",
+        "[workflow] loaded: name={}, steps={}, runner={}",
         def.name,
-        def.steps.len()
+        def.steps.len(),
+        if dry_run {
+            "logging (dry-run)"
+        } else {
+            "shell"
+        }
     );
 
-    // 2. 选 engine (runner 用 LoggingStepRunner dry-run, P15.4.4+ 接真实 shell runner)
-    let logging: std::sync::Arc<dyn StepRunner> = std::sync::Arc::new(LoggingStepRunnerShim);
+    // 2. 选 runner
+    let runner: std::sync::Arc<dyn StepRunner> = if dry_run {
+        std::sync::Arc::new(LoggingStepRunnerShim)
+    } else {
+        std::sync::Arc::new(ShellStepRunner::new())
+    };
 
     let result = match engine {
         WorkflowEngineArg::Local => {
-            let eng = LocalWorkflow::with_runner(logging);
+            let eng = LocalWorkflow::with_runner(runner);
             eng.run(&def).await.context("run local workflow")?
         }
         WorkflowEngineArg::Parallel => {
-            let eng = ParallelWorkflow::with_runner(logging).with_max_concurrency(concurrency);
+            let eng = ParallelWorkflow::with_runner(runner).with_max_concurrency(concurrency);
             eng.run(&def).await.context("run parallel workflow")?
         }
         WorkflowEngineArg::Dag => {
-            let eng = DagWorkflow::with_runner(logging).with_max_concurrency(concurrency);
+            let eng = DagWorkflow::with_runner(runner).with_max_concurrency(concurrency);
             eng.run(&def).await.context("run dag workflow")?
         }
     };
@@ -1853,6 +1871,9 @@ async fn workflow_validate(file: &std::path::Path) -> Result<()> {
 }
 
 /// 打印 workflow result 摘要到 stdout (P15.4.3).
+///
+/// **P15.4.4 增强**: Failed 步骤打印 reason (业务方能直接看到 stderr / exit code,
+/// 不用 dig RunResult).
 fn print_workflow_result(result: &ma_harness_workflow::RunResult) {
     println!("workflow: {}", result.workflow_name);
     println!("success: {}", result.success);
@@ -1862,9 +1883,14 @@ fn print_workflow_result(result: &ma_harness_workflow::RunResult) {
         result.total_elapsed_ms()
     );
     for (i, s) in result.steps.iter().enumerate() {
+        // Failed 步骤打印 reason (一行)
+        let reason_suffix = match &s.status {
+            ma_harness_workflow::StepStatus::Failed { reason } => format!(" reason={}", reason),
+            _ => String::new(),
+        };
         println!(
-            "  [{}] {} -> {} (attempts={}, elapsed_ms={})",
-            i, s.name, s.status, s.attempts, s.elapsed_ms
+            "  [{}] {} -> {} (attempts={}, elapsed_ms={}){}",
+            i, s.name, s.status, s.attempts, s.elapsed_ms, reason_suffix
         );
     }
 }
