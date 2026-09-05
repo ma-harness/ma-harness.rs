@@ -57,17 +57,21 @@
 //!
 //! # 限制 (Limitations) — P15.4.2.4
 //!
-//! - **没**conditional branching (`if` / `else` based on prior step result, P15.4.2.3+)
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
 //!   业务方用 StepRunner 注入)
 //! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
 //!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
 //! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
 //! - **没**跨 step 数据传递 (depends_on 只控顺序, 业务方用 env / 临时文件 / Arc<Mutex<>>)
+//! - **没**P15.4.2.3 expression 完整版 (目前支持 literal `true`/`false`/missing + 单 step_name 引用;
+//!   `&&` / `||` / `!` / 多条件 P15.4.5+)
 //! - **✅ P15.4.2.1**: `ParallelWorkflow` engine (tokio::spawn + Semaphore, 默认 4 并发,
 //!   一次性全并发跑所有 step)
 //! - **✅ P15.4.2.2**: `DagWorkflow` engine + `Step.depends_on` (拓扑排序 + in-degree 调度,
 //!   cycle detection 返 `WorkflowError::Parse`, 复用 `run_step_with_retry` helper)
+//! - **✅ P15.4.2.3**: `Step.when: Option<String>` 条件表达式 (literal `true`/`false`/missing
+//!   默认 true, 单 step_name 引用返该 step 成功状态; false 标 Skipped, cascade 到 dependents
+//!   跟 P15.4.2.4 行为一致)
 //! - **✅ P15.4.2.4**: dep-fail → Skipped 语义 (P15.4.2.2 是 continue-on-fail; 现在 DagWorkflow
 //!   在 dep Failed / TimedOut 时 cascade 标 dependent 为 `StepStatus::Skipped`, 跟 dsh 一致)
 //!   - ⚠️ P15.4.2.4 行为变更: 旧测试 `dag_workflow_runs_dependent_after_dep_fails` 已改名为
@@ -151,10 +155,31 @@ pub struct Step {
     /// **P15.4.2.2 限制**: 跨 step 数据传递不支持 (depends_on 只控顺序, 不传值).
     /// 业务方自己用 `std::env` / 临时文件 / 共享 Arc<Mutex<>> 传数据.
     ///
-    /// **P15.4.2.2 限制**: dep step 失败时, dependent 仍会跑 (continue-on-fail 跟
-    /// Local/Parallel 一致). P15.4.2.3+ 加 `Skipped` 语义.
+    /// **P15.4.2.4 ✅**: dep step 失败时, dependent 标 `Skipped` (cascade, 跟 dsh 1:1).
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// 条件表达式 (P15.4.2.3). `None` = always run.
+    ///
+    /// **YAML**:
+    /// ```yaml
+    /// - name: deploy
+    ///   action: ./deploy.sh
+    ///   when: build   # only run if `build` step succeeded
+    /// ```
+    ///
+    /// **支持的表达式** (P15.4.2.3 minimal):
+    /// - `None` / missing: 总是跑
+    /// - `"true"`: 总是跑 (跟 None 等价, 显式表达)
+    /// - `"false"`: 总是 skip (标 `Skipped`, 不进 runner)
+    /// - `"<step_name>"`: 引用另一步的成功状态 (true if 那个 step 是 Succeeded, 否则 false)
+    ///
+    /// **P15.4.2.3 限制**:
+    /// - 表达式 parser 是简单 trim + match, 不支持 `&&` / `||` / `!` (P15.4.5+ 加完整 expression)
+    /// - 引用未跑过的 step → skip (避免 forward-ref 歧义)
+    /// - 引用不存在的 step → skip
+    /// - Skipped step 跟 dep-fail Skipped 一样 cascade 到 dependents
+    #[serde(default)]
+    pub when: Option<String>,
 }
 
 impl Step {
@@ -166,6 +191,7 @@ impl Step {
             timeout_secs: 0,
             retries: 0,
             depends_on: Vec::new(),
+            when: None,
         }
     }
 
@@ -184,6 +210,18 @@ impl Step {
     /// Builder: 设 depends_on (P15.4.2.2).
     pub fn with_depends_on(mut self, deps: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.depends_on = deps.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Builder: 设 `when` 条件表达式 (P15.4.2.3).
+    ///
+    /// **Examples**:
+    /// ```ignore
+    /// Step::new("deploy", "./deploy.sh").with_when("build")
+    /// Step::new("always", "true").with_when("true")
+    /// ```
+    pub fn with_when(mut self, expr: impl Into<String>) -> Self {
+        self.when = Some(expr.into());
         self
     }
 }
@@ -584,6 +622,32 @@ pub trait WorkflowEngine: Send + Sync + 'static {
 // LocalWorkflow (P15.4.1 主交付 — sequential executor)
 // ============================================================================
 
+/// 评估 `Step.when` 条件表达式 (P15.4.2.3)。
+///
+/// **支持的表达式**:
+/// - `None` 或空字符串 → `true` (always run)
+/// - `"true"` (trim) → `true`
+/// - `"false"` (trim) → `false`
+/// - 其他字符串 → 视为 step name, 用 `is_step_succeeded` lookup
+///
+/// **lookup 语义**:
+/// - 返 `true` → 跑 (runner 调用)
+/// - 返 `false` → skip (标 `StepStatus::Skipped`)
+///
+/// **业务方**: 不直接调, 是 engine 内部 helper (LocalWorkflow / ParallelWorkflow /
+/// DagWorkflow 在 dispatch 前调用)。
+fn evaluate_when(when: &Option<String>, is_step_succeeded: impl Fn(&str) -> bool) -> bool {
+    let Some(expr) = when else {
+        return true;
+    };
+    let expr = expr.trim();
+    match expr {
+        "" | "true" => true,
+        "false" => false,
+        step_name => is_step_succeeded(step_name),
+    }
+}
+
 /// 跑单个 step 带 retry + timeout (P15.4.2.1 抽出, 共享给 LocalWorkflow / ParallelWorkflow).
 ///
 /// **返**: `(StepStatus, attempts_used, elapsed_ms)`.
@@ -693,6 +757,27 @@ impl WorkflowEngine for LocalWorkflow {
         let mut step_results: Vec<StepResult> = Vec::new();
 
         for step in &definition.steps {
+            // P15.4.2.3: 评估 `when` 条件. LocalWorkflow 是 sequential, 所以 step_results
+            // 已经记录了所有先前 step 的状态, 引用语义 = true if 那个 step 是 Succeeded.
+            let should_run = evaluate_when(&step.when, |name| {
+                step_results
+                    .iter()
+                    .find(|r| r.name == name)
+                    .map(|r| matches!(r.status, StepStatus::Succeeded))
+                    .unwrap_or(false) // unknown step name → skip (跟 P15.4.2.3 docstring 一致)
+            });
+
+            if !should_run {
+                step_results.push(StepResult {
+                    name: step.name.clone(),
+                    action: step.action.clone(),
+                    status: StepStatus::Skipped,
+                    attempts: 0,
+                    elapsed_ms: 0,
+                });
+                continue;
+            }
+
             let (final_status, attempts_used, step_elapsed_ms) =
                 run_step_with_retry(&*self.runner, step).await;
 
@@ -808,10 +893,32 @@ impl WorkflowEngine for ParallelWorkflow {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_concurrency));
 
         let mut handles = Vec::with_capacity(n);
-        for step in definition.steps.iter() {
+        for (idx, step) in definition.steps.iter().enumerate() {
             let runner = self.runner.clone();
             let sem = semaphore.clone();
             let step_owned = step.clone();
+
+            // P15.4.2.3: 评估 `when` 在 spawn 前 (此时 results[idx] 还没填, 但我们要的是
+            // 其他 step 的状态). 在 spawn 后 await 时再 check 太晚了 (race), 所以
+            // 预先决定. 注意: ParallelWorkflow 是"全并发", 引用未跑 step 会默认 false.
+            let should_run = evaluate_when(&step.when, |_name| {
+                // ParallelWorkflow 没 dep graph, 引用其他 step 没法 guarantee 已完成.
+                // P15.4.2.3 minimal 限制: ParallelWorkflow 下的 `when: <step_name>` 几乎
+                // 永远 false (因为没 in-deps 保证). 业务方应该用 DagWorkflow 配合 depends_on.
+                false
+            });
+
+            if !should_run {
+                results[idx] = Some(StepResult {
+                    name: step.name.clone(),
+                    action: step.action.clone(),
+                    status: StepStatus::Skipped,
+                    attempts: 0,
+                    elapsed_ms: 0,
+                });
+                continue;
+            }
+
             handles.push(tokio::spawn(async move {
                 // acquire permit, 限制并发 (permit drop 时自动 release)
                 let _permit = sem.acquire_owned().await.expect("semaphore closed");
@@ -829,6 +936,10 @@ impl WorkflowEngine for ParallelWorkflow {
 
         // 收集所有 task 结果 (handle.await), 按 idx 写到 results[i]
         for (idx, handle) in handles.into_iter().enumerate() {
+            // skip 已填的 (when=false 预填的 Skipped)
+            if results[idx].is_some() {
+                continue;
+            }
             let step_result = match handle.await {
                 Ok(r) => r,
                 Err(join_err) => {
@@ -993,6 +1104,13 @@ impl WorkflowEngine for DagWorkflow {
         };
 
         // Initial spawn / cascade-skip
+        // P15.4.2.3: 在 spawn 前评估 `when` 条件. initial spawn 时 results 还是空,
+        // 所以 `when: <step_name>` 会默认 false (forward ref / unknown). 业务方通常用
+        // `when` 引用 `depends_on` step, 那种 case 在 cascade 阶段才走 (下面有).
+        // 但 `when: 'true'` / `'false'` / missing 在 initial 也要正确处理.
+        // 主循环在下方, 但 initial spawn 标 Skipped 的 step 也得 push 到 just_completed
+        // 才能 cascade 到 dependents (跟完成任务的 step 同样处理).
+        let mut just_completed: Vec<usize> = Vec::new();
         for (i, deg) in in_degree.iter().enumerate() {
             if *deg == 0 {
                 let step = &definition.steps[i];
@@ -1007,21 +1125,38 @@ impl WorkflowEngine for DagWorkflow {
                         elapsed_ms: 0,
                     });
                     failed_or_skipped[i] = true;
+                    just_completed.push(i);
                 } else {
-                    spawn_dag_step(
-                        &mut set,
-                        &semaphore,
-                        self.runner.clone(),
-                        definition.steps[i].clone(),
-                        i,
-                    );
+                    // P15.4.2.3: 评估 `when` (literal `true`/`false` 处理, step_name 引用都返 false)
+                    let should_run = evaluate_when(&step.when, |_name| {
+                        // initial spawn 时 results 都还没填, 所有 step_name 引用都返 false
+                        false
+                    });
+                    if !should_run {
+                        results[i] = Some(StepResult {
+                            name: step.name.clone(),
+                            action: step.action.clone(),
+                            status: StepStatus::Skipped,
+                            attempts: 0,
+                            elapsed_ms: 0,
+                        });
+                        failed_or_skipped[i] = true;
+                        just_completed.push(i);
+                    } else {
+                        spawn_dag_step(
+                            &mut set,
+                            &semaphore,
+                            self.runner.clone(),
+                            definition.steps[i].clone(),
+                            i,
+                        );
+                    }
                 }
             }
         }
 
         // 主循环: 等 task 完成, cascade 处理 dependents
         // `just_completed` worklist 处理 cascade skip (不递归, 用 loop)
-        let mut just_completed: Vec<usize> = Vec::new();
 
         while !set.is_empty() || !just_completed.is_empty() {
             // 如果有 task 在跑, 等任意一个完成; 否则直接处理 cascade
@@ -1075,13 +1210,33 @@ impl WorkflowEngine for DagWorkflow {
                             failed_or_skipped[dep_idx] = true;
                             just_completed.push(dep_idx);
                         } else {
-                            spawn_dag_step(
-                                &mut set,
-                                &semaphore,
-                                self.runner.clone(),
-                                dep_step.clone(),
-                                dep_idx,
-                            );
+                            // P15.4.2.3: 评估 `when` 条件 (此时所有 deps 都已完成, 引用是安全的)
+                            let should_run = evaluate_when(&dep_step.when, |name| {
+                                name_to_idx
+                                    .get(name)
+                                    .and_then(|&i| results[i].as_ref())
+                                    .map(|r| matches!(r.status, StepStatus::Succeeded))
+                                    .unwrap_or(false)
+                            });
+                            if !should_run {
+                                results[dep_idx] = Some(StepResult {
+                                    name: dep_step.name.clone(),
+                                    action: dep_step.action.clone(),
+                                    status: StepStatus::Skipped,
+                                    attempts: 0,
+                                    elapsed_ms: 0,
+                                });
+                                failed_or_skipped[dep_idx] = true;
+                                just_completed.push(dep_idx);
+                            } else {
+                                spawn_dag_step(
+                                    &mut set,
+                                    &semaphore,
+                                    self.runner.clone(),
+                                    dep_step.clone(),
+                                    dep_idx,
+                                );
+                            }
                         }
                     }
                 }
@@ -2145,5 +2300,123 @@ steps:
             "workflow failed; step status: {:?}",
             result.steps[0].status
         );
+    }
+
+    // ----- P15.4.2.3: conditional `when` expression -----
+
+    #[tokio::test]
+    async fn local_workflow_when_false_always_skips() {
+        // `when: false` → 总是 skip
+        let engine = LocalWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n    when: 'false'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        assert_eq!(result.steps.len(), 1);
+        assert!(matches!(result.steps[0].status, StepStatus::Skipped));
+        assert!(!result.success); // Skipped 算非 Succeeded
+    }
+
+    #[tokio::test]
+    async fn local_workflow_when_true_always_runs() {
+        // `when: true` → 总是跑 (跟 `when` missing 等价)
+        let engine = LocalWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n    when: 'true'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        assert!(matches!(result.steps[0].status, StepStatus::Succeeded));
+    }
+
+    #[tokio::test]
+    async fn local_workflow_when_ref_succeeds_then_runs() {
+        // 引用一个 Succeeded step → 跑
+        let engine = LocalWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    when: 'a'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        assert!(matches!(result.steps[0].status, StepStatus::Succeeded));
+        assert!(matches!(result.steps[1].status, StepStatus::Succeeded));
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn local_workflow_when_ref_failed_then_skips() {
+        // 引用一个 Failed step → skip
+        let engine = LocalWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    when: 'a'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        // a ran + failed; b was skipped (when='a' check)
+        assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
+        assert!(matches!(result.steps[1].status, StepStatus::Skipped));
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn local_workflow_when_ref_unknown_step_skips() {
+        // 引用不存在的 step → skip (跟 P15.4.2.3 docstring 一致)
+        let engine = LocalWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n    when: 'nonexistent'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        assert!(matches!(result.steps[0].status, StepStatus::Skipped));
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_when_ref_dep_runs() {
+        // DagWorkflow + when 引用 dep: dep 成功 → 跑
+        let engine = DagWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    depends_on: [a]\n    when: 'a'\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        assert!(matches!(result.steps[0].status, StepStatus::Succeeded));
+        assert!(matches!(result.steps[1].status, StepStatus::Succeeded));
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_when_false_cascades_to_dependents() {
+        // when=false 的 step 标 Skipped, dependents 跟着 cascade Skipped
+        let engine = DagWorkflow::with_runner(Arc::new(LoggingStepRunner));
+        let def = WorkflowDefinition::from_yaml(
+            "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    when: 'false'\n  - name: c\n    action: x\n    depends_on: [b]\n",
+        )
+        .expect("parse");
+        let result = engine.run(&def).await.expect("run");
+        // a: Succeeded, b: Skipped (when=false), c: Skipped (deps b Skipped)
+        assert!(matches!(result.steps[0].status, StepStatus::Succeeded));
+        assert!(matches!(result.steps[1].status, StepStatus::Skipped));
+        assert!(matches!(result.steps[2].status, StepStatus::Skipped));
+    }
+
+    #[tokio::test]
+    async fn step_with_when_builder() {
+        let s = Step::new("deploy", "./deploy.sh").with_when("build");
+        assert_eq!(s.when, Some("build".to_string()));
+    }
+
+    #[tokio::test]
+    async fn step_with_when_yaml_roundtrip() {
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    when: 'a'\n";
+        let d = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        assert_eq!(d.steps.len(), 2);
+        assert!(d.steps[0].when.is_none());
+        assert_eq!(d.steps[1].when, Some("a".to_string()));
+
+        // roundtrip
+        let yaml2 = d.to_yaml().expect("serialize");
+        let d2 = WorkflowDefinition::from_yaml(&yaml2).expect("re-parse");
+        assert_eq!(d, d2);
     }
 }
