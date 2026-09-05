@@ -62,10 +62,14 @@
 //! - **没**CLI 集成 `mah workflow run <file>` (P15.4.3+)
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
 //!   业务方用 StepRunner 注入)
+//! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
+//!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
+//! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -262,6 +266,84 @@ impl WorkflowDefinition {
     pub fn to_yaml(&self) -> Result<String, WorkflowError> {
         serde_yaml::to_string(self).map_err(|e| WorkflowError::Parse(e.to_string()))
     }
+
+    /// 从 YAML 文件 load (P15.4.1.1).
+    ///
+    /// **业务方**:
+    /// ```ignore
+    /// let def = WorkflowDefinition::from_file("~/.ma-harness/workflows/ci.yaml")?;
+    /// ```
+    ///
+    /// **Errors**:
+    /// - `WorkflowError::Io` — 文件读不出来 (没找到 / permission denied)
+    /// - `WorkflowError::Parse` — YAML 格式错
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, WorkflowError> {
+        let p = path.as_ref();
+        let content = std::fs::read_to_string(p)
+            .map_err(|e| WorkflowError::Io(format!("read {}: {}", p.display(), e)))?;
+        Self::from_yaml(&content)
+    }
+
+    /// 序列化为 YAML 并写到文件 (P15.4.1.1).
+    ///
+    /// **业务方**:
+    /// ```ignore
+    /// def.to_yaml_file("~/.ma-harness/workflows/ci.yaml")?;
+    /// ```
+    ///
+    /// **P15.4.1.1 限制**: 非 atomic write (P15.4.2+ 加 atomic save 跟 settings 一致).
+    /// 业务方 concurrent write 风险自己 wrap.
+    ///
+    /// **Errors**:
+    /// - `WorkflowError::Parse` — YAML serialize 失败 (理论上不会, 除非定义 struct 损坏)
+    /// - `WorkflowError::Io` — 写文件失败
+    pub fn to_yaml_file(&self, path: impl AsRef<Path>) -> Result<(), WorkflowError> {
+        let p = path.as_ref();
+        let yaml = self.to_yaml()?;
+        std::fs::write(p, yaml)
+            .map_err(|e| WorkflowError::Io(format!("write {}: {}", p.display(), e)))
+    }
+}
+
+// ============================================================================
+// Default paths (P15.4.1.1)
+// ============================================================================
+
+/// 默认 workflows 目录: `~/.ma-harness/workflows/` (P15.4.1.1).
+///
+/// **Override**: `MA_HARNESS_WORKFLOWS_DIR` 环境变量.
+/// **业务方**: 一般不用, 直接 `from_file` 时用绝对路径 / 自己用 `default_workflow_path`.
+pub fn default_workflows_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("MA_HARNESS_WORKFLOWS_DIR") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
+    }
+    // ~ = home dir
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        return PathBuf::from(home).join(".ma-harness").join("workflows");
+    }
+    // Fallback: relative `./workflows/` (Linux without HOME, rare)
+    PathBuf::from(".ma-harness").join("workflows")
+}
+
+/// 默认单个 workflow 文件路径 (P15.4.1.1).
+///
+/// - 自动 append `.yaml` 扩展名 (如果 name 还没带)
+/// - 父目录用 [`default_workflows_dir()`] 解析
+///
+/// **业务方**:
+/// ```ignore
+/// let def = WorkflowDefinition::from_file(default_workflow_path("ci"))?;
+/// ```
+pub fn default_workflow_path(name: &str) -> PathBuf {
+    let dir = default_workflows_dir();
+    let file_name = if name.ends_with(".yaml") || name.ends_with(".yml") {
+        name.to_string()
+    } else {
+        format!("{}.yaml", name)
+    };
+    dir.join(file_name)
 }
 
 // ============================================================================
@@ -503,6 +585,7 @@ pub type DefaultWorkflowEngine = LocalWorkflow;
 // ============================================================================
 
 #[cfg(test)]
+#[allow(unsafe_code)] // 测试用 std::env::set_var / remove_var (Rust 2024 edition 要求 unsafe)
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -736,5 +819,123 @@ steps:
         let debug = format!("{engine:?}");
         assert!(debug.contains("LocalWorkflow"));
         assert!(debug.contains("logging"));
+    }
+
+    // ----- P15.4.1.1: file loader + default paths -----
+
+    #[test]
+    fn workflow_definition_from_file_reads_yaml() {
+        // 写一个临时 YAML, 读回, 验内容
+        let dir = std::env::temp_dir().join(format!("ma_harness_wf_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("test-wf.yaml");
+        let yaml = "name: from-file\nsteps:\n  - name: a\n    action: cargo build\n    timeout_secs: 30\n    retries: 1\n";
+        std::fs::write(&path, yaml).expect("write");
+
+        let d = WorkflowDefinition::from_file(&path).expect("from_file");
+        assert_eq!(d.name, "from-file");
+        assert_eq!(d.steps.len(), 1);
+        assert_eq!(d.steps[0].name, "a");
+        assert_eq!(d.steps[0].timeout_secs, 30);
+        assert_eq!(d.steps[0].retries, 1);
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workflow_definition_from_file_missing_returns_io_error() {
+        let path = std::path::PathBuf::from("Z:/__definitely_not_existing_path__/nope.yaml");
+        let err = WorkflowDefinition::from_file(&path).unwrap_err();
+        assert!(
+            matches!(err, WorkflowError::Io(_)),
+            "expected Io error, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn workflow_definition_to_yaml_file_roundtrips() {
+        let dir = std::env::temp_dir().join(format!("ma_harness_wf_rt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("roundtrip.yaml");
+
+        let original = WorkflowDefinition {
+            name: "round-trip".to_string(),
+            steps: vec![
+                Step::new("build", "cargo build").with_timeout(60),
+                Step::new("test", "cargo test").with_retries(2),
+            ],
+        };
+        original.to_yaml_file(&path).expect("write");
+        let reloaded = WorkflowDefinition::from_file(&path).expect("read");
+        assert_eq!(original, reloaded);
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_workflows_dir_honors_env_override() {
+        // 用 process id 拼 unique path, 避免并行 test 互相覆盖
+        let unique = format!("ma_harness_test_wfdir_{}_{}", std::process::id(), line!());
+        // 预先备份, 测完恢复
+        let original = std::env::var("MA_HARNESS_WORKFLOWS_DIR").ok();
+        // SAFETY: tests run in single-threaded test mode by default; this is the
+        // standard pattern for env-var testing in edition 2024. tokio/serde tests
+        // that also mutate env will use distinct variable names.
+        unsafe {
+            std::env::set_var("MA_HARNESS_WORKFLOWS_DIR", &unique);
+        }
+
+        let got = default_workflows_dir();
+        assert_eq!(got, PathBuf::from(&unique));
+
+        // 恢复
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("MA_HARNESS_WORKFLOWS_DIR", v);
+            },
+            None => unsafe {
+                std::env::remove_var("MA_HARNESS_WORKFLOWS_DIR");
+            },
+        }
+        // sanity: 后续 set_var 不污染
+        let _ = unique;
+    }
+
+    #[test]
+    fn default_workflow_path_appends_yaml_extension() {
+        let backup = std::env::var("MA_HARNESS_WORKFLOWS_DIR").ok();
+        let unique = format!("ma_harness_test_wfpath_{}_{}", std::process::id(), line!());
+        // SAFETY: see env-mutate note in default_workflows_dir_honors_env_override.
+        unsafe {
+            std::env::set_var("MA_HARNESS_WORKFLOWS_DIR", &unique);
+        }
+
+        // 没扩展名 → 加 .yaml
+        let p1 = default_workflow_path("ci");
+        assert!(p1.ends_with("ci.yaml"), "got {}", p1.display());
+        assert!(p1.starts_with(&unique));
+
+        // 已有 .yaml → 不重复加
+        let p2 = default_workflow_path("deploy.yaml");
+        assert!(p2.ends_with("deploy.yaml"), "got {}", p2.display());
+        assert_eq!(p2.to_string_lossy().matches(".yaml").count(), 1);
+
+        // 已有 .yml → 不加 .yaml
+        let p3 = default_workflow_path("smoke.yml");
+        assert!(p3.ends_with("smoke.yml"), "got {}", p3.display());
+        assert_eq!(p3.to_string_lossy().matches(".yaml").count(), 0);
+
+        // 恢复
+        match backup {
+            Some(v) => unsafe {
+                std::env::set_var("MA_HARNESS_WORKFLOWS_DIR", v);
+            },
+            None => unsafe {
+                std::env::remove_var("MA_HARNESS_WORKFLOWS_DIR");
+            },
+        }
     }
 }
