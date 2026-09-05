@@ -310,6 +310,19 @@ enum WorkflowAction {
         /// Workflow YAML 文件路径
         file: PathBuf,
     },
+    /// 列出 workflows 目录里所有 YAML 文件 + 解析的 workflow name + step 数 (P15.4.5)
+    ///
+    /// Example:
+    ///   `mah workflow list`                          (扫默认 `~/.ma-harness/workflows/`)
+    ///   `mah workflow list --dir /path/to/workflows`  (扫自定义目录)
+    ///
+    /// 返回表格三列: file | name | steps
+    /// parse 失败的文件打印到 stderr 但 exit 0 (graceful degradation)
+    List {
+        /// Override workflows 目录 (默认 `~/.ma-harness/workflows/`)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
@@ -586,6 +599,7 @@ async fn main() -> Result<()> {
                 dry_run,
             } => workflow_run(&file, engine, concurrency, no_fail_on_step, dry_run).await,
             WorkflowAction::Validate { file } => workflow_validate(&file).await,
+            WorkflowAction::List { dir } => workflow_list(dir.as_deref()),
         },
         Commands::RunStream {
             prompt,
@@ -1895,7 +1909,84 @@ fn print_workflow_result(result: &ma_harness_workflow::RunResult) {
     }
 }
 
-/// CLI 用 logging step runner (P15.4.3).
+/// `mah workflow list` — 扫 workflows 目录, 列 file | name | steps (P15.4.5)
+///
+/// **行为**:
+/// - 默认扫 `~/.ma-harness/workflows/` (走 `default_workflows_dir()`)
+/// - `--dir` 覆盖路径
+/// - 找所有 `.yaml` / `.yml` 文件, parse + 打印
+/// - parse 失败的文件打印到 stderr 但不影响 exit code (graceful degradation)
+/// - 空目录 → 打印 "no workflows found", exit 0
+fn workflow_list(dir_override: Option<&std::path::Path>) -> Result<()> {
+    use ma_harness_workflow::WorkflowDefinition;
+
+    // 1. 决定扫描目录
+    let dir = match dir_override {
+        Some(d) => d.to_path_buf(),
+        None => ma_harness_workflow::default_workflows_dir(),
+    };
+
+    if !dir.exists() {
+        eprintln!(
+            "[workflow] dir does not exist: {} (use `mah workflow list --dir <path>` to override, or create the dir + add a .yaml file)",
+            dir.display()
+        );
+        return Ok(());
+    }
+
+    // 2. 扫 *.yaml / *.yml
+    let entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.eq_ignore_ascii_case("yaml") || s.eq_ignore_ascii_case("yml"))
+                        .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("[workflow] read_dir {} failed: {}", dir.display(), e);
+            return Ok(());
+        }
+    };
+
+    if entries.is_empty() {
+        eprintln!(
+            "[workflow] no .yaml files in {} (use `mah workflow run <file>` to point at one directly)",
+            dir.display()
+        );
+        return Ok(());
+    }
+
+    // 3. 排序 + 解析, 打印表格
+    let mut entries = entries;
+    entries.sort();
+
+    println!("{:<60}  {:<30}  steps", "file", "name");
+    println!("{}", "-".repeat(96));
+    for path in &entries {
+        match WorkflowDefinition::from_file(path) {
+            Ok(def) => {
+                println!(
+                    "{:<60}  {:<30}  {}",
+                    path.display().to_string(),
+                    def.name,
+                    def.steps.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("[workflow] parse failed for {}: {}", path.display(), e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
 /// 暴露一个公共 shim. (实际是 5 行 wrapper.)
@@ -2005,6 +2096,68 @@ steps:
         assert_eq!(format!("{}", WorkflowEngineArg::Local), "local");
         assert_eq!(format!("{}", WorkflowEngineArg::Parallel), "parallel");
         assert_eq!(format!("{}", WorkflowEngineArg::Dag), "dag");
+    }
+
+    // ----- P15.4.5: `mah workflow list` -----
+
+    #[test]
+    fn cli_workflow_list_with_empty_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        workflow_list(Some(dir.path())).expect("list empty");
+    }
+
+    #[test]
+    fn cli_workflow_list_with_nonexistent_dir() {
+        // 不存在的 dir: graceful 退出 0, 提示
+        let p = std::path::PathBuf::from("Z:/__nope__/__list_nonexistent__");
+        let result = workflow_list(Some(&p));
+        assert!(result.is_ok(), "expected Ok (graceful), got {:?}", result);
+    }
+
+    #[test]
+    fn cli_workflow_list_with_multiple_files() {
+        // 写 2 个 valid + 1 个 invalid (broken YAML) → 走 graceful degradation
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good1 = dir.path().join("ci.yaml");
+        let good2 = dir.path().join("deploy.yaml");
+        let bad = dir.path().join("broken.yaml");
+
+        std::fs::write(
+            &good1,
+            "name: ci\nsteps:\n  - name: build\n    action: cargo build\n  - name: test\n    action: cargo test\n",
+        )
+        .expect("write good1");
+        std::fs::write(
+            &good2,
+            "name: deploy-prod\nsteps:\n  - name: deploy\n    action: ./deploy.sh\n",
+        )
+        .expect("write good2");
+        std::fs::write(&bad, "name: bad\nsteps: this is not valid yaml: :: :\n")
+            .expect("write bad");
+
+        // Should not error (broken file → stderr, but Ok)
+        workflow_list(Some(dir.path())).expect("list");
+    }
+
+    #[test]
+    fn cli_workflow_list_with_yml_extension() {
+        // .yml 也认 (跟 from_file 一致)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let yml = dir.path().join("smoke.yml");
+        std::fs::write(&yml, "name: smoke\nsteps:\n  - name: a\n    action: x\n").expect("write");
+        workflow_list(Some(dir.path())).expect("list yml");
+    }
+
+    #[test]
+    fn cli_workflow_list_skips_non_yaml_files() {
+        // .txt / .md / 无扩展名都跳过
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("readme.md"), "# workflows").expect("write md");
+        std::fs::write(dir.path().join("notes.txt"), "ignore me").expect("write txt");
+        std::fs::write(dir.path().join("noext"), "ignore me").expect("write noext");
+        std::fs::write(dir.path().join("only-real.yaml"), "name: real\nsteps: []\n")
+            .expect("write yaml");
+        workflow_list(Some(dir.path())).expect("list with mixed");
     }
 }
 
