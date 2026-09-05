@@ -355,6 +355,252 @@ fn merge_mapping(target: &mut Mapping, source: &Mapping) {
     }
 }
 
+// ============================================================================
+// P15.5.5: Schema + typed validation
+// ============================================================================
+
+/// Expected value type for a schema rule (P15.5.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SchemaType {
+    /// String value (e.g. "sk-...", "true", "/path/to/x")
+    String,
+    /// Integer value (i64, no fractional part)
+    Int,
+    /// Boolean value (true / false)
+    Bool,
+    /// Any number (int OR float)
+    Number,
+    /// Null value (explicit null in YAML)
+    Null,
+    /// Match any value (key exists, type is open)
+    Any,
+}
+
+impl std::fmt::Display for SchemaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SchemaType::String => "string",
+            SchemaType::Int => "int",
+            SchemaType::Bool => "bool",
+            SchemaType::Number => "number",
+            SchemaType::Null => "null",
+            SchemaType::Any => "any",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Single schema rule (P15.5.5).
+///
+/// 描述一个 dot-notation key 的期望类型 + 是否必填.
+/// 例: `SchemaRule::required("api.openai_key", SchemaType::String)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaRule {
+    /// Dot-notation key (e.g. `"api.openai_key"`)
+    pub key: String,
+    /// Expected value type
+    pub r#type: SchemaType,
+    /// If true, key must be present in the Settings
+    pub required: bool,
+}
+
+impl SchemaRule {
+    /// 创建一个 required 规则.
+    ///
+    /// Example:
+    /// ```ignore
+    /// let rule = SchemaRule::required("api.openai_key", SchemaType::String);
+    /// ```
+    pub fn required(key: impl Into<String>, r#type: SchemaType) -> Self {
+        Self {
+            key: key.into(),
+            r#type,
+            required: true,
+        }
+    }
+
+    /// 创建一个 optional 规则 (key missing 不算错).
+    pub fn optional(key: impl Into<String>, r#type: SchemaType) -> Self {
+        Self {
+            key: key.into(),
+            r#type,
+            required: false,
+        }
+    }
+}
+
+/// Schema: 一组 rules (P15.5.5).
+///
+/// **业务方用**: `Settings::validate(&schema)` 跑所有 rules, 收集错.
+/// 第一个 `Err(Vec<ValidationError>)` 含所有错 (不 fail-fast), 业务方
+/// 一次性报告所有问题.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Schema {
+    rules: Vec<SchemaRule>,
+}
+
+impl Schema {
+    /// 创建一个空 schema (没有 rule → 永远 validate 通过).
+    pub fn new() -> Self {
+        Self { rules: Vec::new() }
+    }
+
+    /// 从 rules 列表创建一个 schema.
+    pub fn from_rules(rules: Vec<SchemaRule>) -> Self {
+        Self { rules }
+    }
+
+    /// Builder: 加一条 rule.
+    pub fn with_rule(mut self, rule: SchemaRule) -> Self {
+        self.rules.push(rule);
+        self
+    }
+
+    /// 拿所有 rules.
+    pub fn rules(&self) -> &[SchemaRule] {
+        &self.rules
+    }
+
+    /// 是否空 schema (no rules = always passes).
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    /// rule 数.
+    pub fn len(&self) -> usize {
+        self.rules.len()
+    }
+}
+
+/// 单条 validation 错误 (P15.5.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationError {
+    /// 出错的 dot-notation key
+    pub key: String,
+    /// 错的原因
+    pub reason: ValidationErrorReason,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.reason {
+            ValidationErrorReason::MissingKey => {
+                write!(f, "key {:?} is required but missing", self.key)
+            }
+            ValidationErrorReason::TypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "key {:?} expected type {} but found {}",
+                    self.key, expected, found
+                )
+            }
+        }
+    }
+}
+
+/// Validation 错误原因 (P15.5.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationErrorReason {
+    /// Required key 缺失
+    MissingKey,
+    /// 存在但类型不匹配
+    TypeMismatch {
+        /// Schema 期望的类型
+        expected: SchemaType,
+        /// 实际找到的类型名 (e.g. "string", "int", "bool")
+        found: String,
+    },
+}
+
+impl Settings {
+    /// 按 schema 校验 (P15.5.5).
+    ///
+    /// **行为**:
+    /// - 空 schema → 永远 `Ok(())`
+    /// - 有 rules → 遍历每条:
+    ///   - key 缺失 + required → `MissingKey` 错
+    ///   - key 存在 + 类型不匹配 → `TypeMismatch` 错
+    /// - 不 fail-fast: 收集所有错, 一次性返 `Err(Vec<ValidationError>)`
+    ///
+    /// **业务方用**:
+    /// ```ignore
+    /// let schema = Schema::from_rules(vec![
+    ///     SchemaRule::required("api.openai_key", SchemaType::String),
+    ///     SchemaRule::optional("models.default", SchemaType::String),
+    /// ]);
+    /// match settings.validate(&schema) {
+    ///     Ok(()) => println!("settings valid"),
+    ///     Err(errs) => {
+    ///         for e in errs {
+    ///             eprintln!("validation error: {e}");
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn validate(&self, schema: &Schema) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+        for rule in schema.rules() {
+            match self.get(&rule.key) {
+                Some(v) => {
+                    if !value_matches_type(v, &rule.r#type) {
+                        errors.push(ValidationError {
+                            key: rule.key.clone(),
+                            reason: ValidationErrorReason::TypeMismatch {
+                                expected: rule.r#type,
+                                found: value_type_name(v).to_string(),
+                            },
+                        });
+                    }
+                }
+                None => {
+                    if rule.required {
+                        errors.push(ValidationError {
+                            key: rule.key.clone(),
+                            reason: ValidationErrorReason::MissingKey,
+                        });
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+/// Helper: 检查 `Value` 是否匹配 `SchemaType`.
+fn value_matches_type(v: &Value, expected: &SchemaType) -> bool {
+    use SchemaType::*;
+    match (v, expected) {
+        (Value::String(_), String) => true,
+        (Value::Number(n), Int) => n.as_i64().is_some(),
+        (Value::Number(_), Number) => true,
+        (Value::Bool(_), Bool) => true,
+        (Value::Null, Null) => true,
+        // Any matches any value (including non-primitive Mapping/Sequence)
+        (_, Any) => true,
+        // Sequence matches if expected is Sequence
+        // (P15.5.5 minimal: no Sequence schema type, only primitives)
+        _ => false,
+    }
+}
+
+/// Helper: 拿 `Value` 的类型名 (用于 ValidationError 显示).
+fn value_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::String(_) => "string",
+        Value::Number(n) if n.as_i64().is_some() => "int",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "bool",
+        Value::Null => "null",
+        Value::Sequence(_) => "sequence",
+        Value::Mapping(_) => "mapping",
+        Value::Tagged(_) => "tagged",
+    }
+}
+
 /// 拆 key 为 parts (空 key 返 None).
 fn split_key(key: &str) -> Option<Vec<&str>> {
     if key.is_empty() || key.contains('\0') {
@@ -1929,5 +2175,237 @@ mod tests {
         assert!(debug.contains("file"));
         assert!(debug.contains("env"));
         assert!(debug.contains("count"));
+    }
+
+    // ========================================================================
+    // P15.5.5 tests: Schema + typed validation
+    // ========================================================================
+
+    // ----- SchemaType basics -----
+
+    #[test]
+    fn schema_type_display_renders_all_variants() {
+        assert_eq!(format!("{}", SchemaType::String), "string");
+        assert_eq!(format!("{}", SchemaType::Int), "int");
+        assert_eq!(format!("{}", SchemaType::Bool), "bool");
+        assert_eq!(format!("{}", SchemaType::Number), "number");
+        assert_eq!(format!("{}", SchemaType::Null), "null");
+        assert_eq!(format!("{}", SchemaType::Any), "any");
+    }
+
+    #[test]
+    fn schema_new_is_empty() {
+        let s = Schema::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert_eq!(s.rules().len(), 0);
+    }
+
+    #[test]
+    fn schema_default_matches_new() {
+        let s: Schema = Default::default();
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn schema_from_rules_and_with_rule() {
+        let schema = Schema::from_rules(vec![
+            SchemaRule::required("a", SchemaType::String),
+            SchemaRule::optional("b", SchemaType::Int),
+        ]);
+        assert_eq!(schema.len(), 2);
+
+        let schema = Schema::new().with_rule(SchemaRule::required("c", SchemaType::Bool));
+        assert_eq!(schema.len(), 1);
+        assert_eq!(schema.rules()[0].key, "c");
+    }
+
+    #[test]
+    fn schema_rule_required_and_optional() {
+        let r = SchemaRule::required("k", SchemaType::String);
+        assert_eq!(r.key, "k");
+        assert_eq!(r.r#type, SchemaType::String);
+        assert!(r.required);
+
+        let r = SchemaRule::optional("k", SchemaType::Int);
+        assert!(!r.required);
+        assert_eq!(r.r#type, SchemaType::Int);
+    }
+
+    // ----- Settings::validate -----
+
+    #[test]
+    fn settings_validate_empty_schema_always_passes() {
+        let s = Settings::empty();
+        let schema = Schema::new();
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_required_key_present_ok() {
+        let mut s = Settings::empty();
+        s.set("api.openai_key", "sk-abc");
+        let schema = Schema::from_rules(vec![SchemaRule::required(
+            "api.openai_key",
+            SchemaType::String,
+        )]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_required_key_missing_errors() {
+        let s = Settings::empty();
+        let schema = Schema::from_rules(vec![SchemaRule::required(
+            "api.openai_key",
+            SchemaType::String,
+        )]);
+        let errs = s.validate(&schema).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].key, "api.openai_key");
+        assert!(matches!(errs[0].reason, ValidationErrorReason::MissingKey));
+    }
+
+    #[test]
+    fn settings_validate_optional_key_missing_ok() {
+        let s = Settings::empty();
+        let schema = Schema::from_rules(vec![SchemaRule::optional(
+            "models.default",
+            SchemaType::String,
+        )]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_type_mismatch_string_expected_int_found() {
+        let mut s = Settings::empty();
+        // Store a value that will deserialize as an integer when parsed
+        s.set("port", "8080");
+        // But via the API it's stored as String -- validate would fail
+        let schema = Schema::from_rules(vec![SchemaRule::required("port", SchemaType::Int)]);
+        let errs = s.validate(&schema).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            errs[0].reason,
+            ValidationErrorReason::TypeMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn settings_validate_type_match_int_value() {
+        // Construct a Settings with an integer value (via from_yaml)
+        let yaml = "port: 8080\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![SchemaRule::required("port", SchemaType::Int)]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_type_match_bool_value() {
+        let yaml = "debug: true\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![SchemaRule::required("debug", SchemaType::Bool)]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_collects_multiple_errors() {
+        // Two missing required keys + one type mismatch
+        let mut s = Settings::empty();
+        s.set("debug", "not-a-bool");
+        let schema = Schema::from_rules(vec![
+            SchemaRule::required("api.openai_key", SchemaType::String),
+            SchemaRule::required("models.default", SchemaType::String),
+            SchemaRule::required("debug", SchemaType::Bool),
+        ]);
+        let errs = s.validate(&schema).unwrap_err();
+        assert_eq!(errs.len(), 3, "expected 3 errors, got {errs:?}");
+    }
+
+    #[test]
+    fn settings_validate_any_matches_anything() {
+        // Any type should match all primitive values
+        let yaml = "a: hello\nb: 42\nc: true\nd: 3.14\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![
+            SchemaRule::required("a", SchemaType::Any),
+            SchemaRule::required("b", SchemaType::Any),
+            SchemaRule::required("c", SchemaType::Any),
+            SchemaRule::required("d", SchemaType::Any),
+        ]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_nested_key_with_dot_notation() {
+        // 验证 dot-notation 走 nested mapping
+        let yaml = "api:\n  openai_key: sk-abc\n  anthropic_key: sk-ant-xyz\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![
+            SchemaRule::required("api.openai_key", SchemaType::String),
+            SchemaRule::optional("api.anthropic_key", SchemaType::String),
+        ]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_nested_key_missing_at_deep_path() {
+        let yaml = "api:\n  openai_key: sk-abc\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        // api.anthropic_key 不存在, required
+        let schema = Schema::from_rules(vec![SchemaRule::required(
+            "api.anthropic_key",
+            SchemaType::String,
+        )]);
+        let errs = s.validate(&schema).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].key, "api.anthropic_key");
+        assert!(matches!(errs[0].reason, ValidationErrorReason::MissingKey));
+    }
+
+    #[test]
+    fn validation_error_display_shows_key_and_reason() {
+        let e = ValidationError {
+            key: "api.openai_key".to_string(),
+            reason: ValidationErrorReason::MissingKey,
+        };
+        let s = format!("{e}");
+        assert!(s.contains("api.openai_key"));
+        assert!(s.contains("required"));
+
+        let e = ValidationError {
+            key: "port".to_string(),
+            reason: ValidationErrorReason::TypeMismatch {
+                expected: SchemaType::Int,
+                found: "string".to_string(),
+            },
+        };
+        let s = format!("{e}");
+        assert!(s.contains("port"));
+        assert!(s.contains("int"));
+        assert!(s.contains("string"));
+    }
+
+    #[test]
+    fn settings_validate_type_number_accepts_int_and_float() {
+        let yaml = "a: 42\nb: 3.14\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![
+            SchemaRule::required("a", SchemaType::Number),
+            SchemaRule::required("b", SchemaType::Number),
+        ]);
+        assert!(s.validate(&schema).is_ok());
+    }
+
+    #[test]
+    fn settings_validate_type_int_rejects_float() {
+        let yaml = "a: 3.14\n";
+        let s = Settings::from_yaml(yaml).expect("parse");
+        let schema = Schema::from_rules(vec![SchemaRule::required("a", SchemaType::Int)]);
+        let errs = s.validate(&schema).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(matches!(
+            errs[0].reason,
+            ValidationErrorReason::TypeMismatch { .. }
+        ));
     }
 }
