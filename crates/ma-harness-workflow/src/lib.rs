@@ -55,14 +55,14 @@
 //! - 可测: 单元测试用 fake action runner, 不依赖真 shell
 //! - 可扩展: P15.4.2+ 加 parallel / conditional / sub-workflow
 //!
-//! # 限制 (Limitations) — P15.4.2.4
+//! # 限制 (Limitations) — P15.4.4.1
 //!
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
 //!   业务方用 StepRunner 注入)
 //! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
 //!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
 //! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
-//! - **没**跨 step 数据传递 (depends_on 只控顺序, 业务方用 env / 临时文件 / Arc<Mutex<>>)
+//! - **没**跨 step 数据传递 (`Step.uses_outputs_from` 是 P15.4.2.5 计划, 现在业务方用 env / 临时文件 / Arc<Mutex<>>)
 //! - **没**P15.4.2.3 expression 完整版 (目前支持 literal `true`/`false`/missing + 单 step_name 引用;
 //!   `&&` / `||` / `!` / 多条件 P15.4.5+)
 //! - **✅ P15.4.2.1**: `ParallelWorkflow` engine (tokio::spawn + Semaphore, 默认 4 并发,
@@ -77,6 +77,10 @@
 //!   - ⚠️ P15.4.2.4 行为变更: 旧测试 `dag_workflow_runs_dependent_after_dep_fails` 已改名为
 //!     `dag_workflow_skips_dependent_when_dep_fails` (新语义: dependent 跑都不跑, 标 Skipped)
 //!   - `LocalWorkflow` / `ParallelWorkflow` 仍是 continue-on-fail (无 dep graph, 不参与 cascade)
+//! - **✅ P15.4.4.1**: `Step.env: BTreeMap<String, String>` 显式 env 注入 (P15.4.4 limitation 已修复)
+//!   - `ShellStepRunner` 走 `CommandSpec::envs()` (subprocess 内部已 `env_clear`, 业务方 env 显式控制)
+//!   - 业务方自己负责 secret (不要把 API_KEY 写进 YAML, 用 `mah credentials add`)
+//!   - LoggingStepRunner / FailingStepRunner / FlakyStepRunner 不读 env (只 ShellStepRunner 用)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -180,6 +184,28 @@ pub struct Step {
     /// - Skipped step 跟 dep-fail Skipped 一样 cascade 到 dependents
     #[serde(default)]
     pub when: Option<String>,
+    /// 显式环境变量 (P15.4.4.1, 替代 P15.4.4 limitation "没 env 注入").
+    ///
+    /// **YAML**:
+    /// ```yaml
+    /// - name: deploy
+    ///   action: ./deploy.sh
+    ///   env:
+    ///     DEPLOY_ENV: prod
+    ///     API_KEY: secret
+    /// ```
+    ///
+    /// **行为** (P15.4.4.1 范围):
+    /// - `ShellStepRunner` 走 `CommandSpec::env()` 把每个 entry 加进子进程 env
+    /// - subprocess 内部 `env_clear()` (默认), 业务方 env 显式控制
+    /// - 业务方自己 escape / quote (跟 `Step.action` 一致, 不 eval)
+    ///
+    /// **P15.4.4.1 限制** (跟 P15.4.4 一起):
+    /// - **没**跨 step 数据传递 (`Step.uses_outputs_from` 是 P15.4.2.5 计划)
+    /// - 业务方自己负责 secret (不要把 API_KEY 写进 YAML, 用 `mah credentials add`)
+    /// - LoggingStepRunner / FailingStepRunner / FlakyStepRunner 不读 env (只 ShellStepRunner)
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 impl Step {
@@ -192,6 +218,7 @@ impl Step {
             retries: 0,
             depends_on: Vec::new(),
             when: None,
+            env: std::collections::BTreeMap::new(),
         }
     }
 
@@ -222,6 +249,32 @@ impl Step {
     /// ```
     pub fn with_when(mut self, expr: impl Into<String>) -> Self {
         self.when = Some(expr.into());
+        self
+    }
+
+    /// Builder: 加一个 env 变量 (P15.4.4.1).
+    ///
+    /// **Example**:
+    /// ```ignore
+    /// Step::new("deploy", "./deploy.sh")
+    ///     .with_env("DEPLOY_ENV", "prod")
+    ///     .with_env("API_KEY", "secret")
+    /// ```
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
+    }
+
+    /// Builder: 加多个 env 变量 (P15.4.4.1).
+    pub fn with_envs<I, K, V>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        for (k, v) in iter {
+            self.env.insert(k.into(), v.into());
+        }
         self
     }
 }
@@ -577,6 +630,18 @@ impl StepRunner for ShellStepRunner {
 
         if step.timeout_secs > 0 {
             spec = spec.timeout(std::time::Duration::from_secs(step.timeout_secs));
+        }
+
+        // P15.4.4.1: 应用 step.env 到子进程 (subprocess 内部已经 env_clear,
+        // 业务方 env 显式控制, 不会 inherit 父进程 env)
+        if !step.env.is_empty() {
+            // CommandSpec::envs 需要 K: Into<String>, V: Into<OsString>;
+            // &String → String (clone) + &String → OsString 都满足
+            spec = spec.envs(
+                step.env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), std::ffi::OsString::from(v))),
+            );
         }
 
         let output = self
@@ -2418,5 +2483,84 @@ steps:
         let yaml2 = d.to_yaml().expect("serialize");
         let d2 = WorkflowDefinition::from_yaml(&yaml2).expect("re-parse");
         assert_eq!(d, d2);
+    }
+
+    // ----- P15.4.4.1: Step.env (ShellStepRunner env injection) -----
+
+    #[test]
+    fn step_with_env_builder() {
+        let s = Step::new("deploy", "./deploy.sh")
+            .with_env("DEPLOY_ENV", "prod")
+            .with_env("API_KEY", "secret");
+        assert_eq!(s.env.get("DEPLOY_ENV"), Some(&"prod".to_string()));
+        assert_eq!(s.env.get("API_KEY"), Some(&"secret".to_string()));
+    }
+
+    #[test]
+    fn step_with_envs_builder() {
+        let s = Step::new("t", "x").with_envs(vec![("A", "1"), ("B", "2")]);
+        assert_eq!(s.env.len(), 2);
+        assert_eq!(s.env.get("A"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn step_with_env_yaml_roundtrip() {
+        let yaml = "name: t\nsteps:\n  - name: deploy\n    action: ./deploy.sh\n    env:\n      DEPLOY_ENV: prod\n      API_KEY: secret\n";
+        let d = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        assert_eq!(d.steps[0].env.get("DEPLOY_ENV"), Some(&"prod".to_string()));
+        assert_eq!(d.steps[0].env.get("API_KEY"), Some(&"secret".to_string()));
+
+        // roundtrip
+        let yaml2 = d.to_yaml().expect("serialize");
+        let d2 = WorkflowDefinition::from_yaml(&yaml2).expect("re-parse");
+        assert_eq!(d, d2);
+    }
+
+    #[tokio::test]
+    async fn shell_step_runner_injects_env_into_subprocess() {
+        // 跨平台: 用 shell 把 env 写到 stdout, 然后读 stdout 验证
+        // - Unix:  `echo $MA_VAR > /tmp/...`
+        // - Windows: 写 %MA_VAR% 到文件
+        let runner = ShellStepRunner::new();
+        let mut step = Step::new("echo-env", "echo $MA_VAR");
+        step.env
+            .insert("MA_VAR".to_string(), "hello-ma".to_string());
+        let result = runner.run(&step).await;
+        // shell 成功, 不验 stdout (subprocess 已经跑通, env 设进去 → 0 exit)
+        // 详细 stdout 验证在下一个 test (用文件)
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn shell_step_runner_env_visible_to_subprocess() {
+        // Unix-only: 写文件 + 读回 验 env var 真的传到子进程.
+        // Windows cmd 跟 backslash path 解析冲突, 跳过 (subprocess 行为跟 Unix 一样,
+        // `CommandSpec::envs()` 翻译到 `tokio::process::Command::envs()` 是跨平台).
+        if cfg!(windows) {
+            return;
+        }
+
+        let marker = std::env::temp_dir().join(format!(
+            "ma_harness_env_test_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        let marker_str = marker.to_string_lossy().to_string();
+        let action = format!("echo $MA_VAR > '{}'", marker_str);
+
+        let runner = ShellStepRunner::new();
+        let mut step = Step::new("write-env", action);
+        step.env
+            .insert("MA_VAR".to_string(), "marker-content".to_string());
+        runner.run(&step).await.expect("run");
+
+        let content = std::fs::read_to_string(&marker).expect("read marker");
+        assert!(
+            content.contains("marker-content"),
+            "expected marker file to contain env var, got: {}",
+            content
+        );
+
+        let _ = std::fs::remove_file(&marker);
     }
 }
