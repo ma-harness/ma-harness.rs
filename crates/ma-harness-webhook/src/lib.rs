@@ -588,6 +588,151 @@ impl WebhookVerifier for StripeSignatureVerifier {
 }
 
 // ============================================================================
+// P15.3.5.3: GenericHmacSha256Verifier (configurable prefix)
+// ============================================================================
+
+/// Generic HMAC-SHA256 验签器 (P15.3.5.3 新增).
+///
+/// **动机**: GitHub 用 `sha256=<hex>`, Bitbucket 用裸 `<hex>`, 业务方自家
+/// webhook 可能用 `v1=<hex>` / `signature=<hex>` / 等. 写死 prefix 的
+/// [`HmacSha256Verifier`] 不够灵活, 这个 verifier 接受可配 prefix.
+///
+/// **行为**:
+/// - `prefix = None` (默认) → 期望 `signature` 是裸 hex 字符串 (no prefix)
+/// - `prefix = Some("sha256=")` → 期望 `signature` 以 `"sha256="` 开头,
+///   strip 后验证 hex
+/// - 任何 custom prefix 都支持 (`"v1="` / `"hmac-sha256="` / 等)
+///
+/// **算法**: HMAC-SHA256(secret, body) → hex string, 与 `signature` 比较
+/// **比较**: `subtle::ConstantTimeEq` 防 timing attack (跟其它 verifier 一致)
+///
+/// **业务方用法**:
+/// ```ignore
+/// // GitHub style
+/// let v1 = GenericHmacSha256Verifier::new(b"secret")
+///     .with_prefix("sha256=");
+///
+/// // Bitbucket style (no prefix, raw hex)
+/// let v2 = GenericHmacSha256Verifier::new(b"secret");
+///
+/// // Custom webhook (e.g. "v1=<hex>")
+/// let v3 = GenericHmacSha256Verifier::new(b"secret")
+///     .with_prefix("v1=");
+/// ```
+///
+/// **注**: 这个 verifier 跟 [`HmacSha256Verifier`] 是姐妹 — 设了
+/// `"sha256="` prefix 的 [`GenericHmacSha256Verifier`] 跟 [`HmacSha256Verifier`]
+/// 行为完全一致 (有专门测试覆盖).
+#[derive(Clone)]
+pub struct GenericHmacSha256Verifier {
+    /// HMAC key
+    secret: Vec<u8>,
+    /// Optional prefix (e.g. `"sha256="`). None = raw hex, no prefix.
+    prefix: Option<String>,
+}
+
+impl std::fmt::Debug for GenericHmacSha256Verifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 不打印 secret
+        f.debug_struct("GenericHmacSha256Verifier")
+            .field("secret_len", &self.secret.len())
+            .field("prefix", &self.prefix)
+            .finish()
+    }
+}
+
+impl GenericHmacSha256Verifier {
+    /// 创建一个新的 generic HMAC-SHA256 验签器 (默认无 prefix).
+    ///
+    /// **默认行为**: 期望 `signature` 是裸 hex (跟 Bitbucket / 简单自家
+    /// webhook 一致). GitHub style 用 `with_prefix("sha256=")`.
+    ///
+    /// **注**: secret 可以是空 bytes (业务方可能想测), 但 0 长度 secret HMAC
+    /// 也是 valid 的 (只是 anyone can forge). log warn 提醒业务方.
+    pub fn new(secret: impl AsRef<[u8]>) -> Self {
+        let secret = secret.as_ref().to_vec();
+        if secret.is_empty() {
+            tracing::warn!(
+                "GenericHmacSha256Verifier created with 0-length secret (anyone can forge)"
+            );
+        }
+        Self {
+            secret,
+            prefix: None,
+        }
+    }
+
+    /// Builder: 设置 prefix (e.g. `"sha256="` 跟 GitHub 一致).
+    ///
+    /// **业务方**: `with_prefix("sha256=")` 等价于 `HmacSha256Verifier::new(...)`,
+    /// 业务方可以根据自家 webhook 格式灵活选.
+    ///
+    /// **注**: 设 `prefix` 为空字符串 `""` 等价于 None (`strip_prefix("")`
+    /// 永远成功, no-op). 这种情况下 1:1 退化为裸 hex 模式.
+    pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// 计算 HMAC-SHA256 signature (helper, 测试用 + 业务方 self-sign 用).
+    ///
+    /// **格式**: `{prefix}{hex}` (prefix 是 None 时, 只有 hex).
+    ///
+    /// **例**:
+    /// - `with_prefix("sha256=")` → `"sha256=abc123..."`
+    /// - no prefix → `"abc123..."`
+    /// - `with_prefix("v1=")` → `"v1=abc123..."`
+    pub fn compute_signature(&self, body: &[u8]) -> String {
+        let mut mac =
+            HmacSha256::new_from_slice(&self.secret).expect("HMAC accepts any key length");
+        mac.update(body);
+        let bytes = mac.finalize().into_bytes();
+        let hex_str = hex::encode(bytes);
+        match &self.prefix {
+            Some(p) => format!("{p}{hex_str}"),
+            None => hex_str,
+        }
+    }
+}
+
+#[async_trait]
+impl WebhookVerifier for GenericHmacSha256Verifier {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        // P15.3.5.3 限制: 复用 HmacSha256 enum 变体
+        // (crypto 跟 HmacSha256Verifier 完全一样, 只是 prefix 可配)
+        // P15.3.5.4+ MultiVerifier 可加新变体 `GenericHmacSha256 { prefix }` 区分
+        SignatureAlgorithm::HmacSha256
+    }
+
+    async fn verify(&self, body: &[u8], signature: &str) -> Result<(), WebhookError> {
+        // 1. Strip prefix (if configured)
+        let provided_hex = match &self.prefix {
+            Some(p) => signature
+                .strip_prefix(p.as_str())
+                .ok_or_else(|| WebhookError::InvalidSignature(format!("missing '{p}' prefix")))?,
+            None => signature,
+        };
+
+        // 2. Decode provided hex
+        let provided_bytes = hex::decode(provided_hex)
+            .map_err(|e| WebhookError::InvalidSignature(format!("invalid hex: {e}")))?;
+
+        // 3. Compute expected
+        let mut mac = HmacSha256::new_from_slice(&self.secret)
+            .map_err(|e| WebhookError::Internal(format!("hmac key: {e}")))?;
+        mac.update(body);
+        let expected_bytes = mac.finalize().into_bytes();
+
+        // 4. Constant-time compare (防 timing attack)
+        if provided_bytes.ct_eq(&expected_bytes).into() {
+            Ok(())
+        } else {
+            Err(WebhookError::InvalidSignature("signature mismatch".into()))
+        }
+    }
+}
+
+// ============================================================================
 // RouteConfig
 // ============================================================================
 
@@ -2368,6 +2513,272 @@ mod tests {
         let sig = StripeSignatureVerifier::compute_v1(ts, &body, stripe_test_secret());
         let header = format!("t={ts},{sig}");
         let event = WebhookEvent::new("/webhook/stripe", body).with_signature(&header);
+        let id = provider.submit(event).await.expect("submit");
+        assert!(!id.is_empty());
+        assert_eq!(provider.queue_len(), 1);
+    }
+
+    // ========================================================================
+    // P15.3.5.3 tests: GenericHmacSha256Verifier (configurable prefix)
+    // ========================================================================
+
+    /// Generic 测试 secret (跟其它 verifier 测试分开避免混淆)
+    fn generic_test_secret() -> &'static [u8] {
+        b"generic-test-secret"
+    }
+
+    fn generic_test_body() -> &'static [u8] {
+        b"test body for generic verifier"
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_valid_no_prefix() {
+        // 默认 (None prefix) → 裸 hex
+        let v = GenericHmacSha256Verifier::new(generic_test_secret());
+        let sig = v.compute_signature(generic_test_body());
+        // sig 是裸 hex, 没 prefix (= 字符)
+        assert!(!sig.contains('='), "sig should have no prefix: {sig:?}");
+        assert_eq!(sig.len(), 64, "SHA-256 = 32 bytes = 64 hex chars");
+        assert!(v.verify(generic_test_body(), &sig).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_valid_with_sha256_prefix() {
+        // GitHub style: prefix "sha256="
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("sha256=");
+        let sig = v.compute_signature(generic_test_body());
+        assert!(
+            sig.starts_with("sha256="),
+            "sig should start with 'sha256=': {sig:?}"
+        );
+        assert_eq!(sig.len(), 64 + 7); // "sha256=" (7 chars) + 64 hex
+        assert!(v.verify(generic_test_body(), &sig).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_valid_with_custom_prefix() {
+        // Custom prefix: e.g. "v1=" (跟业务方自家 webhook 一致)
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("v1=");
+        let sig = v.compute_signature(generic_test_body());
+        assert!(
+            sig.starts_with("v1="),
+            "sig should start with 'v1=': {sig:?}"
+        );
+        assert!(v.verify(generic_test_body(), &sig).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_valid_with_multi_char_prefix() {
+        // 多字符 prefix: e.g. "hmac-sha256="
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("hmac-sha256=");
+        let sig = v.compute_signature(generic_test_body());
+        assert!(
+            sig.starts_with("hmac-sha256="),
+            "sig should start with multi-char prefix"
+        );
+        assert!(v.verify(generic_test_body(), &sig).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_missing_prefix_rejected() {
+        // 配了 prefix 但 sig 没 prefix → 拒
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("sha256=");
+        let sig_no_prefix = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+        let err = v
+            .verify(generic_test_body(), sig_no_prefix)
+            .await
+            .unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(
+                    msg.contains("sha256="),
+                    "msg should mention expected prefix: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_wrong_prefix_rejected() {
+        // 配了 "sha256=" 但 sig 用 "v1=" → 拒
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("sha256=");
+        let sig_wrong_prefix =
+            "v1=abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+        let err = v
+            .verify(generic_test_body(), sig_wrong_prefix)
+            .await
+            .unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(
+                    msg.contains("sha256="),
+                    "msg should mention expected prefix: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_tampered_body_rejected() {
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("sha256=");
+        let sig = v.compute_signature(b"original body");
+        let err = v.verify(b"tampered body", &sig).await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_wrong_secret_rejected() {
+        let v_sign = GenericHmacSha256Verifier::new(b"key1");
+        let v_verify = GenericHmacSha256Verifier::new(b"key2");
+        let sig = v_sign.compute_signature(generic_test_body());
+        let err = v_verify
+            .verify(generic_test_body(), &sig)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_invalid_hex_rejected() {
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()).with_prefix("sha256=");
+        let err = v
+            .verify(generic_test_body(), "sha256=not-hex-data!!")
+            .await
+            .unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(
+                    msg.contains("invalid hex"),
+                    "msg should say invalid hex: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_no_prefix_invalid_hex_rejected() {
+        // 没 prefix 模式下, 非 hex 也要被拒 (跟有 prefix 一致)
+        let v = GenericHmacSha256Verifier::new(generic_test_secret()); // 无 prefix
+        let err = v
+            .verify(generic_test_body(), "not-hex-data!!")
+            .await
+            .unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(
+                    msg.contains("invalid hex"),
+                    "msg should say invalid hex: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_zero_length_secret_works() {
+        // 0 长度 secret 创建时 warn, verify 仍工作 (HMAC key 空也 valid)
+        let v = GenericHmacSha256Verifier::new(b"");
+        let sig = v.compute_signature(generic_test_body());
+        assert!(v.verify(generic_test_body(), &sig).await.is_ok());
+        // 0 长度 secret 的 verify 应该 match — 0-length 跟 0-length HMAC
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_with_prefix_equivalent_to_hmac_sha256_verifier() {
+        // GenericHmacSha256Verifier (prefix="sha256=") 跟 HmacSha256Verifier 完全等价
+        let secret = b"shared-secret";
+        let body = b"test body";
+        let g = GenericHmacSha256Verifier::new(secret).with_prefix("sha256=");
+        let h = HmacSha256Verifier::new(secret);
+        let sig_g = g.compute_signature(body);
+        let sig_h = h.compute_signature(body);
+        assert_eq!(sig_g, sig_h, "compute_signature should produce same output");
+        // 互换 verify 也都通过
+        assert!(
+            g.verify(body, &sig_h).await.is_ok(),
+            "g should verify h's sig"
+        );
+        assert!(
+            h.verify(body, &sig_g).await.is_ok(),
+            "h should verify g's sig"
+        );
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_with_prefix_and_no_prefix_are_independent() {
+        // 同一 secret, 一有 prefix 一没 prefix, 不能交叉 verify
+        let secret = b"shared-secret";
+        let body = b"test body";
+        let v_with = GenericHmacSha256Verifier::new(secret).with_prefix("sha256=");
+        let v_without = GenericHmacSha256Verifier::new(secret); // 无 prefix
+        let sig_with = v_with.compute_signature(body); // "sha256=abc..."
+        let sig_without = v_without.compute_signature(body); // "abc..."
+
+        assert!(sig_with.starts_with("sha256="));
+        assert!(!sig_without.starts_with("sha256="));
+        // 互相交叉 verify 应该失败 (格式不兼容)
+        assert!(
+            v_with.verify(body, &sig_without).await.is_err(),
+            "v_with should reject sig without prefix"
+        );
+        assert!(
+            v_without.verify(body, &sig_with).await.is_err(),
+            "v_without should reject sig with 'sha256=' prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_algorithm_is_hmac_sha256_stub() {
+        // P15.3.5.3 限制: 暂返 HmacSha256 enum 变体
+        // (crypto 一样, 区分靠 prefix 在 struct 字段, 不在 enum)
+        // P15.3.5.4+ MultiVerifier 可加新变体
+        let v_no_prefix = GenericHmacSha256Verifier::new(b"x");
+        assert_eq!(v_no_prefix.algorithm(), SignatureAlgorithm::HmacSha256);
+
+        let v_with_prefix = GenericHmacSha256Verifier::new(b"x").with_prefix("sha256=");
+        assert_eq!(v_with_prefix.algorithm(), SignatureAlgorithm::HmacSha256);
+    }
+
+    #[tokio::test]
+    async fn generic_hmac_sha256_debug_does_not_leak_secret() {
+        // 调试输出不能含 secret 内容
+        let v = GenericHmacSha256Verifier::new(b"super-secret-value");
+        let debug = format!("{v:?}");
+        assert!(!debug.contains("super-secret-value"));
+        assert!(debug.contains("secret_len"));
+        // prefix 字段可以打印 (不算 secret)
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_generic_verifier_no_prefix() {
+        // 端到端: GenericHmacSha256Verifier 没 prefix, 配 /webhook/custom
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/custom",
+            GenericHmacSha256Verifier::new(b"my-secret"),
+        ));
+        let body = br#"{"event":"test"}"#.to_vec();
+        let sig = GenericHmacSha256Verifier::new(b"my-secret").compute_signature(&body);
+        let event = WebhookEvent::new("/webhook/custom", body).with_signature(&sig);
+        let id = provider.submit(event).await.expect("submit");
+        assert!(!id.is_empty());
+        assert_eq!(provider.queue_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_generic_verifier_custom_prefix() {
+        // 端到端: GenericHmacSha256Verifier 用 "v1=" prefix
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/app",
+            GenericHmacSha256Verifier::new(b"my-secret").with_prefix("v1="),
+        ));
+        let body = br#"{"event":"test"}"#.to_vec();
+        let sig = GenericHmacSha256Verifier::new(b"my-secret")
+            .with_prefix("v1=")
+            .compute_signature(&body);
+        let event = WebhookEvent::new("/webhook/app", body).with_signature(&sig);
         let id = provider.submit(event).await.expect("submit");
         assert!(!id.is_empty());
         assert_eq!(provider.queue_len(), 1);

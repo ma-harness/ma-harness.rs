@@ -2976,6 +2976,7 @@ dependencies = [
  "hex",
  "hmac",
  "ma-harness-cordis",
+ "ma-harness-core",
  "ma-harness-seam",
  "parking_lot",
  "pretty_assertions",
