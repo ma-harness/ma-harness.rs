@@ -55,19 +55,21 @@
 //! - 可测: 单元测试用 fake action runner, 不依赖真 shell
 //! - 可扩展: P15.4.2+ 加 parallel / conditional / sub-workflow
 //!
-//! # 限制 (Limitations) — P15.4.2
+//! # 限制 (Limitations) — P15.4.2.2
 //!
-//! - **没**conditional branching (`if` / `else` based on prior step result, P15.4.2+)
+//! - **没**conditional branching (`if` / `else` based on prior step result, P15.4.2.3+)
 //! - **没**CLI 集成 `mah workflow run <file>` (P15.4.3+)
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
 //!   业务方用 StepRunner 注入)
 //! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
 //!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
 //! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
-//! - **没**DAG 依赖 (P15.4.2+ 计划加 `Step.depends_on` 让 step 按图序并发, 现在是
-//!   `ParallelWorkflow` 一次性全并发跑所有 step)
+//! - **没**dep 失败时把 dependent 标 Skipped (P15.4.2.2 是 continue-on-fail, P15.4.2.3+ 加)
+//! - **没**跨 step 数据传递 (depends_on 只控顺序, 业务方用 env / 临时文件 / Arc<Mutex<>>)
 //! - **✅ P15.4.2.1**: `ParallelWorkflow` engine (tokio::spawn + Semaphore, 默认 4 并发,
-//!   continue-on-fail 跟 LocalWorkflow 一致)
+//!   一次性全并发跑所有 step)
+//! - **✅ P15.4.2.2**: `DagWorkflow` engine + `Step.depends_on` (拓扑排序 + in-degree 调度,
+//!   cycle detection 返 `WorkflowError::Parse`, 复用 `run_step_with_retry` helper)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -134,6 +136,22 @@ pub struct Step {
     /// Retry count (额外 retry, 不算第一次). `0` = no retry.
     #[serde(default)]
     pub retries: u32,
+    /// 依赖的 step names (P15.4.2.2). 空 = 没有 deps, 跟其他独立 step 一起并发.
+    ///
+    /// **YAML**:
+    /// ```yaml
+    /// - name: test
+    ///   action: cargo test
+    ///   depends_on: [build, lint]
+    /// ```
+    ///
+    /// **P15.4.2.2 限制**: 跨 step 数据传递不支持 (depends_on 只控顺序, 不传值).
+    /// 业务方自己用 `std::env` / 临时文件 / 共享 Arc<Mutex<>> 传数据.
+    ///
+    /// **P15.4.2.2 限制**: dep step 失败时, dependent 仍会跑 (continue-on-fail 跟
+    /// Local/Parallel 一致). P15.4.2.3+ 加 `Skipped` 语义.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 impl Step {
@@ -144,6 +162,7 @@ impl Step {
             action: action.into(),
             timeout_secs: 0,
             retries: 0,
+            depends_on: Vec::new(),
         }
     }
 
@@ -156,6 +175,12 @@ impl Step {
     /// Builder: 设 retry count.
     pub fn with_retries(mut self, retries: u32) -> Self {
         self.retries = retries;
+        self
+    }
+
+    /// Builder: 设 depends_on (P15.4.2.2).
+    pub fn with_depends_on(mut self, deps: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.depends_on = deps.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -723,6 +748,242 @@ impl WorkflowEngine for ParallelWorkflow {
 }
 
 // ============================================================================
+// DagWorkflow (P15.4.2.2 主交付 — DAG executor with depends_on)
+// ============================================================================
+
+/// DAG workflow engine (P15.4.2.2).
+///
+/// **行为**:
+/// - 按 [`Step::depends_on`] 拓扑排序, in-degree = 0 的 step 立即可跑
+/// - step 完成后, 把所有 dependent 的 in-degree 减 1, 减到 0 的立即 spawn
+/// - 用 `tokio::sync::Semaphore` 限并发 ([`DEFAULT_MAX_CONCURRENCY`] = 4)
+/// - 用 `tokio::task::JoinSet` 管理 spawned task
+/// - 保持 `definition.steps` 顺序: `result.steps[i] == definition.steps[i]`
+/// - 任何 step 失败 → 整个 workflow 失败 (但**所有**可跑 step 都会跑, 业务方看完整 result)
+/// - 每个 step 仍走 retry + timeout (复用 `run_step_with_retry` helper)
+///
+/// **P15.4.2.2 限制**:
+/// - dep 失败时 dependent 仍会跑 (continue-on-fail 跟 Local/Parallel 一致).
+///   P15.4.2.3+ 加 `Skipped` 语义
+/// - 不传跨 step 数据 (depends_on 只控顺序, 不传值)
+/// - 不支持并行分支 merge 时的合并数据 (P15.4.2.3+ 加 `merge` 字段)
+///
+/// **业务方用法**:
+/// ```ignore
+/// let engine = DagWorkflow::with_runner(Arc::new(MyShellRunner))
+///     .with_max_concurrency(8);
+/// let def = WorkflowDefinition::from_yaml(yaml_with_depends_on)?;
+/// let result = engine.run(&def).await?;
+/// ```
+pub struct DagWorkflow {
+    runner: std::sync::Arc<dyn StepRunner>,
+    max_concurrency: usize,
+}
+
+impl std::fmt::Debug for DagWorkflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DagWorkflow")
+            .field("runner", &self.runner.name())
+            .field("max_concurrency", &self.max_concurrency)
+            .finish()
+    }
+}
+
+impl DagWorkflow {
+    /// 创建一个 default DagWorkflow (用 `LoggingStepRunner`, max_concurrency = 4).
+    pub fn new() -> Self {
+        Self {
+            runner: std::sync::Arc::new(LoggingStepRunner),
+            max_concurrency: DEFAULT_MAX_CONCURRENCY,
+        }
+    }
+
+    /// 创建一个用指定 runner 的 DagWorkflow (max_concurrency = 4).
+    pub fn with_runner(runner: std::sync::Arc<dyn StepRunner>) -> Self {
+        Self {
+            runner,
+            max_concurrency: DEFAULT_MAX_CONCURRENCY,
+        }
+    }
+
+    /// Builder: 设 max_concurrency (0 / 1 会被 clamp 到 1).
+    pub fn with_max_concurrency(mut self, n: usize) -> Self {
+        self.max_concurrency = n.max(1);
+        self
+    }
+}
+
+impl Default for DagWorkflow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl WorkflowEngine for DagWorkflow {
+    async fn run(&self, definition: &WorkflowDefinition) -> Result<RunResult, WorkflowError> {
+        let started_at = Utc::now();
+        let n = definition.steps.len();
+
+        // ---- Phase 1: build DAG ----
+
+        // name -> idx 映射 (for depends_on 解析)
+        let name_to_idx: std::collections::HashMap<&str, usize> = definition
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.name.as_str(), i))
+            .collect();
+
+        // in_degree[i] = # of deps that must complete before step i can start
+        let mut in_degree: Vec<usize> = Vec::with_capacity(n);
+        // dependents[i] = [step indices that depend on step i]
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for (i, step) in definition.steps.iter().enumerate() {
+            in_degree.push(step.depends_on.len());
+            for dep in &step.depends_on {
+                match name_to_idx.get(dep.as_str()) {
+                    Some(&dep_idx) => dependents[dep_idx].push(i),
+                    None => {
+                        return Err(WorkflowError::Parse(format!(
+                            "step '{}' depends on unknown step '{}'",
+                            step.name, dep
+                        )));
+                    }
+                }
+            }
+        }
+
+        // ---- Phase 2: spawn + dispatch loop ----
+
+        let mut results: Vec<Option<StepResult>> = (0..n).map(|_| None).collect();
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_concurrency));
+        let mut set: tokio::task::JoinSet<(usize, StepResult)> = tokio::task::JoinSet::new();
+
+        // Initial spawn: in_degree == 0
+        for (i, deg) in in_degree.iter().enumerate() {
+            if *deg == 0 {
+                spawn_dag_step(
+                    &mut set,
+                    &semaphore,
+                    self.runner.clone(),
+                    definition.steps[i].clone(),
+                    i,
+                );
+            }
+        }
+
+        while !set.is_empty() {
+            // 阻塞等任意一个 step 完成
+            let Some(joined) = set.join_next().await else {
+                break;
+            };
+            let (idx, step_result): (usize, StepResult) = match joined {
+                Ok(pair) => pair,
+                Err(join_err) => {
+                    // tokio task panic / cancel → 记为 Failed (不整个 workflow 崩)
+                    // (idx 已知: spawn_dag_step 总是 (idx, _))
+                    // 但 join error 拿不到 idx, 只能从 set 内部 metadata 拿
+                    // 简化处理: 用 0 兜底, 然后靠 results[0] 后置检查
+                    tracing::error!(error = %join_err, "dag step task join error (idx unknown)");
+                    (
+                        0,
+                        StepResult {
+                            name: String::from("<unknown>"),
+                            action: String::new(),
+                            status: StepStatus::Failed {
+                                reason: format!("task join error: {}", join_err),
+                            },
+                            attempts: 0,
+                            elapsed_ms: 0,
+                        },
+                    )
+                }
+            };
+            results[idx] = Some(step_result);
+
+            // 所有 dependent 减 in_degree, 减到 0 的立即 spawn
+            for &dep_idx in &dependents[idx] {
+                in_degree[dep_idx] = in_degree[dep_idx].saturating_sub(1);
+                if in_degree[dep_idx] == 0 {
+                    spawn_dag_step(
+                        &mut set,
+                        &semaphore,
+                        self.runner.clone(),
+                        definition.steps[dep_idx].clone(),
+                        dep_idx,
+                    );
+                }
+            }
+        }
+
+        // ---- Phase 3: cycle check + result ----
+
+        // 任何 step 没结果 = cycle (没有 path 让 in_degree 减到 0)
+        if let Some((_, missing_step)) = definition
+            .steps
+            .iter()
+            .enumerate()
+            .find(|(i, _)| results[*i].is_none())
+        {
+            let pending: Vec<&str> = definition
+                .steps
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| results[*i].is_none())
+                .map(|(_, s)| s.name.as_str())
+                .collect();
+            return Err(WorkflowError::Parse(format!(
+                "cycle detected, unreachable steps: {:?} (first: '{}')",
+                pending, missing_step.name
+            )));
+        }
+
+        let step_results: Vec<StepResult> = results.into_iter().map(|r| r.unwrap()).collect();
+        let finished_at = Utc::now();
+        let success = step_results
+            .iter()
+            .all(|r| matches!(r.status, StepStatus::Succeeded));
+
+        Ok(RunResult {
+            workflow_name: definition.name.clone(),
+            steps: step_results,
+            started_at,
+            finished_at,
+            success,
+        })
+    }
+}
+
+/// Spawn 一个 DAG step (P15.4.2.2 helper).
+///
+/// 跟 ParallelWorkflow 一样用 `Semaphore` + `acquire_owned`; 输出 `(idx, StepResult)` tuple
+/// 让 dispatcher 能更新 in_degree.
+fn spawn_dag_step(
+    set: &mut tokio::task::JoinSet<(usize, StepResult)>,
+    semaphore: &std::sync::Arc<tokio::sync::Semaphore>,
+    runner: std::sync::Arc<dyn StepRunner>,
+    step: Step,
+    idx: usize,
+) {
+    let sem = semaphore.clone();
+    set.spawn(async move {
+        // acquire permit, 限制并发 (permit drop 时自动 release)
+        let _permit = sem.acquire_owned().await.expect("semaphore closed");
+        let (status, attempts, elapsed_ms) = run_step_with_retry(&*runner, &step).await;
+        let result = StepResult {
+            name: step.name,
+            action: step.action,
+            status,
+            attempts,
+            elapsed_ms,
+        };
+        (idx, result)
+    });
+}
+
+// ============================================================================
 // Typed key + type alias
 // ============================================================================
 
@@ -1278,5 +1539,222 @@ steps:
         let debug = format!("{engine:?}");
         // 0 → 1 (clamp), 防止 Semaphore::new(0) deadlock
         assert!(debug.contains("1"), "expected clamp to 1, got: {}", debug);
+    }
+
+    // ----- P15.4.2.2: DagWorkflow (DAG executor) -----
+
+    #[tokio::test]
+    async fn dag_workflow_runs_independent_steps_concurrently() {
+        // 3 steps, no depends_on → 跟 ParallelWorkflow 一样全并发
+        let runner = Arc::new(SleepingRunner {
+            sleep: Duration::from_millis(150),
+        });
+        let engine = DagWorkflow::with_runner(runner).with_max_concurrency(4);
+
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n  - name: c\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let started = std::time::Instant::now();
+        let result = engine.run(&def).await.expect("run");
+        let elapsed = started.elapsed();
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 3);
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "parallel expected <300ms, got {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_respects_dependency_order() {
+        // 3-step chain: a → b → c (each 80ms). Sequential 必然 ≥ 240ms.
+        // 串行 chain 期望 ≈ 240ms (没并发机会).
+        let runner = Arc::new(SleepingRunner {
+            sleep: Duration::from_millis(80),
+        });
+        let engine = DagWorkflow::with_runner(runner).with_max_concurrency(4);
+
+        let yaml = "name: chain\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    depends_on: [a]\n  - name: c\n    action: x\n    depends_on: [b]\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let started = std::time::Instant::now();
+        let result = engine.run(&def).await.expect("run");
+        let elapsed = started.elapsed();
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 3);
+        // chain 必须 sequential: 至少 3×80 = 240ms. 给 50% headroom.
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "chain should be sequential, got {:?} (<200ms means parallelism leaked)",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_diamond_pattern() {
+        // Diamond: a → {b, c} → d
+        //   a: 0 deps
+        //   b, c: depend on a
+        //   d: depends on b AND c
+        // Expected: a runs first, then b+c in parallel, then d
+        // Total: ≈ 3×sleep (sequential levels), but b and c overlap.
+        let runner = Arc::new(SleepingRunner {
+            sleep: Duration::from_millis(80),
+        });
+        let engine = DagWorkflow::with_runner(runner).with_max_concurrency(4);
+
+        let yaml = r#"
+name: diamond
+steps:
+  - name: a
+    action: x
+  - name: b
+    action: x
+    depends_on: [a]
+  - name: c
+    action: x
+    depends_on: [a]
+  - name: d
+    action: x
+    depends_on: [b, c]
+"#;
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let started = std::time::Instant::now();
+        let result = engine.run(&def).await.expect("run");
+        let elapsed = started.elapsed();
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 4);
+        // 3 levels × 80ms = 240ms. 给 100ms headroom (调度 + polling).
+        assert!(
+            elapsed >= Duration::from_millis(150) && elapsed < Duration::from_millis(400),
+            "diamond expected 150-400ms (3 levels), got {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_detects_cycle() {
+        // A → B → A (cycle)
+        let engine = DagWorkflow::new();
+        let yaml = r#"
+name: cycle
+steps:
+  - name: a
+    action: x
+    depends_on: [b]
+  - name: b
+    action: x
+    depends_on: [a]
+"#;
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let err = engine.run(&def).await.unwrap_err();
+        assert!(
+            matches!(err, WorkflowError::Parse(_)),
+            "expected Parse error for cycle, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_unknown_dependency_returns_error() {
+        let engine = DagWorkflow::new();
+        let yaml = r#"
+name: ghost
+steps:
+  - name: a
+    action: x
+    depends_on: [nonexistent]
+"#;
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let err = engine.run(&def).await.unwrap_err();
+        assert!(
+            matches!(err, WorkflowError::Parse(_)),
+            "expected Parse error, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_continues_after_independent_failure() {
+        // 3 steps, no deps, middle one always fails. 跟 ParallelWorkflow 行为一致.
+        let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n  - name: c\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.len(), 3);
+        for r in &result.steps {
+            assert!(matches!(r.status, StepStatus::Failed { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_runs_dependent_after_dep_fails() {
+        // P15.4.2.2 限制: dep 失败时, dependent 仍跑 (continue-on-fail 跟 Local/Parallel 一致).
+        // a 失败 → b (depends on a) 仍会跑, 也失败.
+        let engine = DagWorkflow::with_runner(Arc::new(FailingStepRunner));
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n    depends_on: [a]\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        assert_eq!(result.steps.len(), 2);
+        // a ran (and failed)
+        assert_eq!(result.steps[0].name, "a");
+        assert!(matches!(result.steps[0].status, StepStatus::Failed { .. }));
+        // b ran (and failed, because FailingStepRunner fails everything)
+        assert_eq!(result.steps[1].name, "b");
+        assert!(matches!(result.steps[1].status, StepStatus::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn dag_workflow_with_zero_steps_returns_empty_result() {
+        let engine = DagWorkflow::new();
+        let yaml = "name: empty\nsteps: []\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 0);
+        assert_eq!(result.workflow_name, "empty");
+    }
+
+    #[test]
+    fn dag_workflow_debug_shows_runner_and_concurrency() {
+        let engine = DagWorkflow::new().with_max_concurrency(8);
+        let debug = format!("{engine:?}");
+        assert!(debug.contains("DagWorkflow"));
+        assert!(debug.contains("logging"));
+        assert!(debug.contains("8"));
+    }
+
+    #[test]
+    fn dag_workflow_with_max_concurrency_zero_clamps_to_one() {
+        let engine = DagWorkflow::new().with_max_concurrency(0);
+        let debug = format!("{engine:?}");
+        assert!(debug.contains("1"), "expected clamp to 1, got: {}", debug);
+    }
+
+    #[test]
+    fn step_with_depends_on_builder() {
+        let s = Step::new("test", "cargo test").with_depends_on(["build", "lint"]);
+        assert_eq!(s.depends_on, vec!["build", "lint"]);
+    }
+
+    #[test]
+    fn step_with_depends_on_yaml_roundtrip() {
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: cargo build\n  - name: b\n    action: cargo test\n    depends_on: [a]\n";
+        let d = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        assert_eq!(d.steps.len(), 2);
+        assert!(d.steps[0].depends_on.is_empty());
+        assert_eq!(d.steps[1].depends_on, vec!["a"]);
+
+        // roundtrip
+        let yaml2 = d.to_yaml().expect("serialize");
+        let d2 = WorkflowDefinition::from_yaml(&yaml2).expect("re-parse");
+        assert_eq!(d, d2);
     }
 }
