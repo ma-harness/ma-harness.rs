@@ -305,11 +305,14 @@ impl WorkflowDefinition {
     /// **Errors**:
     /// - `WorkflowError::Io` — 文件读不出来 (没找到 / permission denied)
     /// - `WorkflowError::Parse` — YAML 格式错
+    ///
+    /// **P15.4.3 增强**: 自动 strip UTF-8 BOM (Windows PowerShell `Set-Content -Encoding utf8`
+    /// 会写 BOM, 不 strip 会让 `serde_yaml` 把 `\u{FEFF}name` 当 key 报 "missing field `steps`").
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, WorkflowError> {
         let p = path.as_ref();
         let content = std::fs::read_to_string(p)
             .map_err(|e| WorkflowError::Io(format!("read {}: {}", p.display(), e)))?;
-        Self::from_yaml(&content)
+        Self::from_yaml(strip_bom(&content))
     }
 
     /// 序列化为 YAML 并写到文件 (P15.4.1.1).
@@ -372,6 +375,17 @@ pub fn default_workflow_path(name: &str) -> PathBuf {
         format!("{}.yaml", name)
     };
     dir.join(file_name)
+}
+
+/// Strip UTF-8 BOM (`\u{FEFF}`) from string start (P15.4.3).
+///
+/// **背景**: Windows PowerShell 5.1 `Set-Content -Encoding utf8` 写文件会加 BOM.
+/// YAML parser 看到 BOM 会把 `\u{FEFF}name` 当 key 名, 报 "missing field `steps`".
+/// 业务方在 `mah workflow run` 看到这种错基本懵, 因为他们文件在编辑器里看着是对的。
+///
+/// **正确位置**: 应该 strip 在 IO 边界 (from_file), 不污染 from_yaml (业务方 in-memory 调)。
+fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{FEFF}').unwrap_or(s)
 }
 
 // ============================================================================
@@ -1284,6 +1298,27 @@ steps:
         original.to_yaml_file(&path).expect("write");
         let reloaded = WorkflowDefinition::from_file(&path).expect("read");
         assert_eq!(original, reloaded);
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workflow_definition_from_file_strips_utf8_bom() {
+        // P15.4.3 实战发现: PowerShell 5.1 `Set-Content -Encoding utf8` 写文件加 BOM
+        // (EF BB BF), 不 strip 会让 serde_yaml 把 \u{FEFF}name 当 key 报 "missing field `steps`".
+        let dir = std::env::temp_dir().join(format!("ma_harness_wf_bom_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("with-bom.yaml");
+        // 写带 BOM 的内容 (0xEF 0xBB 0xBF prefix)
+        let mut content = vec![0xEF, 0xBB, 0xBF];
+        content.extend_from_slice(b"name: from-powershell\nsteps:\n  - name: a\n    action: x\n");
+        std::fs::write(&path, &content).expect("write");
+
+        let d = WorkflowDefinition::from_file(&path).expect("from_file with BOM");
+        assert_eq!(d.name, "from-powershell");
+        assert_eq!(d.steps.len(), 1);
+        assert_eq!(d.steps[0].name, "a");
 
         // 清理
         let _ = std::fs::remove_dir_all(&dir);

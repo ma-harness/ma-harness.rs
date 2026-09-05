@@ -2383,6 +2383,7 @@ dependencies = [
  "ma-harness-server",
  "ma-harness-settings",
  "ma-harness-tui",
+ "ma-harness-workflow",
  "prost-types",
  "salvo",
  "semver",

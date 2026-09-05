@@ -257,6 +257,73 @@ enum Commands {
         #[command(subcommand)]
         action: HookAction,
     },
+    /// **P15.4.3**: Workflow CLI — 跑 / 校验 workflow YAML 文件
+    ///
+    /// 业务方:
+    ///   `mah workflow run <file>`                跑 workflow (默认 logging runner, dry-run)
+    ///   `mah workflow validate <file>`           只 parse + DAG 校验
+    ///   `mah workflow run <file> --engine dag`   选 engine
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowAction,
+    },
+}
+
+/// **P15.4.3**: Workflow CLI sub-actions
+///
+/// 业务方:
+///   `mah workflow run <file>`                  跑 workflow (default engine = local)
+///   `mah workflow validate <file>`             parse + DAG 校验 (不跑)
+#[derive(Subcommand, Debug)]
+enum WorkflowAction {
+    /// 跑一个 workflow YAML 文件
+    ///
+    /// Example:
+    ///   `mah workflow run ~/.ma-harness/workflows/ci.yaml`
+    ///   `mah workflow run ci.yaml --engine parallel --concurrency 8`
+    Run {
+        /// Workflow YAML 文件路径 (绝对 / 相对 / `~/.ma-harness/workflows/<name>` 短名)
+        file: PathBuf,
+        /// Engine (default: local)
+        #[arg(long, value_enum, default_value = "local")]
+        engine: WorkflowEngineArg,
+        /// Max concurrency (only for parallel / dag, default 4)
+        #[arg(long, default_value = "4")]
+        concurrency: usize,
+        /// 即使 workflow 失败也 exit 0 (默认 exit 1 if !success)
+        #[arg(long)]
+        no_fail_on_step: bool,
+    },
+    /// 解析 + DAG 校验 (不跑 step)
+    ///
+    /// 返:
+    /// - exit 0: parse OK + DAG OK
+    /// - exit 1: parse / cycle / unknown-dep 错 (打印到 stderr)
+    Validate {
+        /// Workflow YAML 文件路径
+        file: PathBuf,
+    },
+}
+
+/// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum WorkflowEngineArg {
+    /// 顺序跑所有 step
+    Local,
+    /// 一次性全并发跑所有 step (用 Semaphore 限 concurrency)
+    Parallel,
+    /// 按 `Step.depends_on` 拓扑排序 + 并发跑
+    Dag,
+}
+
+impl std::fmt::Display for WorkflowEngineArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            WorkflowEngineArg::Local => "local",
+            WorkflowEngineArg::Parallel => "parallel",
+            WorkflowEngineArg::Dag => "dag",
+        })
+    }
 }
 
 /// **P5-5 (Day 94)**: Session CRUD sub-actions
@@ -502,6 +569,15 @@ async fn main() -> Result<()> {
             HookAction::Install { name } => hook_install(&name),
             HookAction::List => hook_list(),
             HookAction::Run { name } => hook_run(&name),
+        },
+        Commands::Workflow { action } => match action {
+            WorkflowAction::Run {
+                file,
+                engine,
+                concurrency,
+                no_fail_on_step,
+            } => workflow_run(&file, engine, concurrency, no_fail_on_step).await,
+            WorkflowAction::Validate { file } => workflow_validate(&file).await,
         },
         Commands::RunStream {
             prompt,
@@ -1692,6 +1768,218 @@ fn settings_list(file: Option<&std::path::Path>) -> Result<()> {
 
     print!("{yaml}");
     Ok(())
+}
+
+// ============================================================================
+// P15.4.3: `mah workflow run` / `mah workflow validate`
+// ============================================================================
+
+/// `mah workflow run <file>` — load + run + print summary.
+///
+/// **P15.4.3 minimal**: 用 `LoggingStepRunner` (dry-run). 业务方自己 wrap 一个
+/// 真实 shell runner 走 programmatic API (`LocalWorkflow::with_runner(...)`).
+async fn workflow_run(
+    file: &std::path::Path,
+    engine: WorkflowEngineArg,
+    concurrency: usize,
+    no_fail_on_step: bool,
+) -> Result<()> {
+    use ma_harness_workflow::{
+        DagWorkflow, LocalWorkflow, ParallelWorkflow, StepRunner, WorkflowDefinition,
+        WorkflowEngine,
+    };
+
+    // 1. load YAML
+    let def = WorkflowDefinition::from_file(file)
+        .with_context(|| format!("load workflow from {}", file.display()))?;
+    eprintln!(
+        "[workflow] loaded: name={}, steps={}",
+        def.name,
+        def.steps.len()
+    );
+
+    // 2. 选 engine (runner 用 LoggingStepRunner dry-run, P15.4.4+ 接真实 shell runner)
+    let logging: std::sync::Arc<dyn StepRunner> = std::sync::Arc::new(LoggingStepRunnerShim);
+
+    let result = match engine {
+        WorkflowEngineArg::Local => {
+            let eng = LocalWorkflow::with_runner(logging);
+            eng.run(&def).await.context("run local workflow")?
+        }
+        WorkflowEngineArg::Parallel => {
+            let eng = ParallelWorkflow::with_runner(logging).with_max_concurrency(concurrency);
+            eng.run(&def).await.context("run parallel workflow")?
+        }
+        WorkflowEngineArg::Dag => {
+            let eng = DagWorkflow::with_runner(logging).with_max_concurrency(concurrency);
+            eng.run(&def).await.context("run dag workflow")?
+        }
+    };
+
+    // 3. 打印 summary
+    print_workflow_result(&result);
+
+    // 4. exit code
+    if !result.success && !no_fail_on_step {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `mah workflow validate <file>` — parse + DAG 校验 (不真跑 step)
+///
+/// **P15.4.3 实现**: 走 `DagWorkflow::run` + `LoggingStepRunnerShim`, 拿到 cycle / unknown-dep 错
+/// (DAG build 阶段就返 `Parse` 错, 不进 dispatch loop). valid workflow 也会 "跑" 完所有 step
+/// (但 LoggingStepRunnerShim 立即返 Ok, 无 IO).
+async fn workflow_validate(file: &std::path::Path) -> Result<()> {
+    use ma_harness_workflow::{DagWorkflow, StepRunner, WorkflowDefinition, WorkflowEngine};
+
+    let def = WorkflowDefinition::from_file(file)
+        .with_context(|| format!("load workflow from {}", file.display()))?;
+
+    let logging: std::sync::Arc<dyn StepRunner> = std::sync::Arc::new(LoggingStepRunnerShim);
+    let eng = DagWorkflow::with_runner(logging);
+    let result = eng.run(&def).await.context("validate workflow")?;
+
+    print_workflow_result(&result);
+    if !result.success {
+        std::process::exit(1);
+    }
+    eprintln!(
+        "[workflow] validate OK: {} steps, DAG acyclic",
+        result.steps.len()
+    );
+    Ok(())
+}
+
+/// 打印 workflow result 摘要到 stdout (P15.4.3).
+fn print_workflow_result(result: &ma_harness_workflow::RunResult) {
+    println!("workflow: {}", result.workflow_name);
+    println!("success: {}", result.success);
+    println!(
+        "steps: {} (total elapsed {}ms)",
+        result.steps.len(),
+        result.total_elapsed_ms()
+    );
+    for (i, s) in result.steps.iter().enumerate() {
+        println!(
+            "  [{}] {} -> {} (attempts={}, elapsed_ms={})",
+            i, s.name, s.status, s.attempts, s.elapsed_ms
+        );
+    }
+}
+
+/// CLI 用 logging step runner (P15.4.3).
+///
+/// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
+/// 暴露一个公共 shim. (实际是 5 行 wrapper.)
+struct LoggingStepRunnerShim;
+
+#[async_trait::async_trait]
+impl ma_harness_workflow::StepRunner for LoggingStepRunnerShim {
+    async fn run(&self, step: &ma_harness_workflow::Step) -> Result<(), String> {
+        tracing::info!(step = %step.name, action = %step.action, "cli: step (logged, no real exec)");
+        Ok(())
+    }
+    fn name(&self) -> &'static str {
+        "cli-logging"
+    }
+}
+
+#[cfg(test)]
+mod workflow_cli_tests {
+    use super::*;
+    use ma_harness_workflow::WorkflowEngine;
+    use std::sync::Arc;
+
+    /// 在当前 tokio runtime 跑 future; 没有 runtime 时自建一个 (test helper).
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        match tokio::runtime::Handle::try_current() {
+            Ok(h) => h.block_on(f),
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(f),
+        }
+    }
+
+    /// 写一个临时 YAML workflow, 走 `WorkflowDefinition::from_file` + `LocalWorkflow::run`
+    /// (跟 CLI 走相同路径, 不通过 clap dispatch)
+    fn write_workflow(dir: &std::path::Path, name: &str, yaml: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, yaml).expect("write yaml");
+        path
+    }
+
+    #[test]
+    fn cli_workflow_run_loads_valid_yaml_and_succeeds() {
+        // 直接走 workflow crate API 模拟 CLI 行为
+        let dir = tempfile::tempdir().expect("tempdir");
+        let yaml = "name: cli-test\nsteps:\n  - name: a\n    action: cargo build\n  - name: b\n    action: cargo test\n";
+        let path = write_workflow(dir.path(), "wf.yaml", yaml);
+        let def = ma_harness_workflow::WorkflowDefinition::from_file(&path).expect("load");
+
+        // 跑 LocalWorkflow
+        let runner: Arc<dyn ma_harness_workflow::StepRunner> = Arc::new(LoggingStepRunnerShim);
+        let eng = ma_harness_workflow::LocalWorkflow::with_runner(runner);
+        let result = block_on(async move { eng.run(&def).await });
+        let result = result.expect("run");
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 2);
+    }
+
+    #[test]
+    fn cli_workflow_validate_detects_unknown_dep() {
+        // DAG build 阶段 unknown dep → WorkflowError::Parse
+        let dir = tempfile::tempdir().expect("tempdir");
+        let yaml =
+            "name: invalid\nsteps:\n  - name: a\n    action: x\n    depends_on: [nonexistent]\n";
+        let path = write_workflow(dir.path(), "bad.yaml", yaml);
+        let def = ma_harness_workflow::WorkflowDefinition::from_file(&path).expect("load");
+        let runner: Arc<dyn ma_harness_workflow::StepRunner> = Arc::new(LoggingStepRunnerShim);
+        let eng = ma_harness_workflow::DagWorkflow::with_runner(runner);
+        let err = block_on(async move { eng.run(&def).await }).unwrap_err();
+        assert!(matches!(err, ma_harness_workflow::WorkflowError::Parse(_)));
+    }
+
+    #[test]
+    fn cli_workflow_validate_detects_cycle() {
+        // a → b → a
+        let dir = tempfile::tempdir().expect("tempdir");
+        let yaml = r#"
+name: cycle
+steps:
+  - name: a
+    action: x
+    depends_on: [b]
+  - name: b
+    action: x
+    depends_on: [a]
+"#;
+        let path = write_workflow(dir.path(), "cycle.yaml", yaml);
+        let def = ma_harness_workflow::WorkflowDefinition::from_file(&path).expect("load");
+        let runner: Arc<dyn ma_harness_workflow::StepRunner> = Arc::new(LoggingStepRunnerShim);
+        let eng = ma_harness_workflow::DagWorkflow::with_runner(runner);
+        let err = block_on(async move { eng.run(&def).await }).unwrap_err();
+        assert!(matches!(err, ma_harness_workflow::WorkflowError::Parse(_)));
+    }
+
+    #[test]
+    fn cli_workflow_load_missing_file_returns_io_error() {
+        // 测 from_file 错误路径
+        let path = std::path::PathBuf::from("Z:/__nope__/nope.yaml");
+        let err = ma_harness_workflow::WorkflowDefinition::from_file(&path).unwrap_err();
+        assert!(matches!(err, ma_harness_workflow::WorkflowError::Io(_)));
+    }
+
+    #[test]
+    fn workflow_engine_arg_display_matches_lowercase() {
+        // clap value_enum 渲染用 Display, 跟 CLI 字面量一致
+        assert_eq!(format!("{}", WorkflowEngineArg::Local), "local");
+        assert_eq!(format!("{}", WorkflowEngineArg::Parallel), "parallel");
+        assert_eq!(format!("{}", WorkflowEngineArg::Dag), "dag");
+    }
 }
 
 #[cfg(test)]
