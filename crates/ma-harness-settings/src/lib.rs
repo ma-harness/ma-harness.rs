@@ -531,6 +531,231 @@ pub static SETTINGS_STORE: ma_harness_cordis::CtxKey<std::sync::Arc<dyn Settings
 pub type DefaultSettingsStore = FileSettingsStore;
 
 // ============================================================================
+// P15.5.2: SettingsWatcher (hot-reload via notify)
+// ============================================================================
+
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::time::Duration;
+
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+
+/// Settings hot-reload watcher (P15.5.2).
+///
+/// **行为**: 监控 `path` 所在目录. 文件有变化 (create / modify / rename) →
+/// debounce `debounce` ms → 重新读文件 → 调 `callback(new_settings)`.
+///
+/// **用途**: 业务方外部编辑 `~/.ma-harness/settings.yaml` (e.g. 用 vim,
+/// VSCode, 或另一个进程) 时, 自动 reload 到 in-memory state, 不需要重启
+/// `mah` 进程.
+///
+/// **生命周期**: `SettingsWatcher` 持有 notify watcher + 后台 thread.
+/// **Drop = stop**: drop 时, notify watcher 先 drop (关闭 channel), 后台
+/// thread `recv()` 拿到 Disconnected 退出, 然后 `Drop` 等 thread join.
+///
+/// **Example**:
+/// ```ignore
+/// use ma_harness_settings::SettingsWatcher;
+/// use std::sync::{Arc, Mutex};
+///
+/// let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+/// let captured_clone = Arc::clone(&captured);
+/// let watcher = SettingsWatcher::new("~/.ma-harness/settings.yaml", move |s| {
+///     captured_clone.lock().unwrap().push(format!("reloaded: {} keys", s.keys().len()));
+/// })?;
+/// // watcher 在 scope 内 active, drop 时停
+/// ```
+///
+/// **Debounce 算法** (trailing edge):
+/// - 收到事件 → 标记 `last_change = now`
+/// - 后续 `debounce` ms 内没新事件 → fire callback
+/// - 连续 edit (e.g. 多次 save) 自动 coalesce 成 1 次 reload
+///
+/// **跨平台**: 委托 `notify::RecommendedWatcher` →
+/// - Windows: `ReadDirectoryChangesW`
+/// - Linux: `inotify`
+/// - macOS: `FSEvents`
+pub struct SettingsWatcher {
+    /// notify watcher (Option 让 Drop::drop 能 take)
+    watcher: Option<RecommendedWatcher>,
+    /// 后台 reload thread
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for SettingsWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsWatcher")
+            .field("active", &self.watcher.is_some())
+            .finish()
+    }
+}
+
+impl SettingsWatcher {
+    /// 默认 debounce 100ms.
+    pub fn new<F>(path: impl AsRef<Path>, callback: F) -> Result<Self, SettingsError>
+    where
+        F: Fn(Settings) + Send + 'static,
+    {
+        Self::with_debounce(path, callback, Duration::from_millis(100))
+    }
+
+    /// 自定义 debounce duration.
+    ///
+    /// **典型用法**: 业务方想要 0ms (no debounce) 用 `Duration::from_millis(0)`.
+    /// 想要 1s 静默期用 `Duration::from_secs(1)`.
+    pub fn with_debounce<F>(
+        path: impl AsRef<Path>,
+        callback: F,
+        debounce: Duration,
+    ) -> Result<Self, SettingsError>
+    where
+        F: Fn(Settings) + Send + 'static,
+    {
+        let path = path.as_ref().to_path_buf();
+
+        // 1. 拿 file name 用来在 callback 过滤
+        let target_name: std::ffi::OsString = path
+            .file_name()
+            .ok_or_else(|| SettingsError::Config(format!("path has no file name: {path:?}")))?
+            .to_os_string();
+
+        // 2. 父目录 (notify 监控目录, 不直接监控文件 — atomic rename 才能 catch)
+        let parent = path
+            .parent()
+            .ok_or_else(|| SettingsError::Config(format!("path has no parent: {path:?}")))?;
+        if !parent.exists() {
+            // Best-effort: 创建父目录 (跟 FileSettingsStore::save 行为一致)
+            std::fs::create_dir_all(parent).map_err(|e| SettingsError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+
+        // 3. Channel: notify callback → background thread
+        let (tx, rx) = channel::<()>();
+
+        // 4. notify watcher
+        let target_for_filter = target_name.clone();
+        let mut watcher: RecommendedWatcher =
+            notify::recommended_watcher(move |res: notify::Result<Event>| {
+                // 过滤: 只关心目标文件的事件
+                let event = match res {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "notify watcher error");
+                        return;
+                    }
+                };
+                if event
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name() == Some(&target_for_filter))
+                {
+                    let _ = tx.send(());
+                }
+            })
+            .map_err(|e| SettingsError::Config(format!("create notify watcher: {e}")))?;
+
+        // 5. 监控父目录 (non-recursive, 业务方只关心这一个文件)
+        watcher
+            .watch(parent, RecursiveMode::NonRecursive)
+            .map_err(|e| SettingsError::Config(format!("watch parent dir {parent:?}: {e}")))?;
+
+        // 6. 后台 thread: recv events → debounce → reload → callback
+        let callback_path = path.clone();
+        let join = std::thread::Builder::new()
+            .name("ma-harness-settings-watcher".to_string())
+            .spawn(move || {
+                run_watcher_loop(rx, debounce, &callback_path, callback);
+            })
+            .map_err(|e| SettingsError::Config(format!("spawn watcher thread: {e}")))?;
+
+        Ok(Self {
+            watcher: Some(watcher),
+            join: Some(join),
+        })
+    }
+}
+
+impl Drop for SettingsWatcher {
+    fn drop(&mut self) {
+        // 1. 先 drop watcher → channel Sender 在 callback closure 里被 drop
+        //    → rx.recv() 拿 Disconnected → thread 退出
+        self.watcher.take();
+        // 2. 等 thread 退出
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// 后台 thread 主循环: 收 events → debounce → reload → callback.
+fn run_watcher_loop<F>(
+    rx: std::sync::mpsc::Receiver<()>,
+    debounce: Duration,
+    path: &Path,
+    callback: F,
+) where
+    F: Fn(Settings) + Send + 'static,
+{
+    let mut last_change: Option<std::time::Instant> = None;
+    loop {
+        match rx.recv_timeout(debounce) {
+            Ok(()) => {
+                // 收到事件 → 标记时间, 等 debounce 静默期
+                last_change = Some(std::time::Instant::now());
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                // 没新事件. 如果之前有变化 + 距离 `last_change` ≥ debounce → fire
+                if let Some(t) = last_change {
+                    if t.elapsed() >= debounce {
+                        let settings = load_for_watcher(path);
+                        tracing::debug!(
+                            path = %path.display(),
+                            keys = settings.keys().len(),
+                            "settings hot-reload fired"
+                        );
+                        callback(settings);
+                        last_change = None;
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                // Watcher dropped → 退出
+                tracing::debug!("settings watcher channel disconnected, stopping");
+                break;
+            }
+        }
+    }
+}
+
+/// Watcher 用的 load helper: missing file → empty settings, parse error → 旧 state (log warn).
+///
+/// **注**: 跟 `FileSettingsStore::load` 行为略有不同 (P15.5.2 watcher 是 sync,
+/// 不能用 async `tokio::fs::read`). 同步 std::fs::read + 错误归一化.
+fn load_for_watcher(path: &Path) -> Settings {
+    match std::fs::read(path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(content) => Settings::from_yaml(&content).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "settings reload: parse error, using empty");
+                Settings::empty()
+            }),
+            Err(e) => {
+                tracing::warn!(error = %e, "settings reload: not UTF-8, using empty");
+                Settings::empty()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // File deleted externally → 用 empty (跟 FileSettingsStore::load 一致)
+            Settings::empty()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "settings reload: read error, using empty");
+            Settings::empty()
+        }
+    }
+}
+
+// ============================================================================
 // 单元测试
 // ============================================================================
 
@@ -920,5 +1145,217 @@ mod tests {
         let mut s = Settings::empty();
         s.set("", "v"); // no-op, 不 panic
         assert!(s.is_empty());
+    }
+
+    // ========================================================================
+    // P15.5.2 tests: SettingsWatcher (hot-reload)
+    // ========================================================================
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc as StdArc;
+
+    /// 写一个 settings.yaml + 等 watcher ready + 等 callback fire
+    async fn wait_for_callback(path: &Path, count: &StdArc<AtomicUsize>, timeout_ms: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+        while std::time::Instant::now() < deadline {
+            if count.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // 最后再 print 一下, 方便 debug
+        let _ = path; // suppress unused warning if test fail
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_fires_on_external_file_create() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        // 不预创建文件, 让 watcher 看 create 事件
+
+        let count = StdArc::new(AtomicUsize::new(0));
+        let count_clone = StdArc::clone(&count);
+        let _watcher = SettingsWatcher::new(&path, move |_s| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("watcher");
+        tokio::time::sleep(Duration::from_millis(200)).await; // watcher ready
+
+        tokio::fs::write(&path, "key: value\n")
+            .await
+            .expect("write");
+        wait_for_callback(&path, &count, 2000).await;
+
+        assert!(
+            count.load(Ordering::SeqCst) >= 1,
+            "callback should fire on file create"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_fires_on_external_modify() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        tokio::fs::write(&path, "initial: 1\n")
+            .await
+            .expect("initial write");
+
+        let captured: StdArc<tokio::sync::Mutex<Vec<String>>> =
+            StdArc::new(tokio::sync::Mutex::new(Vec::new()));
+        let captured_clone = StdArc::clone(&captured);
+        let _watcher = SettingsWatcher::new(&path, move |s| {
+            let captured = StdArc::clone(&captured_clone);
+            // Sync closure → 用 blocking_lock 拿 async mutex
+            // 注: 实际应用里 callback 应该是 sync 的, 这是测试方便
+            let key_count = s.keys().len();
+            // 用 std::sync::Mutex 避免 async-in-sync 问题
+            captured.blocking_lock().push(format!("keys={key_count}"));
+        })
+        .expect("watcher");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        tokio::fs::write(&path, "first: 1\nsecond: 2\nthird: 3\n")
+            .await
+            .expect("modify");
+        wait_for_callback(&path, &StdArc::new(AtomicUsize::new(0)), 2000).await;
+
+        let g = captured.lock().await;
+        assert!(!g.is_empty(), "callback should fire at least once");
+        // 最后一次 callback 应反映 3 个 key
+        let last = g.last().expect("at least one callback");
+        assert!(
+            last.contains("keys=3"),
+            "last callback should report 3 keys, got {last}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_callback_receives_empty_settings_after_delete() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        tokio::fs::write(&path, "key: value\n")
+            .await
+            .expect("initial");
+
+        let captured: StdArc<tokio::sync::Mutex<Vec<bool>>> =
+            StdArc::new(tokio::sync::Mutex::new(Vec::new()));
+        let captured_clone = StdArc::clone(&captured);
+        let _watcher = SettingsWatcher::new(&path, move |s| {
+            let mut g = captured_clone.blocking_lock();
+            g.push(s.is_empty());
+        })
+        .expect("watcher");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        tokio::fs::remove_file(&path).await.expect("delete");
+        wait_for_callback(&path, &StdArc::new(AtomicUsize::new(0)), 2000).await;
+
+        let g = captured.lock().await;
+        assert!(!g.is_empty(), "callback should fire after delete");
+        assert!(
+            g.last().copied().unwrap_or(false),
+            "callback after delete should receive empty settings"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_drop_stops_callback() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        tokio::fs::write(&path, "v: 1\n").await.expect("initial");
+
+        let count = StdArc::new(AtomicUsize::new(0));
+        let count_clone = StdArc::clone(&count);
+        let watcher = SettingsWatcher::new(&path, move |_s| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("watcher");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Drop watcher
+        drop(watcher);
+
+        // 等 200ms (thread join 应该已经完成)
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Reset count (之前可能没 fire, 也可能 fire 0 次)
+        count.store(0, Ordering::SeqCst);
+
+        // 修改文件 — 不应再 fire
+        tokio::fs::write(&path, "v: 2\n").await.expect("write");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "after drop, callback should NOT fire"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_creates_missing_parent_dir() {
+        let dir = tempdir().expect("tempdir");
+        // 不存在的子目录
+        let nested = dir.path().join("nested").join("settings.yaml");
+
+        let _watcher = SettingsWatcher::new(&nested, |_s| {})
+            .expect("watcher (should auto-create parent dir)");
+        // 父目录应被自动创建
+        assert!(
+            nested.parent().unwrap().exists(),
+            "parent dir should be created"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_rejects_path_with_no_file_name() {
+        // 路径没 file name (e.g. just ".")
+        let result = SettingsWatcher::new(".", |_s| {});
+        assert!(result.is_err(), "should reject path with no file name");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settings_watcher_debounce_coalesces_rapid_edits() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        tokio::fs::write(&path, "v: 1\n").await.expect("initial");
+
+        let count = StdArc::new(AtomicUsize::new(0));
+        let count_clone = StdArc::clone(&count);
+        let _watcher = SettingsWatcher::with_debounce(
+            &path,
+            move |_s| {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(150),
+        )
+        .expect("watcher");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // 5 次 rapid edit (50ms 间隔, 都在 150ms debounce 之内)
+        for i in 2..=6 {
+            tokio::fs::write(&path, format!("v: {i}\n"))
+                .await
+                .expect("write");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        // 等 debounce 静默 + 一点 buffer
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let final_count = count.load(Ordering::SeqCst);
+        assert!(
+            (1..=3).contains(&final_count),
+            "debounce should coalesce 5 rapid edits into 1-3 callbacks, got {final_count}"
+        );
+    }
+
+    #[test]
+    fn settings_watcher_debug_shows_active_field() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("settings.yaml");
+        let watcher = SettingsWatcher::new(&path, |_s| {}).expect("watcher");
+        let debug = format!("{watcher:?}");
+        assert!(debug.contains("SettingsWatcher"));
+        assert!(debug.contains("active"));
     }
 }

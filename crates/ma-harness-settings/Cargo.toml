@@ -23,7 +23,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
-tokio = { workspace = true, features = ["fs", "sync", "io-util"] }
+tokio = { workspace = true, features = ["fs", "sync", "io-util", "rt-multi-thread", "macros", "time"] }
+# P15.5.2 hot-reload: file watcher
+notify = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

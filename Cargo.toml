@@ -165,6 +165,10 @@ sha2 = "0.10"
 subtle = "2"
 hex = "0.4"
 
+# P15.5.2 Settings hot-reload (notify: file watcher)
+# 业务方 2026-09-05 P15.5.2 引入 (跨平台: ReadDirectoryChangesW / inotify / FSEvents)
+notify = "6"
+
 # proc-macro
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
