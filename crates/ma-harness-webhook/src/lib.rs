@@ -459,6 +459,135 @@ impl WebhookVerifier for GitLabTokenVerifier {
 }
 
 // ============================================================================
+// P15.3.5.2: StripeSignatureVerifier (multi-verifier example #2)
+// ============================================================================
+
+/// Stripe webhook 验签器 (P15.3.5.2 新增).
+///
+/// **Stripe 格式** (Stripe-Signature header):
+/// ```text
+/// Stripe-Signature: t=1234567890,v1=abc123...,v1=def456... (key rotation support)
+/// ```
+/// - `t` = unix timestamp (seconds), 用来防 replay attack
+/// - `v1` = HMAC-SHA256 of `<t>.<body>` with secret, hex-encoded
+///   (可能有多个 v1 — Stripe key rotation, 业务方验证任一即可)
+///
+/// **算法**: HMAC-SHA256(secret, format!("{t}.{body}")), hex 编码
+/// **比较**: `subtle::ConstantTimeEq` 防 timing attack
+/// **timestamp check**: P15.3.5.2 minimal 不做 (P15.3.5.2.1+ 加 tolerance)
+/// **multi-v1**: 支持 (任一 v1 match 即 OK)
+///
+/// **业务方用法**:
+/// ```ignore
+/// let verifier = StripeSignatureVerifier::new(b"whsec_...");
+/// let provider = LocalWebhookProvider::new()
+///     .with_route(RouteConfig::new("/webhook/stripe", verifier));
+/// ```
+///
+/// **注**: 这个 verifier 实现是 minimal — 完整 Stripe 验签还有 timestamp
+/// tolerance (防 replay) + multiple secret (跟 key rotation 一起).
+/// 业务方有更严需求可以自己 wrap.
+#[derive(Clone)]
+pub struct StripeSignatureVerifier {
+    secret: Vec<u8>,
+}
+
+impl std::fmt::Debug for StripeSignatureVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StripeSignatureVerifier")
+            .field("secret_len", &self.secret.len())
+            .finish()
+    }
+}
+
+impl StripeSignatureVerifier {
+    /// 创建一个新的 Stripe 验签器.
+    pub fn new(secret: impl AsRef<[u8]>) -> Self {
+        let secret = secret.as_ref().to_vec();
+        if secret.is_empty() {
+            tracing::warn!(
+                "StripeSignatureVerifier created with 0-length secret (anyone can forge)"
+            );
+        }
+        Self { secret }
+    }
+
+    /// 给定 (timestamp, body, secret) 计算 v1 signature (测试用 + 内部 helper).
+    pub fn compute_v1(timestamp: u64, body: &[u8], secret: &[u8]) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+        // Stripe signed payload: "{t}.{body}"
+        mac.update(timestamp.to_string().as_bytes());
+        mac.update(b".");
+        mac.update(body);
+        let result = mac.finalize();
+        let bytes = result.into_bytes();
+        format!("v1={}", hex::encode(bytes))
+    }
+
+    /// 解析 Stripe-Signature header, 返 (timestamp, v1_signatures) 列表.
+    /// 解析失败返 None (业务方转 InvalidSignature 错误).
+    fn parse_header(header: &str) -> Option<(u64, Vec<Vec<u8>>)> {
+        let mut timestamp: Option<u64> = None;
+        let mut v1_sigs: Vec<Vec<u8>> = Vec::new();
+
+        for part in header.split(',') {
+            let part = part.trim();
+            if let Some(t_str) = part.strip_prefix("t=") {
+                timestamp = t_str.parse::<u64>().ok();
+            } else if let Some(hex_str) = part.strip_prefix("v1=") {
+                if let Ok(bytes) = hex::decode(hex_str) {
+                    v1_sigs.push(bytes);
+                }
+                // invalid hex: 跳过这个 v1 (其它 v1 仍可成功)
+            }
+            // 其它 scheme (v0 等) — 忽略 (业务方日后加 v0 支持可改这里)
+        }
+
+        let timestamp = timestamp?;
+        if v1_sigs.is_empty() {
+            return None;
+        }
+        Some((timestamp, v1_sigs))
+    }
+}
+
+#[async_trait]
+impl WebhookVerifier for StripeSignatureVerifier {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        // P15.3.5.2 限制: 暂用 HmacSha256 占位
+        // (Stripe 实际是 HMAC-SHA256 但带 timestamp payload 拼接)
+        // P15.3.5.4+ MultiVerifier 加 `StripeV1` enum 变体
+        SignatureAlgorithm::HmacSha256
+    }
+
+    async fn verify(&self, body: &[u8], signature: &str) -> Result<(), WebhookError> {
+        // 1. 解析 header
+        let (timestamp, v1_sigs) = Self::parse_header(signature).ok_or_else(|| {
+            WebhookError::InvalidSignature("malformed Stripe-Signature header".into())
+        })?;
+
+        // 2. 对每个 v1 试 HMAC
+        // 注: P15.3.5.2 minimal 不检查 timestamp (业务方可自己 wrap)
+        let mut mac = HmacSha256::new_from_slice(&self.secret)
+            .map_err(|e| WebhookError::Internal(format!("hmac key: {e}")))?;
+        mac.update(timestamp.to_string().as_bytes());
+        mac.update(b".");
+        mac.update(body);
+        let expected = mac.finalize().into_bytes();
+
+        // 3. 任一 v1 match → OK
+        for v1 in &v1_sigs {
+            if v1.ct_eq(&expected).into() {
+                return Ok(());
+            }
+        }
+        Err(WebhookError::InvalidSignature(
+            "no v1 signature matched".into(),
+        ))
+    }
+}
+
+// ============================================================================
 // RouteConfig
 // ============================================================================
 
@@ -2089,5 +2218,158 @@ mod tests {
         // P15.3.5.2 加新变体
         let v = GitLabTokenVerifier::new(b"x");
         assert_eq!(v.algorithm(), SignatureAlgorithm::HmacSha256);
+    }
+
+    // ========================================================================
+    // P15.3.5.2 tests: StripeSignatureVerifier
+    // ========================================================================
+
+    fn stripe_test_secret() -> &'static [u8] {
+        b"whsec_test_secret_for_p15_3_5_2"
+    }
+
+    fn stripe_current_ts() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_valid_signature() {
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = br#"{"type":"charge.succeeded","data":{}}"#;
+        let ts = stripe_current_ts();
+        let sig = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = format!("t={ts},{sig}");
+        assert!(v.verify(body, &header).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_wrong_secret() {
+        let v = StripeSignatureVerifier::new(b"correct-secret");
+        let body = b"body";
+        let ts = stripe_current_ts();
+        // 用错的 secret 算 sig
+        let sig = StripeSignatureVerifier::compute_v1(ts, body, b"wrong-secret");
+        let header = format!("t={ts},{sig}");
+        let err = v.verify(body, &header).await.unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(msg.contains("no v1 signature matched"));
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_wrong_body() {
+        // sig 是 body A 的, 验 body B → 失败
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let ts = stripe_current_ts();
+        let sig = StripeSignatureVerifier::compute_v1(ts, b"body-A", stripe_test_secret());
+        let header = format!("t={ts},{sig}");
+        let err = v.verify(b"body-B", &header).await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_multi_v1_accepts_when_any_matches() {
+        // Stripe key rotation: 多个 v1, 任一 match 即 OK
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = b"body";
+        let ts = stripe_current_ts();
+        // 一个 wrong, 一个 right
+        let wrong = StripeSignatureVerifier::compute_v1(ts, body, b"old-secret");
+        let right = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = format!("t={ts},{wrong},{right}");
+        assert!(v.verify(body, &header).await.is_ok());
+
+        // 反过来: wrong 在后, 仍 OK
+        let header2 = format!("t={ts},{right},{wrong}");
+        assert!(v.verify(body, &header2).await.is_ok());
+
+        // 全部 wrong → 失败
+        let wrong2 = StripeSignatureVerifier::compute_v1(ts, body, b"another-secret");
+        let header3 = format!("t={ts},{wrong},{wrong2}");
+        assert!(v.verify(body, &header3).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_malformed_no_v1_rejected() {
+        // 没有 v1= → 解析失败 → InvalidSignature
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let header = format!("t={}", stripe_current_ts());
+        let err = v.verify(b"body", &header).await.unwrap_err();
+        match err {
+            WebhookError::InvalidSignature(msg) => {
+                assert!(msg.contains("malformed"));
+            }
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_malformed_no_t_rejected() {
+        // 没有 t= → 解析失败 → InvalidSignature
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = b"body";
+        let ts = stripe_current_ts();
+        let sig = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = sig; // 没 t= (sig 是 String 已经是 "v1=...")
+        let err = v.verify(body, &header).await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_malformed_t_not_numeric_rejected() {
+        // t= 但不是数字
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = b"body";
+        let ts = stripe_current_ts();
+        let sig = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = format!("t=not-a-number,{sig}");
+        let err = v.verify(body, &header).await.unwrap_err();
+        assert!(matches!(err, WebhookError::InvalidSignature(_)));
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_malformed_v1_not_hex_skipped() {
+        // v1= 但不是 hex → 这个 v1 被跳过, 其它 v1 仍可成功
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = b"body";
+        let ts = stripe_current_ts();
+        let right = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = format!("t={ts},v1=not-hex-data!!,{right}");
+        assert!(v.verify(body, &header).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stripe_verifier_ignores_unknown_scheme() {
+        // Stripe 文档说可能加 v0 等新 scheme. 业务方日后加 v0 时改 parse_header.
+        // 当前: v0= 等未知 scheme 被忽略 (不 fail, 不影响 v1 验签)
+        let v = StripeSignatureVerifier::new(stripe_test_secret());
+        let body = b"body";
+        let ts = stripe_current_ts();
+        let right = StripeSignatureVerifier::compute_v1(ts, body, stripe_test_secret());
+        let header = format!("t={ts},v0=ignored,{right}");
+        assert!(v.verify(body, &header).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_webhook_provider_with_stripe_verifier_end_to_end() {
+        // 端到端: 配 /webhook/stripe, valid sig → 200
+        let provider = LocalWebhookProvider::new().with_route(RouteConfig::new(
+            "/webhook/stripe",
+            StripeSignatureVerifier::new(stripe_test_secret()),
+        ));
+        let body = br#"{"id":"evt_test","type":"charge.succeeded"}"#.to_vec();
+        let ts = stripe_current_ts();
+        let sig = StripeSignatureVerifier::compute_v1(ts, &body, stripe_test_secret());
+        let header = format!("t={ts},{sig}");
+        let event = WebhookEvent::new("/webhook/stripe", body).with_signature(&header);
+        let id = provider.submit(event).await.expect("submit");
+        assert!(!id.is_empty());
+        assert_eq!(provider.queue_len(), 1);
     }
 }
