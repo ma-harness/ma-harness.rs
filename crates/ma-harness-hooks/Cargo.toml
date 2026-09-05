@@ -1,0 +1,30 @@
+[package]
+name = "ma-harness-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = true
+description = "ma-harness hook bridges (P15.7): wire protocol + adapter for Claude Code / Codex hooks. dsh parity."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Internal — ctx key plumbing
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.0" }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.0" }
+
+# External
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

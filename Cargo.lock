@@ -2372,6 +2372,7 @@ dependencies = [
  "ma-harness-conformance",
  "ma-harness-cordis",
  "ma-harness-core",
+ "ma-harness-hooks",
  "ma-harness-model",
  "ma-harness-plugin-dsh-adapter",
  "ma-harness-plugin-hello",
@@ -2574,6 +2575,22 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ma-harness-hooks"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "ma-harness-cordis",
+ "ma-harness-seam",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

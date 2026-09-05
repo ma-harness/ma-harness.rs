@@ -247,6 +247,16 @@ enum Commands {
         #[command(subcommand)]
         action: SettingsAction,
     },
+    /// **P15.7 (Day 101+33)**: Hook bridges (Claude Code / Codex 接入).
+    ///
+    /// 业务方 workflow:
+    ///   `mah hook install claude-code`  打印 ~/.claude/settings.json 配置 hint
+    ///   `mah hook run <name>`              读 stdin JSON, 调 hook, 写 stdout
+    ///   `mah hook list`                    列出可用 hook adapter
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
 }
 
 /// **P5-5 (Day 94)**: Session CRUD sub-actions
@@ -350,6 +360,32 @@ enum SettingsAction {
         /// Override settings file path
         #[arg(long)]
         file: Option<std::path::PathBuf>,
+    },
+}
+
+/// **P15.7 (Day 101+33)**: Hook CLI sub-actions
+///
+/// 业务方:
+///   `mah hook install claude-code`  打印 ~/.claude/settings.json 配置 hint
+///   `mah hook run <name>`              读 stdin, parse, 调 hook, 写 stdout
+///   `mah hook list`                    列出可用 hook adapter
+#[derive(Subcommand, Debug)]
+enum HookAction {
+    /// 打印 hook adapter 的 install instructions (Claude Code 等)
+    ///
+    /// Example: `mah hook install claude-code`
+    Install {
+        /// Hook adapter name (e.g. "claude-code")
+        name: String,
+    },
+    /// 列出可用 hook adapters
+    List,
+    /// 跑一个 hook (读 stdin JSON, 调 hook handler, 写 stdout + exit code).
+    ///
+    /// Example: `mah hook run claude-code < event.json`
+    Run {
+        /// Hook adapter name (e.g. "claude-code")
+        name: String,
     },
 }
 
@@ -461,6 +497,11 @@ async fn main() -> Result<()> {
             SettingsAction::Set { key, value, file } => settings_set(&key, &value, file.as_deref()),
             SettingsAction::Get { key, file } => settings_get(&key, file.as_deref()),
             SettingsAction::List { file } => settings_list(file.as_deref()),
+        },
+        Commands::Hook { action } => match action {
+            HookAction::Install { name } => hook_install(&name),
+            HookAction::List => hook_list(),
+            HookAction::Run { name } => hook_run(&name),
         },
         Commands::RunStream {
             prompt,
@@ -1454,6 +1495,83 @@ fn print_sandbox_status() -> Result<()> {
         println!("  - warn + no-op, 业务方 fs 不受限制");
     }
     Ok(())
+}
+
+// ============================================================================
+// P15.7: Hook CLI handlers
+// ============================================================================
+
+/// `mah hook install <name>` — print install instructions for a hook adapter.
+fn hook_install(name: &str) -> Result<()> {
+    ma_harness_hooks::print_install_hint(name);
+    Ok(())
+}
+
+/// `mah hook list` — list available hook adapters.
+fn hook_list() -> Result<()> {
+    println!("ma-harness available hook adapters:");
+    println!();
+    println!(
+        "  claude-code  Claude Code hook bridge (read JSON from stdin, write response to stdout)"
+    );
+    println!();
+    println!("Use `mah hook install <name>` for setup instructions.");
+    Ok(())
+}
+
+/// `mah hook run <name>` — read event from stdin, parse, call hook, write response.
+fn hook_run(name: &str) -> Result<()> {
+    use ma_harness_hooks::{ClaudeCodeAdapter, Hook, HookError, HookResponse, NoopHook};
+
+    // P15.7.1 minimal: only Claude Code adapter
+    if name != "claude-code" {
+        eprintln!("[hook] unknown adapter: {name}");
+        eprintln!("[hook] available: claude-code");
+        std::process::exit(1);
+    }
+
+    // Read stdin synchronously (CLI 主入口是 sync, 业务方用 tokio 但 hook stdin read 简单)
+    let mut input = String::new();
+    use std::io::Read;
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .context("read stdin")?;
+
+    // Parse + dispatch
+    let event = match ClaudeCodeAdapter::parse_event(&input) {
+        Ok(e) => e,
+        Err(err) => {
+            // Parse error: 返 Continue + 写 stderr (Claude Code 协议)
+            eprintln!("[hook] parse error: {err}");
+            return Ok(());
+        }
+    };
+
+    // P15.7.1: 用 NoopHook. 业务方以后可以注册自己的 hook via ctx.hooks
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    let response: Result<HookResponse, HookError> = rt.block_on(async {
+        let hook: std::sync::Arc<dyn Hook> = std::sync::Arc::new(NoopHook);
+        hook.handle(&event).await
+    });
+
+    let response = match response {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("[hook] handler error: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    // Render response to stdout + exit code
+    let stdout = ClaudeCodeAdapter::render_response(&response);
+    if !stdout.is_empty() {
+        println!("{stdout}");
+    }
+    let code = ClaudeCodeAdapter::exit_code(&response);
+    std::process::exit(code);
 }
 
 // ============================================================================
