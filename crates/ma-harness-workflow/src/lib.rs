@@ -55,9 +55,8 @@
 //! - 可测: 单元测试用 fake action runner, 不依赖真 shell
 //! - 可扩展: P15.4.2+ 加 parallel / conditional / sub-workflow
 //!
-//! # 限制 (Limitations) — P15.4.1
+//! # 限制 (Limitations) — P15.4.2
 //!
-//! - **没**parallel worker pool (P15.4.2+)
 //! - **没**conditional branching (`if` / `else` based on prior step result, P15.4.2+)
 //! - **没**CLI 集成 `mah workflow run <file>` (P15.4.3+)
 //! - **没**`Step.action` 实际执行 (P15.4.1 测 run framework, action 是 opaque string
@@ -65,6 +64,10 @@
 //! - **没**YAML file loader 是 P15.4.1.1 才加: `from_file` / `to_yaml_file` /
 //!   `default_workflows_dir` / `default_workflow_path` (业务方直接读 `~/.ma-harness/workflows/*.yaml`)
 //! - **没**atomic file write (P15.4.1.1 简单 `fs::write`, 业务方 concurrent write 自己 wrap)
+//! - **没**DAG 依赖 (P15.4.2+ 计划加 `Step.depends_on` 让 step 按图序并发, 现在是
+//!   `ParallelWorkflow` 一次性全并发跑所有 step)
+//! - **✅ P15.4.2.1**: `ParallelWorkflow` engine (tokio::spawn + Semaphore, 默认 4 并发,
+//!   continue-on-fail 跟 LocalWorkflow 一致)
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -439,6 +442,59 @@ pub trait WorkflowEngine: Send + Sync + 'static {
 // LocalWorkflow (P15.4.1 主交付 — sequential executor)
 // ============================================================================
 
+/// 跑单个 step 带 retry + timeout (P15.4.2.1 抽出, 共享给 LocalWorkflow / ParallelWorkflow).
+///
+/// **返**: `(StepStatus, attempts_used, elapsed_ms)`.
+/// - `attempts_used` = 1 (first success) 或 total_attempts (failed after retries)
+/// - `elapsed_ms` 是 wall clock 时间 (含 retry 之间的间隙)
+///
+/// **业务方**: 不直接调, 是 engine 内部 helper.
+async fn run_step_with_retry(runner: &dyn StepRunner, step: &Step) -> (StepStatus, u32, u64) {
+    let step_started = std::time::Instant::now();
+    let total_attempts = 1 + step.retries;
+    let mut final_status = StepStatus::Failed {
+        reason: String::new(),
+    };
+
+    for attempt in 1..=total_attempts {
+        let attempt_result = if step.timeout_secs > 0 {
+            let timeout_dur = Duration::from_secs(step.timeout_secs);
+            match timeout(timeout_dur, runner.run(step)).await {
+                Ok(Ok(())) => StepStatus::Succeeded,
+                Ok(Err(reason)) => StepStatus::Failed {
+                    reason: reason.clone(),
+                },
+                Err(_elapsed) => StepStatus::TimedOut,
+            }
+        } else {
+            match runner.run(step).await {
+                Ok(()) => StepStatus::Succeeded,
+                Err(reason) => StepStatus::Failed {
+                    reason: reason.clone(),
+                },
+            }
+        };
+
+        final_status = attempt_result;
+        if matches!(final_status, StepStatus::Succeeded) {
+            break;
+        }
+        tracing::warn!(
+            step = %step.name,
+            attempt = attempt,
+            total = total_attempts,
+            "step attempt failed"
+        );
+    }
+
+    let step_elapsed_ms = step_started.elapsed().as_millis() as u64;
+    let attempts_used: u32 = match &final_status {
+        StepStatus::Succeeded => 1,
+        _ => total_attempts,
+    };
+    (final_status, attempts_used, step_elapsed_ms)
+}
+
 /// 本地 sequential workflow engine (P15.4.1).
 ///
 /// **行为**:
@@ -495,50 +551,9 @@ impl WorkflowEngine for LocalWorkflow {
         let mut step_results: Vec<StepResult> = Vec::new();
 
         for step in &definition.steps {
-            let step_started = std::time::Instant::now();
-            let total_attempts = 1 + step.retries;
-            let mut final_status = StepStatus::Failed {
-                reason: String::new(),
-            };
+            let (final_status, attempts_used, step_elapsed_ms) =
+                run_step_with_retry(&*self.runner, step).await;
 
-            for attempt in 1..=total_attempts {
-                let attempt_result = if step.timeout_secs > 0 {
-                    let timeout_dur = Duration::from_secs(step.timeout_secs);
-                    match timeout(timeout_dur, self.runner.run(step)).await {
-                        Ok(Ok(())) => StepStatus::Succeeded,
-                        Ok(Err(reason)) => StepStatus::Failed {
-                            reason: reason.clone(),
-                        },
-                        Err(_elapsed) => StepStatus::TimedOut,
-                    }
-                } else {
-                    match self.runner.run(step).await {
-                        Ok(()) => StepStatus::Succeeded,
-                        Err(reason) => StepStatus::Failed {
-                            reason: reason.clone(),
-                        },
-                    }
-                };
-
-                final_status = attempt_result.clone();
-                if matches!(final_status, StepStatus::Succeeded) {
-                    break;
-                }
-                // 还有 retry 机会, continue
-                tracing::warn!(
-                    step = %step.name,
-                    attempt = attempt,
-                    total = total_attempts,
-                    "step attempt failed"
-                );
-            }
-
-            // If we got TimedOut or Failed after all attempts
-            let step_elapsed_ms = step_started.elapsed().as_millis() as u64;
-            let attempts_used: u32 = match &final_status {
-                StepStatus::Succeeded => 1, // rough: we report 1 even if first attempt succeeded
-                _ => total_attempts,
-            };
             step_results.push(StepResult {
                 name: step.name.clone(),
                 action: step.action.clone(),
@@ -554,6 +569,144 @@ impl WorkflowEngine for LocalWorkflow {
             }
         }
 
+        let finished_at = Utc::now();
+        let success = step_results
+            .iter()
+            .all(|r| matches!(r.status, StepStatus::Succeeded));
+
+        Ok(RunResult {
+            workflow_name: definition.name.clone(),
+            steps: step_results,
+            started_at,
+            finished_at,
+            success,
+        })
+    }
+}
+
+// ============================================================================
+// ParallelWorkflow (P15.4.2.1 主交付 — parallel worker pool)
+// ============================================================================
+
+/// 默认并发数 (P15.4.2.1).
+pub const DEFAULT_MAX_CONCURRENCY: usize = 4;
+
+/// 并发 workflow engine (P15.4.2.1).
+///
+/// **行为**:
+/// - 用 `tokio::spawn` 并发跑所有 steps
+/// - 用 `tokio::sync::Semaphore` 限制 `max_concurrency` (默认 [`DEFAULT_MAX_CONCURRENCY`] = 4)
+/// - 保持 `definition.steps` 的顺序: `result.steps[i] == definition.steps[i]`
+///   (即使完成顺序乱, 索引位置固定)
+/// - 任何 step 失败 → 整个 workflow 失败 (但**所有** steps 都会跑完, 业务方看完整 result)
+/// - 每个 step 仍走 retry + timeout (复用 `run_step_with_retry` helper)
+///
+/// **P15.4.2.1 限制**:
+/// - 一次性全并发 (无 `depends_on` DAG), P15.4.2.2+ 加
+/// - 顺序保持靠 vec 索引, 完成时间不一定按顺序记录
+///
+/// **业务方用法**:
+/// ```ignore
+/// let engine = ParallelWorkflow::with_runner(Arc::new(MyShellRunner))
+///     .with_max_concurrency(8);
+/// let def = WorkflowDefinition::from_yaml(yaml)?;
+/// let result = engine.run(&def).await?;
+/// ```
+pub struct ParallelWorkflow {
+    runner: std::sync::Arc<dyn StepRunner>,
+    max_concurrency: usize,
+}
+
+impl std::fmt::Debug for ParallelWorkflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParallelWorkflow")
+            .field("runner", &self.runner.name())
+            .field("max_concurrency", &self.max_concurrency)
+            .finish()
+    }
+}
+
+impl ParallelWorkflow {
+    /// 创建一个 default ParallelWorkflow (用 `LoggingStepRunner`, max_concurrency = 4).
+    pub fn new() -> Self {
+        Self {
+            runner: std::sync::Arc::new(LoggingStepRunner),
+            max_concurrency: DEFAULT_MAX_CONCURRENCY,
+        }
+    }
+
+    /// 创建一个用指定 runner 的 ParallelWorkflow (max_concurrency = 4).
+    pub fn with_runner(runner: std::sync::Arc<dyn StepRunner>) -> Self {
+        Self {
+            runner,
+            max_concurrency: DEFAULT_MAX_CONCURRENCY,
+        }
+    }
+
+    /// Builder: 设 max_concurrency (0 / 1 会被 clamp 到 1).
+    pub fn with_max_concurrency(mut self, n: usize) -> Self {
+        self.max_concurrency = n.max(1);
+        self
+    }
+}
+
+impl Default for ParallelWorkflow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl WorkflowEngine for ParallelWorkflow {
+    async fn run(&self, definition: &WorkflowDefinition) -> Result<RunResult, WorkflowError> {
+        let started_at = Utc::now();
+        let n = definition.steps.len();
+        // 预占位 vec, 按 i 索引填, 保证 result.steps[i] 跟 definition.steps[i] 对应
+        let mut results: Vec<Option<StepResult>> = (0..n).map(|_| None).collect();
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_concurrency));
+
+        let mut handles = Vec::with_capacity(n);
+        for step in definition.steps.iter() {
+            let runner = self.runner.clone();
+            let sem = semaphore.clone();
+            let step_owned = step.clone();
+            handles.push(tokio::spawn(async move {
+                // acquire permit, 限制并发 (permit drop 时自动 release)
+                let _permit = sem.acquire_owned().await.expect("semaphore closed");
+                let (status, attempts, elapsed_ms) =
+                    run_step_with_retry(&*runner, &step_owned).await;
+                StepResult {
+                    name: step_owned.name,
+                    action: step_owned.action,
+                    status,
+                    attempts,
+                    elapsed_ms,
+                }
+            }));
+        }
+
+        // 收集所有 task 结果 (handle.await), 按 idx 写到 results[i]
+        for (idx, handle) in handles.into_iter().enumerate() {
+            let step_result = match handle.await {
+                Ok(r) => r,
+                Err(join_err) => {
+                    // tokio task panic / cancel → 记为 Failed (不整个 workflow 崩)
+                    tracing::error!(step_idx = idx, error = %join_err, "parallel step task join error");
+                    StepResult {
+                        name: definition.steps[idx].name.clone(),
+                        action: definition.steps[idx].action.clone(),
+                        status: StepStatus::Failed {
+                            reason: format!("task join error: {}", join_err),
+                        },
+                        attempts: 0,
+                        elapsed_ms: 0,
+                    }
+                }
+            };
+            results[idx] = Some(step_result);
+        }
+
+        let step_results: Vec<StepResult> = results.into_iter().map(|r| r.unwrap()).collect();
         let finished_at = Utc::now();
         let success = step_results
             .iter()
@@ -937,5 +1090,193 @@ steps:
                 std::env::remove_var("MA_HARNESS_WORKFLOWS_DIR");
             },
         }
+    }
+
+    // ----- P15.4.2.1: ParallelWorkflow (worker pool) -----
+
+    /// Runner: 每个 step 睡 `sleep` 时间. 用于测并发 (sequential ≥ N×sleep, parallel < N×sleep).
+    struct SleepingRunner {
+        sleep: Duration,
+    }
+    #[async_trait::async_trait]
+    impl StepRunner for SleepingRunner {
+        async fn run(&self, _step: &Step) -> Result<(), String> {
+            tokio::time::sleep(self.sleep).await;
+            Ok(())
+        }
+        fn name(&self) -> &'static str {
+            "sleeping"
+        }
+    }
+
+    /// Runner: 记录同一时刻 active 数量, 用于验证 semaphore 真限制了并发.
+    struct ConcurrencyProbeRunner {
+        max_concurrent: std::sync::atomic::AtomicU32,
+        current_active: std::sync::atomic::AtomicU32,
+        step_duration: Duration,
+    }
+    #[async_trait::async_trait]
+    impl StepRunner for ConcurrencyProbeRunner {
+        async fn run(&self, _step: &Step) -> Result<(), String> {
+            let now = self
+                .current_active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            // update max
+            let mut observed = self
+                .max_concurrent
+                .load(std::sync::atomic::Ordering::SeqCst);
+            while now > observed {
+                match self.max_concurrent.compare_exchange(
+                    observed,
+                    now,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => observed = actual,
+                }
+            }
+            tokio::time::sleep(self.step_duration).await;
+            self.current_active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_workflow_runs_all_steps_concurrently() {
+        // 3 steps × 150ms = sequential 450ms; parallel (max_concurrency=4) ≈ 150-200ms
+        let runner = Arc::new(SleepingRunner {
+            sleep: Duration::from_millis(150),
+        });
+        let engine = ParallelWorkflow::with_runner(runner).with_max_concurrency(4);
+
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n  - name: c\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let started = std::time::Instant::now();
+        let result = engine.run(&def).await.expect("run");
+        let elapsed = started.elapsed();
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 3);
+        // 并发应该明显比 sequential 450ms 快. 给 50% headroom.
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "parallel expected <300ms, got {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_workflow_respects_max_concurrency() {
+        // 4 steps × 100ms; max_concurrency=2 → 期望 ≈ 200ms (2 batches)
+        // ProbeRunner 同步记录 max active, 应该 ≤ 2
+        let probe = Arc::new(ConcurrencyProbeRunner {
+            max_concurrent: std::sync::atomic::AtomicU32::new(0),
+            current_active: std::sync::atomic::AtomicU32::new(0),
+            step_duration: Duration::from_millis(80),
+        });
+        let engine = ParallelWorkflow::with_runner(probe.clone() as Arc<dyn StepRunner>)
+            .with_max_concurrency(2);
+
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n  - name: c\n    action: x\n  - name: d\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(result.success);
+        assert_eq!(result.steps.len(), 4);
+        let observed_max = probe
+            .max_concurrent
+            .load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            observed_max <= 2,
+            "max concurrency exceeded: observed {} active, limit 2",
+            observed_max
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_workflow_continues_after_step_failure() {
+        // 3 steps, middle one always fails (FailingStepRunner 全 fail)
+        let engine =
+            ParallelWorkflow::with_runner(Arc::new(FailingStepRunner)).with_max_concurrency(2);
+
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n  - name: b\n    action: x\n  - name: c\n    action: x\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(!result.success);
+        // All 3 still ran
+        assert_eq!(result.steps.len(), 3);
+        for r in &result.steps {
+            assert!(
+                matches!(r.status, StepStatus::Failed { .. }),
+                "step {} expected Failed, got {:?}",
+                r.name,
+                r.status
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_workflow_handles_retry_in_parallel() {
+        // 3 steps × FlakyStepRunner (first fail, second ok) + retries=2
+        let flaky = Arc::new(FlakyStepRunner {
+            attempts: std::sync::atomic::AtomicU32::new(0),
+        });
+        let engine = ParallelWorkflow::with_runner(flaky.clone() as Arc<dyn StepRunner>)
+            .with_max_concurrency(3);
+
+        let yaml = "name: t\nsteps:\n  - name: a\n    action: x\n    retries: 2\n  - name: b\n    action: x\n    retries: 2\n  - name: c\n    action: x\n    retries: 2\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        // FlakyRunner 共享 counter: 第 1 次 fail, 第 2/3 次 success
+        // → 3 个 step 中只有 1 个 success (a, b, c 顺序看 scheduler)
+        // 但每个 step 内部 retry ≥ 2 次, 所以 attempts counter 至少被加 ≥ 4
+        let total_attempts = flaky.attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            total_attempts >= 4,
+            "expected at least 4 attempts (1+1+1 first + ≥1 retry), got {}",
+            total_attempts
+        );
+        // 部分 success, 部分 failed: overall success 是 false
+        // 但所有 step 都跑到 (3 个 result)
+        assert_eq!(result.steps.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn parallel_workflow_with_zero_steps_returns_empty_result() {
+        let engine = ParallelWorkflow::new(); // logging runner, 但 0 steps 没影响
+        let yaml = "name: empty\nsteps: []\n";
+        let def = WorkflowDefinition::from_yaml(yaml).expect("parse");
+        let result = engine.run(&def).await.expect("run");
+
+        assert!(result.success, "empty workflow should be success");
+        assert_eq!(result.steps.len(), 0);
+        assert_eq!(result.workflow_name, "empty");
+    }
+
+    // ----- P15.4.2.1 builders -----
+
+    #[test]
+    fn parallel_workflow_debug_shows_runner_and_concurrency() {
+        let engine = ParallelWorkflow::new().with_max_concurrency(8);
+        let debug = format!("{engine:?}");
+        assert!(debug.contains("ParallelWorkflow"));
+        assert!(debug.contains("logging"));
+        assert!(debug.contains("8"));
+    }
+
+    #[test]
+    fn parallel_workflow_with_max_concurrency_zero_clamps_to_one() {
+        let engine = ParallelWorkflow::new().with_max_concurrency(0);
+        let debug = format!("{engine:?}");
+        // 0 → 1 (clamp), 防止 Semaphore::new(0) deadlock
+        assert!(debug.contains("1"), "expected clamp to 1, got: {}", debug);
     }
 }
