@@ -44,6 +44,7 @@ members = [
     "plugins/ma-harness-plugin-dsh-adapter",  # 2026-08-21 (Day 101+2): P13 dsh-adapter 骨架
     "crates/ma-harness-credentials",  # 2026-09-05: P15.5.6 ctx.credentials (env + .env providers)
     "crates/ma-harness-hooks",  # 2026-09-05: P15.7 ctx.hooks (Claude Code wire protocol)
+    "crates/ma-harness-self-modification",  # 2026-09-05: P15.6 ctx.selfMod (runtime plugin mount)
 ]
 
 [workspace.package]
