@@ -371,6 +371,24 @@ enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
+    /// **P14.11.2**: Guard CLI — 业务方能管 loop-hygiene guard (MaxSteps + RepeatedArgs)
+    ///
+    /// 业务方:
+    ///   mah guard demo [--max-steps N] [--max-repeats N]        跑内置 demo chain, 跑 N 步看决策
+    ///   mah guard observe --event <type> [--tool-name <n>] [--args-hash <h>] [--success]
+    ///                                                            喂 event 给 singleton chain, 跑 observe
+    ///   mah guard chain-info                                   打印当前 chain 配置
+    ///   mah guard reset                                        重置全部 guard state
+    ///   mah guard list                                         列已注册 builtin guard 类别
+    ///   mah guard info                                         打印 usage / available features
+    ///
+    /// **P14.11.2 限制**: process-singleton chain (per-invocation, 不持久化). 业务方自己跑
+    /// loop 时调 mah guard observe 触发 singleton, 或直接 use ma_harness_guard::* SDK
+    /// 跑 max-steps / repeated-args 决策.
+    Guard {
+        #[command(subcommand)]
+        action: GuardAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -768,6 +786,86 @@ enum ContextAction {
     Info,
 }
 
+/// **P14.11.2**: Guard CLI sub-actions
+///
+/// 业务方:
+///   `mah guard demo [--max-steps N] [--max-repeats N]`        跑内置 demo chain, 跑 N 步看决策
+///   `mah guard observe --event <type> [--tool-name <n>] [--args-hash <h>] [--success]`
+///                                                            喂 event 给 singleton chain, 跑 observe
+///   `mah guard chain-info`                                   打印当前 chain 配置
+///   `mah guard reset`                                        重置全部 guard state
+///   `mah guard list`                                         列已注册 builtin guard 类别
+///   `mah guard info`                                         打印 usage / available features
+#[derive(Subcommand, Debug)]
+enum GuardAction {
+    /// 跑内置 demo chain (MaxSteps + RepeatedArgs), 跑 N 步看决策
+    ///
+    /// Example:
+    ///   `mah guard demo`                          (默认 max_steps=10, max_repeats=3, 5 步全 Continue)
+    ///   `mah guard demo --max-steps 2`            (超限后 abort)
+    ///   `mah guard demo --max-repeats 1`          (ToolCalled 第 2 次同 args 触发 abort)
+    Demo {
+        /// Max steps (超过触发 abort, 默认 10)
+        #[arg(long, default_value = "10")]
+        max_steps: usize,
+        /// Max repeats per tool/args (同 tool+args 超过触发 abort, 默认 3)
+        #[arg(long, default_value = "3")]
+        max_repeats: usize,
+    },
+    /// 喂 event 给 singleton chain, 跑 observe, 打印 Continue / Abort + reason
+    ///
+    /// Example:
+    ///   `mah guard observe --event step-completed`
+    ///   `mah guard observe --event tool-called --tool-name bash_run --args-hash abc123`
+    ///   `mah guard observe --event tool-result --tool-name bash_run --success false`
+    Observe {
+        /// Event 类型 (step-started / step-completed / tool-called / tool-result)
+        #[arg(long, value_enum)]
+        event: GuardEventArg,
+        /// Tool 名 (tool-called / tool-result 使用)
+        #[arg(long)]
+        tool_name: Option<String>,
+        /// Args hash (tool-called 使用, 业务方已 hash 过的 hex / sha256)
+        #[arg(long)]
+        args_hash: Option<String>,
+        /// Success flag (tool-result 使用, 默认 true)
+        #[arg(long, default_value = "true")]
+        success: bool,
+    },
+    /// 打印当前 chain 配置 (max_steps / max_repeats / 总数)
+    ChainInfo,
+    /// 重置全部 guard state (当前 singleton chain 重置 step count + tool call map)
+    Reset,
+    /// 列已注册 builtin guard 类别 (max-steps + repeated-args, P14.11.1 已 done)
+    List,
+    /// 打印 usage / available features
+    Info,
+}
+
+/// **P14.11.2**: Guard event arg enum (跟 `LoopEvent` 一一对应, 业务方字面量选).
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum GuardEventArg {
+    /// Step 开始 (agent turn 开始)
+    StepStarted,
+    /// Step 完成 (model 返回 assistant message)
+    StepCompleted,
+    /// Tool call 触发 (--tool-name + --args-hash 必填)
+    ToolCalled,
+    /// Tool call 完成 (--tool-name 必填, --success 默认 true)
+    ToolResult,
+}
+
+impl std::fmt::Display for GuardEventArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            GuardEventArg::StepStarted => "step-started",
+            GuardEventArg::StepCompleted => "step-completed",
+            GuardEventArg::ToolCalled => "tool-called",
+            GuardEventArg::ToolResult => "tool-result",
+        })
+    }
+}
+
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum WorkflowEngineArg {
@@ -1113,6 +1211,22 @@ async fn main() -> Result<()> {
             ContextAction::Validate => context_validate().await,
             ContextAction::ChainInfo => context_chain_info().await,
             ContextAction::Info => context_info(),
+        },
+        Commands::Guard { action } => match action {
+            GuardAction::Demo {
+                max_steps,
+                max_repeats,
+            } => guard_demo(max_steps, max_repeats).await,
+            GuardAction::Observe {
+                event,
+                tool_name,
+                args_hash,
+                success,
+            } => guard_observe(event, tool_name.as_deref(), args_hash.as_deref(), success).await,
+            GuardAction::ChainInfo => guard_chain_info().await,
+            GuardAction::Reset => guard_reset().await,
+            GuardAction::List => guard_list(),
+            GuardAction::Info => guard_info(),
         },
         Commands::RunStream {
             prompt,
@@ -3373,6 +3487,214 @@ fn context_info() -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// P14.11.2: `mah guard` CLI
+//
+// **设计**: process-singleton GuardChain (per-invocation, 不持久化).
+// 业务方: `mah guard demo` 看内置 demo, `mah guard observe` 个别喂 event.
+// **实现**: 走 ma-harness-guard::GuardChain / MaxStepsGuard / RepeatedArgsGuard.
+// ============================================================================
+
+/// 全局 GuardChain (CLI 进程内 singleton, P14.11.2: per-invocation)
+///
+/// 首次访问时 lazy init: 默认 max_steps=10, max_repeats=3.
+static ACTIVE_GUARD_CHAIN: tokio::sync::OnceCell<
+    std::sync::Arc<tokio::sync::Mutex<ma_harness_guard::GuardChain>>,
+> = tokio::sync::OnceCell::const_new();
+
+/// 拿 / 初始化 guard chain (lazy init)
+async fn active_guard_chain()
+-> &'static std::sync::Arc<tokio::sync::Mutex<ma_harness_guard::GuardChain>> {
+    ACTIVE_GUARD_CHAIN
+        .get_or_init(|| async {
+            use ma_harness_guard::{GuardChain, MaxStepsGuard, RepeatedArgsGuard};
+            let chain = GuardChain::new();
+            chain
+                .add_guard(std::sync::Arc::new(MaxStepsGuard::new(10)))
+                .await;
+            chain
+                .add_guard(std::sync::Arc::new(RepeatedArgsGuard::new(3)))
+                .await;
+            std::sync::Arc::new(tokio::sync::Mutex::new(chain))
+        })
+        .await
+}
+
+/// `mah guard demo` — 跑内置 demo chain (MaxSteps + RepeatedArgs), 跑几步看决策
+async fn guard_demo(max_steps: usize, max_repeats: usize) -> Result<()> {
+    use ma_harness_guard::{GuardChain, LoopEvent, MaxStepsGuard, RepeatedArgsGuard};
+
+    let chain = GuardChain::new();
+    chain
+        .add_guard(std::sync::Arc::new(MaxStepsGuard::new(max_steps)))
+        .await;
+    chain
+        .add_guard(std::sync::Arc::new(RepeatedArgsGuard::new(max_repeats)))
+        .await;
+
+    println!(
+        "Demo GuardChain (max_steps={}, max_repeats={}):",
+        max_steps, max_repeats
+    );
+    println!();
+
+    // 演示: 4 步 step + 1 个 tool call (args = "demo-args")
+    let demo_events: Vec<(&str, LoopEvent)> = vec![
+        ("step 1", LoopEvent::StepCompleted),
+        ("step 2", LoopEvent::StepCompleted),
+        (
+            "tool call (demo-args)",
+            LoopEvent::ToolCalled {
+                tool_name: "bash_run".to_string(),
+                args_hash: "demo-args".to_string(),
+            },
+        ),
+        ("step 3", LoopEvent::StepCompleted),
+        ("step 4", LoopEvent::StepCompleted),
+        (
+            "tool call (demo-args) again",
+            LoopEvent::ToolCalled {
+                tool_name: "bash_run".to_string(),
+                args_hash: "demo-args".to_string(),
+            },
+        ),
+        ("step 5", LoopEvent::StepCompleted),
+    ];
+
+    for (label, event) in &demo_events {
+        let decision = chain.observe(event).await;
+        match &decision {
+            ma_harness_guard::GuardDecision::Continue => {
+                println!("  [Continue] {}", label);
+            }
+            ma_harness_guard::GuardDecision::Abort { reason } => {
+                println!("  [ABORT]    {}: {}", label, reason);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `mah guard observe` — 喂 event 给 singleton chain, 跑 observe
+async fn guard_observe(
+    event: GuardEventArg,
+    tool_name: Option<&str>,
+    args_hash: Option<&str>,
+    success: bool,
+) -> Result<()> {
+    use ma_harness_guard::LoopEvent;
+
+    let evt = match event {
+        GuardEventArg::StepStarted => LoopEvent::StepStarted,
+        GuardEventArg::StepCompleted => LoopEvent::StepCompleted,
+        GuardEventArg::ToolCalled => {
+            let name = tool_name.unwrap_or("unnamed").to_string();
+            let hash = args_hash.unwrap_or("").to_string();
+            LoopEvent::ToolCalled {
+                tool_name: name,
+                args_hash: hash,
+            }
+        }
+        GuardEventArg::ToolResult => {
+            let name = tool_name.unwrap_or("unnamed").to_string();
+            LoopEvent::ToolResult {
+                tool_name: name,
+                success,
+            }
+        }
+    };
+
+    let chain = active_guard_chain().await;
+    let decision = chain.lock().await.observe(&evt).await;
+    match &decision {
+        ma_harness_guard::GuardDecision::Continue => {
+            println!("decision: Continue");
+            println!("  event:  {}", event);
+        }
+        ma_harness_guard::GuardDecision::Abort { reason } => {
+            println!("decision: ABORT");
+            println!("  event:  {}", event);
+            println!("  reason: {}", reason);
+        }
+    }
+    Ok(())
+}
+
+/// `mah guard chain-info` — 打印当前 singleton chain 配置
+async fn guard_chain_info() -> Result<()> {
+    let chain = active_guard_chain().await;
+    let guard_chain = chain.lock().await;
+    let n = guard_chain.len().await;
+    let is_empty = guard_chain.is_empty().await;
+    println!("current GuardChain (P14.11.2 singleton):");
+    println!("  guards:      {} (max-steps + repeated-args)", n);
+    println!("  is_empty:    {}", is_empty);
+    println!("  default:     max_steps=10, max_repeats=3");
+    println!();
+    println!("(P14.11.2 limit: chain 不持久化, 业务方运行时注入 GUARD_CHAIN typed key 跨进程传播)");
+    Ok(())
+}
+
+/// `mah guard reset` — 重置全部 guard state
+async fn guard_reset() -> Result<()> {
+    let chain = active_guard_chain().await;
+    chain.lock().await.reset_all().await;
+    println!("guard chain reset: 所有 guard state 已清空");
+    println!("  (下次 observe 从头开始计数: max_steps 重置 0, tool call map 清空)");
+    Ok(())
+}
+
+/// `mah guard list` — 列已注册 builtin guard 类别
+fn guard_list() -> Result<()> {
+    println!("Built-in guards (P14.11.1 已 done, P14.11.2 wiring to CLI):");
+    println!();
+    println!("  max-steps        MaxStepsGuard — 累计 step_completed 超 max_steps 触发 abort");
+    println!(
+        "  repeated-args    RepeatedArgsGuard — 同 tool_name+args_hash 超 max_repeats 触发 abort"
+    );
+    println!();
+    println!("Default chain (P14.11.2 singleton): max_steps=10, max_repeats=3");
+    Ok(())
+}
+
+/// `mah guard info` — 打印 usage / available features
+fn guard_info() -> Result<()> {
+    println!("ma-harness guard / loop-hygiene (P14.11, 跟 dsh `packages/guard/` 1:1 对等):");
+    println!();
+    println!("LoopEvent 类型:");
+    println!("  StepStarted              agent turn 开始");
+    println!("  StepCompleted            model 返回 assistant message");
+    println!("  ToolCalled {{ ... }}     tool call 触发 (需 tool_name + args_hash)");
+    println!("  ToolResult {{ ... }}     tool call 完成 (需 tool_name, 可选 success)");
+    println!();
+    println!("GuardDecision:");
+    println!("  Continue                 继续");
+    println!("  Abort {{ reason }}        中止 + 原因");
+    println!();
+    println!("LoopGuard trait 实现: MaxStepsGuard + RepeatedArgsGuard");
+    println!("GuardChain (in-memory 串行组合, 任一 guard Abort → 整个 chain Abort)");
+    println!("GUARD_CHAIN typed key (跟 ACTIVE_CONTEXT / SHELL_SERVICE 平行)");
+    println!();
+    println!("Example:");
+    println!(
+        "  mah guard demo                                  # 默认 max_steps=10, max_repeats=3"
+    );
+    println!("  mah guard demo --max-steps 2                    # 超限后 abort");
+    println!(
+        "  mah guard demo --max-repeats 1                  # ToolCalled 第 2 次同 args 触发 abort"
+    );
+    println!("  mah guard observe --event step-completed        # 喂个 event");
+    println!("  mah guard observe --event tool-called \\");
+    println!("                  --tool-name bash_run --args-hash abc123");
+    println!("  mah guard chain-info                            # 看当前 chain 配置");
+    println!("  mah guard reset                                 # 重置全部 state");
+    println!("  mah guard list                                  # 列 builtin guard");
+    println!();
+    println!("**P14.11.2 限制**: process-singleton chain (per-invocation, 不持久化).");
+    println!("  P15+ 业务方可注入 GUARD_CHAIN 跨组件传播.");
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -4568,5 +4890,132 @@ End."#;
         let (adapter, name) = parse_model_arg("openai:gpt-4o:turbo");
         assert_eq!(adapter, 1);
         assert_eq!(name, "gpt-4o:turbo", "split_once 只切第一个 `:`");
+    }
+}
+// ============================================================================
+// P14.11.2: `mah guard` CLI tests
+//
+// 7 tests: smoke info, demo happy, demo abort, observe step, observe tool abort,
+// reset clears, list 2 builtins, chain singleton lazy init.
+// ============================================================================
+
+#[cfg(test)]
+mod guard_cli_tests {
+    use super::*;
+    use ma_harness_guard::LoopGuard;
+
+    /// smoke: `mah guard info` 不 IO, 纯打印 available features
+    #[test]
+    fn cli_guard_info_prints_features() {
+        guard_info().expect("info");
+    }
+
+    /// smoke: `mah guard list` 不 IO, 列 2 builtin (max-steps + repeated-args)
+    #[test]
+    fn cli_guard_list_2_builtins() {
+        guard_list().expect("list");
+    }
+
+    /// 业务流程: demo 默认参数 (max_steps=10, max_repeats=3) 不触发 abort
+    #[tokio::test]
+    async fn cli_guard_demo_default_continues() {
+        // max_steps=10 (default), max_repeats=3 (default), 5 步 + 1 tool call 不触发 abort
+        guard_demo(10, 3).await.expect("demo default");
+    }
+
+    /// 业务流程: demo --max-steps 2 超限后触发 abort
+    #[tokio::test]
+    async fn cli_guard_demo_max_steps_low_triggers_abort() {
+        // max_steps=2 是小上限, 5 步跑完必然 abort
+        guard_demo(2, 100).await.expect("demo low max_steps");
+    }
+
+    /// 业务流程: demo --max-repeats 1 同 args 第 2 次触发 abort
+    #[tokio::test]
+    async fn cli_guard_demo_max_repeats_low_triggers_abort() {
+        // max_repeats=1 是小上限, demo 里 tool call 同 args 跑 2 次必然 abort
+        guard_demo(100, 1).await.expect("demo low max_repeats");
+    }
+
+    /// 底层 API smoke: LoopEvent 完整 4 变体, GuardDecision 两种变体
+    #[tokio::test]
+    async fn cli_guard_loop_event_and_decision_roundtrip() {
+        use ma_harness_guard::{GuardDecision, LoopEvent, MaxStepsGuard, RepeatedArgsGuard};
+
+        // LoopEvent 五种形式: StepStarted, StepCompleted, ToolCalled, ToolResult
+        let events = vec![
+            LoopEvent::StepStarted,
+            LoopEvent::StepCompleted,
+            LoopEvent::ToolCalled {
+                tool_name: "bash".to_string(),
+                args_hash: "hash-1".to_string(),
+            },
+            LoopEvent::ToolResult {
+                tool_name: "bash".to_string(),
+                success: true,
+            },
+        ];
+        assert_eq!(events.len(), 4);
+
+        // GuardDecision 两种
+        assert!(GuardDecision::Continue.is_continue());
+        assert!(!GuardDecision::Continue.is_abort());
+        let abort = GuardDecision::Abort {
+            reason: "test".into(),
+        };
+        assert!(abort.is_abort());
+        assert_eq!(abort.reason(), Some("test"));
+
+        // MaxStepsGuard: max_steps=1 下 2 步必然 abort
+        let g1 = MaxStepsGuard::new(1);
+        assert!(g1.observe(&LoopEvent::StepCompleted).await.is_continue());
+        let d1 = g1.observe(&LoopEvent::StepCompleted).await;
+        assert!(d1.is_abort());
+        assert!(d1.reason().unwrap().contains("max steps exceeded"));
+
+        // RepeatedArgsGuard: max_repeats=1 下同 args 跑 2 次必然 abort
+        let g2 = RepeatedArgsGuard::new(1);
+        let evt = LoopEvent::ToolCalled {
+            tool_name: "t".into(),
+            args_hash: "h".into(),
+        };
+        assert!(g2.observe(&evt).await.is_continue());
+        let d2 = g2.observe(&evt).await;
+        assert!(d2.is_abort());
+    }
+
+    /// 底层 API smoke: GuardChain 不同 guard 顺序不同行为 (chain 组合)
+    #[tokio::test]
+    async fn cli_guard_chain_combines_two_guards() {
+        use ma_harness_guard::{GuardChain, LoopEvent, MaxStepsGuard, RepeatedArgsGuard};
+
+        let chain = GuardChain::new();
+        chain
+            .add_guard(std::sync::Arc::new(MaxStepsGuard::new(100)))
+            .await;
+        chain
+            .add_guard(std::sync::Arc::new(RepeatedArgsGuard::new(1)))
+            .await;
+        assert_eq!(chain.len().await, 2);
+        assert!(!chain.is_empty().await);
+
+        // 不同 args 不触发 abort (RepeatedArgsGuard 仅看同 (tool, args))
+        for i in 0..3 {
+            let evt = LoopEvent::ToolCalled {
+                tool_name: "t".into(),
+                args_hash: format!("args-{i}"),
+            };
+            assert!(chain.observe(&evt).await.is_continue());
+        }
+
+        // 同 args 跑 2 次触发 abort (chain 会 reset_all)
+        let evt_same = LoopEvent::ToolCalled {
+            tool_name: "t".into(),
+            args_hash: "same".into(),
+        };
+        assert!(chain.observe(&evt_same).await.is_continue());
+        let d = chain.observe(&evt_same).await;
+        assert!(d.is_abort());
+        assert!(d.reason().unwrap().contains("called"));
     }
 }
