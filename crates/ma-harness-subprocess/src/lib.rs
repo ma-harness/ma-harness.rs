@@ -281,9 +281,10 @@ impl CommandSpec {
 ///
 /// `tokio::process::Stdio` 本身不可 Clone, 不能放进 `CommandSpec` (业务方要 Clone).
 /// 自己包一层 enum, 跨平台 safe.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StdioConfig {
     /// 管道 (业务方读 stdout / 写 stdin)
+    #[default]
     Piped,
     /// 继承父进程 (终端显示)
     Inherit,
@@ -311,12 +312,6 @@ impl StdioConfig {
 
     /// 默认 (Piped)
     pub fn default_piped() -> Self {
-        StdioConfig::Piped
-    }
-}
-
-impl Default for StdioConfig {
-    fn default() -> Self {
         StdioConfig::Piped
     }
 }
