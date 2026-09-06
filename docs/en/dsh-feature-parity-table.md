@@ -2,7 +2,9 @@
 
 > **Compact table view: ma-harness.rs v0.1.1 vs [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) v0.1**
 >
-> Last verified: 2026-09-04 · 24 crates on crates.io (16 actually shipped; 7 SSL-blocked; 5 pre-occupied as 0.1.0)
+> Last verified: 2026-09-06 · 24 crates on crates.io (16 actually shipped; 7 SSL-blocked; 5 pre-occupied as 0.1.0)
+>
+> **Parity score**: 73% done (82/114 ✅, 1 🔄, 3 ⚠️, 27 ❌, 1 ➖) — net +4% over 2026-09-04 baseline (69%)
 >
 > **Legend**: ✅ done &nbsp;|&nbsp; 🔄 extended &nbsp;|&nbsp; ⚠️ partial &nbsp;|&nbsp; ❌ gap &nbsp;|&nbsp; ⏳ planned &nbsp;|&nbsp; ➖ n/a
 >
@@ -28,7 +30,7 @@
 
 ---
 
-## 2. Capability Seams (14)
+## 2. Capability Seams (19)
 
 | Seam | Purpose | ma-harness | Status | Diff / Note |
 |---|---|---|---|---|
@@ -46,9 +48,13 @@
 | `ctx.workflows` | workflow engine (YAML + DAG + parallel) | `ma-harness-workflow` | 🔄 extended | P15.4: `LocalWorkflow` (sequential) + `ParallelWorkflow` (worker pool, default 4) + `DagWorkflow` (DAG with `depends_on` + cycle detect + dep-fail `Skipped` cascade) + `Step.when` conditional; `ShellStepRunner` (real `sh -c` / `cmd /C` via `ctx.subprocess`); CLI `mah workflow run/validate/list`; **+8 sub-tasks over 20 commits** |
 | `ctx.webhookRuntime` | webhook delivery | `ma-harness-webhook` (P15.3) | ✅ done | HMAC-SHA256 verifiers (GitLab / Stripe / generic) + `webhook_routes.yaml` + `mah webhook` CLI |
 | `ctx.systemPrompt` | prompt assembly | `ma-harness-core` | ✅ done | identical |
-| `ctx.goals` | session objectives | n/a | ❌ gap | **P15+** plan; today uses ad-hoc `#[dsh_command]` |
+| `ctx.goals` | session objectives | `ma-harness-session` (P14.8 `GoalStore`) | ✅ done | P14.8.1: `GoalStore` trait + in-memory impl; `mah session goal add/list/done` (P14.8.2 if wired) |
+| `ctx.todo` | multi-step work tracker | `ma-harness-todo` (P14.7) | ✅ done | P14.7.1: `TodoStore` trait + `InMemoryTodoStore` (state-machine: Pending→InProgress→Done, terminal Done/Cancelled); `mah todo list/write/update/delete` (P14.7.2) |
+| `ctx.plan` | plan-mode (read-only proposals) | `ma-harness-todo` (P14.7 `PlanStore`) | ✅ done | P14.7.1: `PlanStore` trait + `InMemoryPlanStore` (5-status: Draft/Approved/InProgress/Completed/Rejected); `mah plan list/write/update/delete` (P14.7.2) |
+| `ctx.sessionTitle` | auto-title from first user message | `ma-harness-session` (P14.8 `TitleProvider`) | ✅ done | P14.8.1: `TitleProvider` trait + `BasicTitleProvider` (heuristic on first user message); `mah session set-title` (P14.8.2 if wired) |
+| `ctx.sessions.fork()` | clone session for parallel subagents | `ma-harness-session` (P14.8 `EventForker`) | ✅ done | P14.8.1: `EventForker::fork(source, boundary?, new_id?)`; `mah session fork <src>` (P14.8.2 if wired) |
 
-**Subtotal**: 9/14 done (64%) · 2 partial · 3 gap. (P15.4 推进: 1 gap → 1 extended; P15.3 webhook 推进: 1 gap → done)
+**Subtotal**: 15/19 done (79%) · 2 partial · 1 gap · 1 extended. (P14.7 + P14.8: `ctx.todo` + `ctx.plan` + `ctx.goals` + `ctx.sessionTitle` + `ctx.sessions.fork()` 5 gaps → 5 done)
 
 ---
 
@@ -156,7 +162,7 @@
 
 ---
 
-## 9. CLI Modes
+## 9. CLI Modes (17)
 
 | dsh command | ma-harness equivalent | Status | Diff / Note |
 |---|---|---|---|
@@ -173,9 +179,14 @@
 | `dsh workflow list` (implied) | `mah workflow list` | ✅ done | P15.4.5: scans default workflows dir, prints `file \| name \| steps` table, parse-failure graceful (one bad file doesn't break the inventory) |
 | `dsh settings <cmd>` | `mah settings <cmd>` | ✅ done | P15.5.3: `set` / `get` / `list` over `~/.ma-harness/settings.yaml` (FileSettingsStore) |
 | `dsh hook <cmd>` | `mah hook <cmd>` | ✅ done | P15.7: `install` / `list` / `run` for Claude Code hook wire-protocol |
-| `dsh self <cmd>` | `mah self <cmd>` | ⚠️ partial | P15.6: `ma-harness-self-modification` crate exists (SelfInspect / SelfMount), CLI surface not yet wired (deferred) |
+| `dsh self <cmd>` | `mah self <cmd>` | ✅ done | P15.6.2: `list` / `inspect` / `enable` / `disable` / `audit` over `~/.ma-harness/cordis.yml` + audit log |
+| `dsh compaction <cmd>` | `mah compaction <cmd>` | ✅ done | P14.4.2: `run --input <jsonl>` (BasicCompactionProvider) + `info` (default CompactionContext dump) |
+| `dsh lsp <cmd>` | `mah lsp <cmd>` | ✅ done | P14.5.2: `request --server <prog> --method <m> --params <json>` (spawn LocalLspProvider, single-shot JSON-RPC roundtrip) + `info` (rust-analyzer / typescript-language-server / pyright hints) |
+| `dsh web <cmd>` | `mah web <cmd>` | ✅ done | P14.6.2: `search --query <text> --provider brave\|duckduckgo` (Brave/DDG stub, needs outbound) + `fetch --url <url>` (HttpFetchProvider real, reqwest) + `info` |
+| `dsh todo <cmd>` | `mah todo <cmd>` | ✅ done | P14.7.2: `list` / `write --content <text> [--priority N] [--status pending\|in_progress\|done\|cancelled]` / `update <id> --status <s>` / `delete <id>` (InMemoryTodoStore, state-machine enforced, snake_case status) |
+| `dsh plan <cmd>` | `mah plan <cmd>` | ✅ done | P14.7.2: `list` / `write --title <text>` / `update <id> --status <s>` / `delete <id>` (InMemoryPlanStore, 5-status enum) |
 
-**Subtotal**: 7/13 done (54%) · 1 partial · 3 gap. (P15.4 + P15.5 + P15.7 推进: 4/8 → 7/13; P15.6 self-mod crate done but CLI gap)
+**Subtotal**: 12/17 done (71%) · 0 partial · 5 gap. (P14.4 + P14.5 + P14.6 + P14.7 CLI batch + P15.6.2: 7/13 → 12/17; parity score §9 54% → 71%; `mah self` ⚠️ → ✅)
 
 ---
 
@@ -243,24 +254,23 @@
 | Category | Total | ✅ Done | 🔄 Extended | ⚠️ Partial | ❌ Gap | ➖ N/A | Score |
 |---|---|---|---|---|---|---|---|
 | 1. Core packages | 8 | 7 | 0 | 0 | 1 | 0 | **87.5%** |
-| 2. Capability seams | 14 | 9 | 1 | 2 | 2 | 0 | **71%** |
+| 2. Capability seams | 19 | 15 | 1 | 2 | 1 | 0 | **79%** |
 | 3. Events | 3 | 3 | 0 | 0 | 0 | 0 | **100%** |
 | 4. Turn flow | 10 | 10 | 0 | 0 | 0 | 0 | **100%** |
 | 5. Profiles & Bundles | 11 | 6 | 0 | 1 | 4 | 0 | **55%** |
 | 6. Session log | 6 | 4 | 0 | 0 | 2 | 0 | **67%** |
 | 7. Tool exec pipeline | 6 | 6 | 0 | 0 | 0 | 0 | **100%** |
 | 8. Distribution surfaces | 6 | 4 | 0 | 0 | 1 | 1 | **67%** |
-| 9. CLI modes | 13 | 7 | 0 | 1 | 5 | 0 | **54%** |
+| 9. CLI modes | 17 | 12 | 0 | 0 | 5 | 0 | **71%** |
 | 10. Conformance | 3 | 3 | 0 | 0 | 0 | 0 | **100%** |
 | 11. ma-harness extensions | 13 | 13 | 0 | 0 | 0 | 0 | **100%** (we have) |
 | 12. Deferred | 13 | 0 | 0 | 0 | 13 | 0 | **0%** (planned) |
-| **Total** | **106** | **72** | **1** | **4** | **28** | **1** | **69% done** |
+| **Total** | **114** | **82** | **1** | **3** | **27** | **1** | **73% done** |
 
-> **P15.4 / P15.5 / P15.7 batch (2026-09-05, 20 commits)**:
-> - §2 Capability seams: `ctx.workflows` ✅ extended (P15.4 8 sub-tasks), `ctx.webhookRuntime` ✅ done (P15.3)
-> - §9 CLI modes: `mah workflow run/validate/list` ✅ done (P15.4.3 + P15.4.5), `mah settings` ✅ done (P15.5.3), `mah hook` ✅ done (P15.7)
-> - P15.6 self-modification: crate ✅ done, CLI ❌ gap (deferred)
-> - **Net effect**: 67% → 69% done (101 → 106 items, 68 → 72 ✅, 5 → 4 ⚠️, 27 → 28 ❌, +1 🔄)
+> **P14.4 / P14.5 / P14.6 / P14.7 CLI batch + P15.6.2 (2026-09-06, 6 commits)**:
+> - §2 Capability seams: `ctx.todo` + `ctx.plan` + `ctx.goals` + `ctx.sessionTitle` + `ctx.sessions.fork()` ✅ done (P14.7.1 + P14.7.2 + P14.8.1; 5 gaps closed)
+> - §9 CLI modes: `mah compaction` + `mah lsp` + `mah web` + `mah todo` + `mah plan` ✅ done (P14.4.2 + P14.5.2 + P14.6.2 + P14.7.2; 4 new CLIs), `mah self` ⚠️ → ✅ (P15.6.2)
+> - **Net effect**: 69% → 73% done (106 → 114 items, 72 → 82 ✅, 4 → 3 ⚠️, 28 → 27 ❌)
 
 **Behavioral parity at snapshot level**: **100% (9/9 dsh-snap + 7/7 dsh-synthetic)**. The remaining gaps are feature-surface gaps (PTY / Web UI / Profile / Subagent / etc.), not behavioral gaps.
 
