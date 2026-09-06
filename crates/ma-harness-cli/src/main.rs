@@ -11,7 +11,7 @@
 
 mod acp;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -340,6 +340,21 @@ enum Commands {
     Plan {
         #[command(subcommand)]
         action: PlanAction,
+    },
+    /// **P14.9.2**: Profile CLI — 业务方能列 / 查 / 验 profile (5 builtin + 用户自定义)
+    ///
+    /// 业务方:
+    ///   `mah profile list`                            列 5 builtin profiles (web/headless/sdk/sdk-minimal/acp)
+    ///   `mah profile show <name>`                     查 profile 详情 (bundles / plugins / settings)
+    ///   `mah profile validate <path>`                 验自定义 profile (`~/.ma-harness/profiles/<name>/cordis.yml`)
+    ///   `mah profile info`                            打印可用 builtin profile 提示
+    ///
+    /// **P14.9.2 限制**: 5 builtin profile 是 hardcoded, 用户自定义 profile 走
+    /// `~/.ma-harness/profiles/<name>/cordis.yml` 加载. P15+ 业务方可加 SDK-level
+    /// patch / bundle layer.
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
     },
 }
 
@@ -683,6 +698,31 @@ impl From<PlanStatusArg> for ma_harness_todo::PlanStatus {
     }
 }
 
+/// **P14.9.2**: Profile CLI sub-actions
+///
+/// 业务方:
+///   `mah profile list`                            列 5 builtin profiles
+///   `mah profile show <name>`                     查 profile 详情 (bundles / plugins / settings)
+///   `mah profile validate <path>`                 验自定义 profile (path 是 dir 或 yaml file)
+///   `mah profile info`                            打印 builtin profile 提示
+#[derive(Subcommand, Debug)]
+enum ProfileAction {
+    /// 列出 5 builtin profiles (sorted)
+    List,
+    /// 查 profile 详情 (按 name)
+    Show {
+        /// Profile 名 (e.g. "web" / "headless" / "sdk" / "sdk-minimal" / "acp")
+        name: String,
+    },
+    /// 验自定义 profile (从 `~/.ma-harness/profiles/<name>/` 加载)
+    Validate {
+        /// Profile 路径 (dir or yaml file)
+        path: PathBuf,
+    },
+    /// 打印 builtin profile 提示 (跟具体 list/show 无关)
+    Info,
+}
+
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum WorkflowEngineArg {
@@ -1012,6 +1052,12 @@ async fn main() -> Result<()> {
             PlanAction::Write { title } => plan_write(&title).await,
             PlanAction::Update { id, status } => plan_update_status(&id, status.into()).await,
             PlanAction::Delete { id } => plan_delete(&id).await,
+        },
+        Commands::Profile { action } => match action {
+            ProfileAction::List => profile_list().await,
+            ProfileAction::Show { name } => profile_show(&name).await,
+            ProfileAction::Validate { path } => profile_validate(&path).await,
+            ProfileAction::Info => profile_info(),
         },
         Commands::RunStream {
             prompt,
@@ -3018,6 +3064,121 @@ async fn plan_delete(id: &str) -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// P14.9.2: `mah profile` CLI
+//
+// **设计**: 5 builtin profiles (web / headless / sdk / sdk-minimal / acp) 跟 dsh 1:1 对齐.
+// 业务方: `mah profile list/show` 看 builtin, `mah profile validate <path>` 验自定义.
+// **实现**: 走 ma-harness-profile::ProfileLoader / ProfileRegistry / builtin_profiles.
+// ============================================================================
+
+/// `mah profile list` — 列 5 builtin profiles
+async fn profile_list() -> Result<()> {
+    use ma_harness_profile::{builtin_profiles, ProfileRegistry};
+
+    let registry = ProfileRegistry::new();
+    for p in builtin_profiles() {
+        registry.register(p).await;
+    }
+    let names = registry.list().await;
+    if names.is_empty() {
+        println!("(no builtin profiles)");
+        return Ok(());
+    }
+    println!("Builtin profiles ({} total):", names.len());
+    println!();
+    for name in &names {
+        if let Some(p) = registry.get(name).await {
+            println!(
+                "  {:<14} | {}",
+                p.name,
+                p.description.as_deref().unwrap_or("(no description)")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `mah profile show <name>` — 查 profile 详情
+async fn profile_show(name: &str) -> Result<()> {
+    use ma_harness_profile::{builtin_profiles, ProfileRegistry};
+
+    let registry = ProfileRegistry::new();
+    for p in builtin_profiles() {
+        registry.register(p).await;
+    }
+    let profile = registry
+        .get(name)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("profile not found: {}", name))?;
+    println!("Profile: {}", profile.name);
+    println!(
+        "  description: {}",
+        profile.description.as_deref().unwrap_or("(no description)")
+    );
+    println!("  bundles:     {}", profile.bundles.len());
+    for b in &profile.bundles {
+        println!(
+            "    - {} v{} ({} plugin(s))",
+            b.name,
+            b.version.as_deref().unwrap_or("?"),
+            b.plugins.len()
+        );
+        for plugin in &b.plugins {
+            println!("        * {}", plugin);
+        }
+    }
+    if !profile.settings.is_empty() {
+        println!("  settings:    {}", profile.settings.len());
+        for (k, v) in &profile.settings {
+            // serde_yaml::Value 没有 Display, 用 Debug 印 ({:?})
+            println!("    - {}: {:?}", k, v);
+        }
+    }
+    Ok(())
+}
+
+/// `mah profile validate <path>` — 验自定义 profile (dir 或 yaml file)
+async fn profile_validate(path: &Path) -> Result<()> {
+    use ma_harness_profile::ProfileLoader;
+
+    let loader = ProfileLoader::new();
+    let profile: ma_harness_profile::Profile = loader
+        .load_from_dir(path)
+        .await
+        .map_err(|e| anyhow::anyhow!("profile load failed: {}", e))?;
+    println!("profile valid: {}", profile.name);
+    println!(
+        "  description: {}",
+        profile.description.as_deref().unwrap_or("(no description)")
+    );
+    println!("  bundles:     {}", profile.bundles.len());
+    if !profile.patches.is_empty() {
+        println!("  patches:     {}", profile.patches.len());
+    }
+    Ok(())
+}
+
+/// `mah profile info` — 打印 builtin profile 提示
+fn profile_info() -> Result<()> {
+    println!("ma-harness builtin profiles (P14.9.1, 跟 dsh 5 shipped profiles 1:1):");
+    println!();
+    println!("  web          Web UI (browser app at :3080) — P15+ implements");
+    println!("  headless     One-shot runner (no server, no UI)");
+    println!("  sdk          SDK JSON-RPC server (interoperable with dsh)");
+    println!("  sdk-minimal  Standalone SDK bundle (no ma-harness-base, minimal deps)");
+    println!("  acp          Automation-only ACP server (no interactive TUI)");
+    println!();
+    println!("Example:");
+    println!("  mah profile list                       # 列出 5 builtin");
+    println!("  mah profile show web                   # 查 web profile 详情");
+    println!("  mah profile validate ./my-profile      # 验自定义 profile (cordis.yml)");
+    println!();
+    println!("**P14.9.2 限制**: 5 builtin profile 是 hardcoded, 用户自定义 profile 走");
+    println!("  `~/.ma-harness/profiles/<name>/cordis.yml` 加载. P15+ 加 patch / bundle layer.");
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -3606,6 +3767,69 @@ steps:
         let id = store.write(&plan).await.expect("write");
         let read = store.read(&id).await.expect("read");
         assert_eq!(read.steps.len(), 0, "P14.7.2 限制: 只能写空 plan");
+    }
+
+    // ----- P14.9.2: `mah profile` CLI -----
+
+    /// smoke: `mah profile info` 不 IO, 纯打印 builtin 5 profile
+    #[test]
+    fn cli_profile_info_prints_builtin() {
+        profile_info().expect("info");
+    }
+
+    /// `mah profile list` 列 5 builtin profiles (跟 dsh 1:1: web/headless/sdk/sdk-minimal/acp)
+    #[tokio::test]
+    async fn cli_profile_list_5_builtins() {
+        // 走 profile_list() 直接 (不 capture stdout, 只验不 panic)
+        profile_list().await.expect("list");
+    }
+
+    /// `mah profile show web` 查 web profile 详情
+    #[tokio::test]
+    async fn cli_profile_show_web_works() {
+        // 走 profile_show("web"), 验不 panic + 有 web / Web UI / :3080
+        profile_show("web").await.expect("show web");
+    }
+
+    /// `mah profile show <unknown>` 返 Err
+    #[tokio::test]
+    async fn cli_profile_show_unknown_errors() {
+        let result = profile_show("nonexistent-profile-xyz").await;
+        assert!(result.is_err(), "unknown profile should error");
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("not found") || err.contains("nonexistent"),
+            "expected not found error, got: {}",
+            err
+        );
+    }
+
+    /// `mah profile validate <missing path>` 返 Err (loader 找不到 cordis.yml)
+    #[tokio::test]
+    async fn cli_profile_validate_missing_dir_errors() {
+        let path = std::path::PathBuf::from("Z:/__nonexistent_profile_dir__/nope");
+        let result = profile_validate(&path).await;
+        assert!(result.is_err(), "missing dir should error");
+    }
+
+    /// 底层 API smoke: ProfileRegistry 5 builtin 全注册 + get 全 Some
+    #[tokio::test]
+    async fn cli_profile_registry_roundtrip_5_builtins() {
+        use ma_harness_profile::{builtin_profiles, ProfileRegistry};
+
+        let registry = ProfileRegistry::new();
+        for p in builtin_profiles() {
+            registry.register(p).await;
+        }
+        let names = registry.list().await;
+        assert_eq!(names.len(), 5, "5 builtin profiles");
+        for n in &names {
+            assert!(
+                registry.get(n).await.is_some(),
+                "registered profile should be retrievable: {}",
+                n
+            );
+        }
     }
 }
 

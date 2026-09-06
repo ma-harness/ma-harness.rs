@@ -2378,6 +2378,7 @@ dependencies = [
  "ma-harness-model",
  "ma-harness-plugin-dsh-adapter",
  "ma-harness-plugin-hello",
+ "ma-harness-profile",
  "ma-harness-proto",
  "ma-harness-registry",
  "ma-harness-sandbox",
