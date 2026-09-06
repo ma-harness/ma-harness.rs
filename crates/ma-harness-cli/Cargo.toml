@@ -32,6 +32,7 @@ ma-harness-registry = { path = "../ma-harness-registry", version = "0.1.0" }  # 
 ma-harness-settings = { path = "../ma-harness-settings", version = "0.1.0" }  # 2026-09-05 (P15.5.3): `mah settings` CLI
 ma-harness-hooks = { path = "../ma-harness-hooks", version = "0.1.0" }  # 2026-09-05 (P15.7): `mah hook install` CLI
 ma-harness-workflow = { path = "../ma-harness-workflow", version = "0.1.0" }  # 2026-09-05 (P15.4.3): `mah workflow run` CLI
+ma-harness-self-modification = { path = "../ma-harness-self-modification", version = "0.1.0" }  # 2026-09-05 (P15.6.2): `mah self` CLI
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello", version = "0.1.1" }
 ma-harness-plugin-dsh-adapter = { path = "../../plugins/ma-harness-plugin-dsh-adapter", version = "0.1.1" }  # 2026-08-21 (P13.5): mah dsh info/doctor 命令
 # 外部
@@ -51,6 +52,7 @@ chrono = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }  # P11-4 (Day 101+1): ACP JSON-RPC 2.0
 serde_json = { workspace = true }  # P11-4 (Day 101+1): ACP JSON-RPC 2.0
+serde_yaml = { workspace = true }  # 2026-09-05 (P15.6.2): `mah self inspect` YAML dump
 
 [dev-dependencies]
 tempfile = { workspace = true }
