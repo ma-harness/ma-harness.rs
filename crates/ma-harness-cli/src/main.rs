@@ -356,6 +356,21 @@ enum Commands {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// **P14.10.2**: Context CLI — 业务方能管 request context (trace_id / deadline / metadata)
+    ///
+    /// 业务方:
+    ///   `mah context new [--trace-id <id>] [--deadline-secs N]`   创建新 context
+    ///   `mah context show`                                         打印当前 context
+    ///   `mah context validate`                                     验证 (trace_id non-empty, not expired)
+    ///   `mah context chain-info`                                   打印 ContextChain middleware 数
+    ///   `mah context info`                                         打印 usage / available features
+    ///
+    /// **P14.10.2 限制**: process-singleton context (per-invocation, 不持久化).
+    /// P15+ 业务方可注入 ACTIVE_CONTEXT typed key 跨组件传播.
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -723,6 +738,36 @@ enum ProfileAction {
     Info,
 }
 
+/// **P14.10.2**: Context CLI sub-actions
+///
+/// 业务方:
+///   `mah context new`                                    创建新 context (auto-generate trace_id)
+///   `mah context new --trace-id <id> --deadline-secs N` 创建指定 context
+///   `mah context show`                                  打印当前 context
+///   `mah context validate`                              验证 (trace_id non-empty, not expired)
+///   `mah context chain-info`                            打印 ContextChain middleware 数
+///   `mah context info`                                  打印 usage / available features
+#[derive(Subcommand, Debug)]
+enum ContextAction {
+    /// 创建新 context (auto-generate trace_id if not provided)
+    New {
+        /// 自定义 trace_id (缺省 = auto-generate UUID)
+        #[arg(long)]
+        trace_id: Option<String>,
+        /// 距今 N 秒后过期 (缺省 = 无 deadline)
+        #[arg(long)]
+        deadline_secs: Option<i64>,
+    },
+    /// 打印当前 context
+    Show,
+    /// 验证 context (trace_id 非空, 未过期)
+    Validate,
+    /// 打印 ContextChain middleware 数
+    ChainInfo,
+    /// 打印 usage / available features
+    Info,
+}
+
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum WorkflowEngineArg {
@@ -1058,6 +1103,16 @@ async fn main() -> Result<()> {
             ProfileAction::Show { name } => profile_show(&name).await,
             ProfileAction::Validate { path } => profile_validate(&path).await,
             ProfileAction::Info => profile_info(),
+        },
+        Commands::Context { action } => match action {
+            ContextAction::New {
+                trace_id,
+                deadline_secs,
+            } => context_new(trace_id.as_deref(), deadline_secs).await,
+            ContextAction::Show => context_show().await,
+            ContextAction::Validate => context_validate().await,
+            ContextAction::ChainInfo => context_chain_info().await,
+            ContextAction::Info => context_info(),
         },
         Commands::RunStream {
             prompt,
@@ -3179,6 +3234,145 @@ fn profile_info() -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// P14.10.2: `mah context` CLI
+//
+// **设计**: process-singleton RequestContext (per-invocation, 不持久化).
+// 业务方: `mah context new` 创建 → `mah context show` 查 → `mah context validate` 验证.
+// **实现**: 走 ma-harness-context::RequestContext / ContextChain / LoggingMiddleware.
+// ============================================================================
+
+/// 全局 RequestContext (CLI 进程内 singleton, P14.10.2: per-invocation)
+static ACTIVE_CTX: tokio::sync::OnceCell<
+    std::sync::Arc<tokio::sync::Mutex<ma_harness_context::RequestContext>>,
+> = tokio::sync::OnceCell::const_new();
+
+/// 拿 / 初始化 context (首次访问 lazy init)
+async fn active_ctx()
+-> &'static std::sync::Arc<tokio::sync::Mutex<ma_harness_context::RequestContext>> {
+    ACTIVE_CTX
+        .get_or_init(|| async {
+            std::sync::Arc::new(tokio::sync::Mutex::new(
+                ma_harness_context::RequestContext::new(),
+            ))
+        })
+        .await
+}
+
+/// `mah context new` — 创建新 context (覆盖 singleton)
+async fn context_new(trace_id: Option<&str>, deadline_secs: Option<i64>) -> Result<()> {
+    use ma_harness_context::RequestContext;
+
+    let mut ctx = RequestContext::new();
+    if let Some(t) = trace_id {
+        ctx = ctx.with_trace_id(t.to_string());
+    }
+    if let Some(secs) = deadline_secs {
+        ctx = ctx.with_deadline_in(std::time::Duration::from_secs(secs.max(0) as u64));
+    }
+    ctx.validate()?;
+    let arc = active_ctx().await;
+    *arc.lock().await = ctx.clone();
+    println!("context created:");
+    println!("  trace_id:  {}", ctx.trace_id);
+    println!(
+        "  parent_session_id: {}",
+        ctx.parent_session_id.as_deref().unwrap_or("(none)")
+    );
+    println!("  deadline:  {:?}", ctx.deadline);
+    println!("  metadata:  {} key(s)", ctx.metadata.len());
+    Ok(())
+}
+
+/// `mah context show` — 打印当前 context
+async fn context_show() -> Result<()> {
+    let arc = active_ctx().await;
+    let ctx = arc.lock().await.clone();
+    println!("current context:");
+    println!("  trace_id:          {}", ctx.trace_id);
+    println!(
+        "  parent_session_id: {}",
+        ctx.parent_session_id.as_deref().unwrap_or("(none)")
+    );
+    println!("  deadline:          {:?}", ctx.deadline);
+    println!("  expired:           {}", ctx.is_expired());
+    println!("  metadata ({}):", ctx.metadata.len());
+    for (k, v) in &ctx.metadata {
+        println!("    - {}: {}", k, v);
+    }
+    Ok(())
+}
+
+/// `mah context validate` — 验证 context
+async fn context_validate() -> Result<()> {
+    let arc = active_ctx().await;
+    let ctx = arc.lock().await.clone();
+    match ctx.validate() {
+        Ok(()) => {
+            if ctx.is_expired() {
+                println!("context invalid: deadline has passed");
+                std::process::exit(1);
+            }
+            println!("context valid: trace_id={}", ctx.trace_id);
+        }
+        Err(e) => {
+            println!("context invalid: {}", e);
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+/// `mah context chain-info` — 打印 ContextChain middleware 数
+async fn context_chain_info() -> Result<()> {
+    use ma_harness_context::{ContextChain, LoggingMiddleware};
+
+    // 演示 chain: 加 1 个 LoggingMiddleware
+    let chain = ContextChain::new();
+    chain
+        .add_middleware(std::sync::Arc::new(LoggingMiddleware::new()))
+        .await;
+    let n = chain.len().await;
+    println!("ContextChain (P14.10.2 demo):");
+    println!("  middlewares:  {} (1 logging)", n);
+
+    // 跑 propagate 验 chain 通
+    let arc = active_ctx().await;
+    let ctx = arc.lock().await.clone();
+    let propagated = chain.propagate(&ctx).await?;
+    println!("  propagated:  trace_id={}", propagated.trace_id);
+    println!(
+        "  (P14.10.2 limit: chain 不持久化, 业务方运行时注入 ACTIVE_CONTEXT typed key 跨进程传播)"
+    );
+    Ok(())
+}
+
+/// `mah context info` — 打印 usage / available features
+fn context_info() -> Result<()> {
+    println!("ma-harness request context (P14.10, 跟 dsh `packages/context/` 1:1 对等):");
+    println!();
+    println!("RequestContext 字段:");
+    println!("  trace_id           UUID v4 (auto-generate if not provided)");
+    println!("  parent_session_id  父 session ID (跨 fork 时填, Optional)");
+    println!("  deadline           Unix epoch seconds (Optional, is_expired() 验)");
+    println!("  metadata           key-value pairs (BTreeMap, 跨 middleware 传播)");
+    println!();
+    println!("ContextMiddleware trait + LoggingMiddleware (P14.10.1)");
+    println!("ContextChain (按顺序 add_middleware, propagate 走链)");
+    println!("ACTIVE_CONTEXT / CONTEXT_CHAIN typed keys (跟 SHELL_SERVICE / SHELL_PROVIDER 平行)");
+    println!();
+    println!("Example:");
+    println!("  mah context new --trace-id my-trace-001");
+    println!("  mah context new --deadline-secs 60");
+    println!("  mah context show");
+    println!("  mah context validate");
+    println!("  mah context chain-info");
+    println!();
+    println!("**P14.10.2 限制**: process-singleton context (per-invocation, 不持久化).");
+    println!("  P15+ 业务方可注入 ACTIVE_CONTEXT 跨组件传播.");
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -3830,6 +4024,80 @@ steps:
                 n
             );
         }
+    }
+
+    // ----- P14.10.2: `mah context` CLI -----
+
+    /// smoke: `mah context info` 不 IO, 纯打印 available features
+    #[test]
+    fn cli_context_info_prints_features() {
+        context_info().expect("info");
+    }
+
+    /// CLI 业务流程: new (auto trace_id) → show → validate (全 OK)
+    #[tokio::test]
+    async fn cli_context_new_show_validate_works() {
+        // 不传 trace_id / deadline_secs, 走 default
+        context_new(None, None).await.expect("new");
+        context_show().await.expect("show");
+        context_validate().await.expect("validate");
+    }
+
+    /// CLI 业务流程: new (custom trace_id + deadline) → validate (deadline 设了 + 未过期)
+    #[tokio::test]
+    async fn cli_context_new_with_deadline() {
+        context_new(Some("test-trace-abc"), Some(60))
+            .await
+            .expect("new with deadline");
+        // 验证走通: trace_id 是 test-trace-abc, deadline 是 now+60
+        let arc = active_ctx().await;
+        let ctx = arc.lock().await.clone();
+        assert_eq!(ctx.trace_id, "test-trace-abc");
+        assert!(ctx.deadline.is_some());
+        assert!(!ctx.is_expired(), "60s deadline should not be expired");
+    }
+
+    /// 底层 API smoke: RequestContext::new() auto-generate UUID trace_id
+    #[tokio::test]
+    async fn cli_context_request_context_default_has_uuid() {
+        use ma_harness_context::RequestContext;
+        let ctx = RequestContext::new();
+        assert!(!ctx.trace_id.is_empty(), "trace_id auto-generated");
+        // UUID v4 格式: 8-4-4-4-12 hex chars (36 chars total with dashes)
+        assert_eq!(ctx.trace_id.len(), 36, "UUID v4 length");
+        assert!(ctx.deadline.is_none(), "default no deadline");
+        assert!(ctx.metadata.is_empty(), "default empty metadata");
+    }
+
+    /// 底层 API smoke: RequestContext child 行为 (parent_session_id 不变, 重新生成 trace_id)
+    #[tokio::test]
+    async fn cli_context_request_context_child_inherits() {
+        use ma_harness_context::RequestContext;
+        let parent = RequestContext::new().with_parent_session_id("parent-session-xyz");
+        let child = parent.child(Some("child-trace-001".to_string()));
+        assert_eq!(child.trace_id, "child-trace-001");
+        assert_eq!(
+            child.parent_session_id,
+            Some("parent-session-xyz".to_string())
+        );
+        assert_eq!(child.deadline, parent.deadline);
+    }
+
+    /// 底层 API smoke: ContextChain 走 LoggingMiddleware (P14.10.1 已有, 测 propagate 走通)
+    #[tokio::test]
+    async fn cli_context_chain_propagate_with_logging() {
+        use ma_harness_context::{ContextChain, LoggingMiddleware, RequestContext};
+        let chain = ContextChain::new();
+        chain
+            .add_middleware(std::sync::Arc::new(LoggingMiddleware::new()))
+            .await;
+        assert_eq!(chain.len().await, 1);
+
+        let ctx = RequestContext::new().with_trace_id("chain-test");
+        let propagated = chain.propagate(&ctx).await.expect("propagate");
+        assert_eq!(propagated.trace_id, "chain-test");
+        // LoggingMiddleware 不改 trace_id, 只 log
+        assert_eq!(propagated.trace_id, ctx.trace_id);
     }
 }
 

@@ -2371,6 +2371,7 @@ dependencies = [
  "ma-harness-code",
  "ma-harness-compaction",
  "ma-harness-conformance",
+ "ma-harness-context",
  "ma-harness-cordis",
  "ma-harness-core",
  "ma-harness-hooks",
