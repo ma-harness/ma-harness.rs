@@ -303,6 +303,19 @@ enum Commands {
         #[command(subcommand)]
         action: LspAction,
     },
+    /// **P14.6.2**: Web CLI — 业务方能从命令行搜 / 抓 web
+    ///
+    /// 业务方:
+    ///   `mah web search --query <text>`            跑 BraveSearchProvider (P14.6.2 stub, 返 Unsupported)
+    ///   `mah web fetch --url <url>`                跑 HttpFetchProvider (P14.6.1 真, reqwest)
+    ///   `mah web info`                             打印可用 provider 提示
+    ///
+    /// **P14.6.2 限制**: search providers 都是 stub (Brave / DDG) — 业务方 outbound 准备好
+    /// 之后 P14.6.2+ 才实装. fetch 是真 (reqwest) — 业务方网络允许就能用.
+    Web {
+        #[command(subcommand)]
+        action: WebAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -456,6 +469,68 @@ enum LspAction {
     /// 打印可用 LSP server 提示 (rust-analyzer / typescript-language-server / pyright-langserver)
     /// 跟具体 `lsp request` 无关, 仅给业务方 quick reference
     Info,
+}
+
+/// **P14.6.2**: Web CLI sub-actions
+///
+/// 业务方:
+///   `mah web search --query <text>`            搜 web (Brave / DuckDuckGo)
+///   `mah web fetch --url <url>`                HTTP GET 一个 URL
+///   `mah web info`                             打印可用 web provider 提示
+#[derive(Subcommand, Debug)]
+enum WebAction {
+    /// 跑 WebSearch provider (Brave / DuckDuckGo)
+    ///
+    /// Example:
+    ///   `mah web search --query "rust async runtime"`
+    ///   `mah web search --query "rust async" --max-results 5 --provider duckduckgo`
+    ///
+    /// **P14.6.2 限制**: search providers 都还是 stub (Brave / DDG), 业务方 outbound 准备好
+    /// 之后 P14.6.2+ 才实装真 API. 现在跑返 `WebError::Unsupported`, exit 1.
+    Search {
+        /// 搜索关键词
+        #[arg(long)]
+        query: String,
+        /// 最多返回几条 (默认 10)
+        #[arg(long, default_value = "10")]
+        max_results: usize,
+        /// Search provider (brave / duckduckgo, default: brave)
+        #[arg(long, value_enum, default_value = "brave")]
+        provider: WebSearchProviderArg,
+    },
+    /// 跑 WebFetch provider (HttpFetchProvider / reqwest)
+    ///
+    /// Example:
+    ///   `mah web fetch --url https://www.rust-lang.org`
+    ///   `mah web fetch --url https://httpbin.org/get --user-agent "mah/test"`
+    ///
+    /// **P14.6.1 真实现**: reqwest HTTP GET, 业务方网络允许就 work.
+    /// 输出 stdout 包含 status / content_type / content (前 500 字符 preview).
+    Fetch {
+        /// 目标 URL
+        #[arg(long)]
+        url: String,
+        /// 自定义 User-Agent
+        #[arg(long)]
+        user_agent: Option<String>,
+        /// 超时 (秒, 默认 30s)
+        #[arg(long, default_value = "30")]
+        timeout_secs: u64,
+    },
+    /// 打印可用 web provider 提示 (Brave / DuckDuckGo / HttpFetch)
+    /// 跟具体 `web search/fetch` 无关, 仅给业务方 quick reference
+    Info,
+}
+
+/// **P14.6.2**: Web search provider enum (跟 `WebFetchProvider` 平行的 string enum).
+///
+/// 业务方字面量选, 跟 ma-harness-web 内部 trait 解耦.
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+enum WebSearchProviderArg {
+    /// Brave Search (需要 BRAVE_API_KEY env)
+    Brave,
+    /// DuckDuckGo HTML scrape (no key)
+    Duckduckgo,
 }
 
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
@@ -758,6 +833,19 @@ async fn main() -> Result<()> {
                 params,
             } => lsp_request(&server, &args, &method, &params).await,
             LspAction::Info => lsp_info(),
+        },
+        Commands::Web { action } => match action {
+            WebAction::Search {
+                query,
+                max_results,
+                provider,
+            } => web_search(&query, max_results, provider).await,
+            WebAction::Fetch {
+                url,
+                user_agent,
+                timeout_secs,
+            } => web_fetch(&url, user_agent.as_deref(), timeout_secs).await,
+            WebAction::Info => web_info(),
         },
         Commands::RunStream {
             prompt,
@@ -2512,6 +2600,116 @@ fn lsp_info() -> Result<()> {
     Ok(())
 }
 
+/// `mah web search --query <text>` — 跑 WebSearch provider (Brave / DuckDuckGo)
+///
+/// **P14.6.2 限制**: search providers 都还是 stub, 跑返 `WebError::Unsupported`,
+/// CLI 把它映到 stderr + exit 1. 业务方 outbound 准备好之后 P14.6.2+ 才实装真 API.
+async fn web_search(query: &str, max_results: usize, provider: WebSearchProviderArg) -> Result<()> {
+    use ma_harness_web::{BraveSearchProvider, DuckDuckGoProvider, WebSearch};
+
+    let q = ma_harness_web::WebSearchQuery::new(query).with_max_results(max_results);
+    eprintln!(
+        "[web search] provider={:?} query={:?} max_results={}",
+        provider, query, max_results
+    );
+
+    let results = match provider {
+        WebSearchProviderArg::Brave => {
+            let p = BraveSearchProvider::new();
+            eprintln!("[web search] using provider: {}", p.provider_name());
+            p.search(&q).await
+        }
+        WebSearchProviderArg::Duckduckgo => {
+            let p = DuckDuckGoProvider::new();
+            eprintln!("[web search] using provider: {}", p.provider_name());
+            p.search(&q).await
+        }
+    };
+
+    match results {
+        Ok(items) => {
+            // 打印表格: index | title | url | snippet
+            println!("web search results ({} items):", items.len());
+            for (i, r) in items.iter().enumerate() {
+                println!("  [{:>3}] {}", i + 1, r.title);
+                println!("        url:     {}", r.url);
+                println!("        snippet: {}", r.snippet);
+            }
+            Ok(())
+        }
+        Err(e) => Err(anyhow::anyhow!("web search failed: {}", e)),
+    }
+}
+
+/// `mah web fetch --url <url>` — 跑 WebFetch provider (HttpFetchProvider / reqwest)
+///
+/// **P14.6.1 真实现**: reqwest HTTP GET. 业务方网络允许就 work.
+/// 打印: status / content_type / final url / content (前 500 字符 preview).
+async fn web_fetch(url: &str, user_agent: Option<&str>, timeout_secs: u64) -> Result<()> {
+    use ma_harness_web::{HttpFetchProvider, WebFetch};
+
+    let mut q = ma_harness_web::WebFetchQuery::new(url)
+        .with_timeout(std::time::Duration::from_secs(timeout_secs));
+    if let Some(ua) = user_agent {
+        q = q.with_user_agent(ua);
+    }
+    // 先 validate URL, 早 fail (避免走到 reqwest 才报)
+    q.validate()
+        .map_err(|e| anyhow::anyhow!("invalid url: {}", e))?;
+
+    eprintln!(
+        "[web fetch] url={:?} timeout={}s ua={:?}",
+        url, timeout_secs, user_agent
+    );
+    let provider = HttpFetchProvider::new();
+    eprintln!("[web fetch] using provider: {}", provider.provider_name());
+
+    let result = provider
+        .fetch(&q)
+        .await
+        .map_err(|e| anyhow::anyhow!("web fetch failed: {}", e))?;
+
+    // 打印结构化结果 (跟 mah self inspect 类似, 简洁)
+    println!("status:        {}", result.status);
+    println!("content_type:  {}", result.content_type);
+    println!("final_url:     {}", result.url);
+    let preview = if result.content.len() > 500 {
+        format!(
+            "{}...\n[truncated, total {} bytes]",
+            &result.content[..500],
+            result.content.len()
+        )
+    } else {
+        result.content.clone()
+    };
+    println!("content ({} bytes):", result.content.len());
+    println!("{}", preview);
+
+    Ok(())
+}
+
+/// `mah web info` — 打印可用 web provider 提示 (Brave / DuckDuckGo / HttpFetch)
+fn web_info() -> Result<()> {
+    println!("ma-harness web providers (P14.6):");
+    println!();
+    println!("  HttpFetchProvider (P14.6.1, 真实现) — reqwest HTTP GET, 业务方网络允许就能用");
+    println!("    `mah web fetch --url <url>`");
+    println!();
+    println!("  BraveSearchProvider (P14.6.2, stub) — 需要 `BRAVE_API_KEY` env, 实装是 P14.6.2+");
+    println!("    `mah web search --query <text> --provider brave`");
+    println!();
+    println!("  DuckDuckGoProvider (P14.6.3, stub) — no API key, HTML scrape, 实装是 P14.6.3+");
+    println!("    `mah web search --query <text> --provider duckduckgo`");
+    println!();
+    println!("Example (fetch 是真能用, search 现在还是 stub):");
+    println!("  mah web fetch --url https://www.rust-lang.org");
+    println!("  mah web search --query \"rust async runtime\" --max-results 5");
+    println!();
+    println!("**P14.6.2 限制**: search providers 业务方 outbound 准备好之前都是 stub.");
+    println!("  跑 `mah web search` 现在会返 `WebError::Unsupported` (exit 1).");
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -2906,6 +3104,68 @@ steps:
         let args: Vec<String> = vec!["--stdio".to_string(), "--quiet".to_string()];
         let args_str: Vec<&str> = args.iter().map(String::as_str).collect();
         assert_eq!(args_str, vec!["--stdio", "--quiet"]);
+    }
+
+    // ----- P14.6.2: `mah web` CLI -----
+
+    /// smoke: `mah web info` 不 IO, 纯打印
+    #[test]
+    fn web_info_prints_providers() {
+        web_info().expect("info");
+    }
+
+    /// `mah web search` 现在 stub 返 Unsupported (P14.6.2 限制, 业务方 outbound 准备好
+    /// 之后才实装真 API). CLI 应把它映到 Err.
+    #[tokio::test]
+    async fn web_search_with_brave_stub_errors() {
+        // BRAVE_API_KEY 不会在 CI 设置, 走 stub path → Unsupported
+        let result = web_search("rust async runtime", 5, WebSearchProviderArg::Brave).await;
+        assert!(
+            result.is_err(),
+            "brave stub should error, got: {:?}",
+            result
+        );
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("web search failed") || err.contains("Unsupported"),
+            "expected web search failure, got: {}",
+            err
+        );
+    }
+
+    /// `mah web search --provider duckduckgo` 现在也是 stub, 同样返 Err
+    #[tokio::test]
+    async fn web_search_with_ddg_stub_errors() {
+        let result = web_search("rust", 3, WebSearchProviderArg::Duckduckgo).await;
+        assert!(result.is_err(), "ddg stub should error, got: {:?}", result);
+    }
+
+    /// `mah web fetch --url <invalid>` → WebError::Url, CLI 早 fail (不走 reqwest)
+    #[tokio::test]
+    async fn web_fetch_with_invalid_url_errors() {
+        let result = web_fetch("not a valid url", None, 5).await;
+        assert!(
+            result.is_err(),
+            "invalid url should error, got: {:?}",
+            result
+        );
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("invalid url") || err.contains("URL"),
+            "expected URL parse error, got: {}",
+            err
+        );
+    }
+
+    /// value test: WebFetchQuery builder pattern (with_timeout / with_user_agent) 不丢字段
+    #[test]
+    fn web_fetch_query_builder_preserves_fields() {
+        let q = ma_harness_web::WebFetchQuery::new("https://example.com")
+            .with_timeout(std::time::Duration::from_secs(15))
+            .with_user_agent("mah-test/0.1");
+        assert_eq!(q.url, "https://example.com");
+        assert_eq!(q.user_agent.as_deref(), Some("mah-test/0.1"));
+        assert_eq!(q.timeout, Some(std::time::Duration::from_secs(15)));
     }
 }
 
