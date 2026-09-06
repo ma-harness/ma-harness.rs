@@ -2385,6 +2385,7 @@ dependencies = [
  "ma-harness-self-modification",
  "ma-harness-server",
  "ma-harness-settings",
+ "ma-harness-todo",
  "ma-harness-tui",
  "ma-harness-web",
  "ma-harness-workflow",

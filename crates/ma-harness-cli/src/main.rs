@@ -316,6 +316,31 @@ enum Commands {
         #[command(subcommand)]
         action: WebAction,
     },
+    /// **P14.7.2**: Todo CLI — 业务方能从命令行管 multi-step work
+    ///
+    /// 业务方:
+    ///   `mah todo list`                            列所有 Todo
+    ///   `mah todo write --content <text>`          写一条 Todo
+    ///   `mah todo update <id> --status <status>`   改 Todo 状态
+    ///   `mah todo delete <id>`                     删 Todo
+    ///
+    /// **P14.7.2 限制**: in-memory store only (进程退出清空). P15+ 业务方可注入
+    /// SqlTodoStore / RedisTodoStore 持久化.
+    Todo {
+        #[command(subcommand)]
+        action: TodoAction,
+    },
+    /// **P14.7.2**: Plan CLI — 业务方能从命令行管 plan mode (read-only proposals)
+    ///
+    /// 业务方:
+    ///   `mah plan list`                            列所有 Plan
+    ///   `mah plan write --title <text>`            写一个 Plan
+    ///   `mah plan update <id> --status <status>`   改 Plan 状态
+    ///   `mah plan delete <id>`                     删 Plan
+    Plan {
+        #[command(subcommand)]
+        action: PlanAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -531,6 +556,131 @@ enum WebSearchProviderArg {
     Brave,
     /// DuckDuckGo HTML scrape (no key)
     Duckduckgo,
+}
+
+/// **P14.7.2**: Todo CLI sub-actions
+///
+/// 业务方:
+///   `mah todo list`                            列所有 Todo
+///   `mah todo write --content <text>`          写一条 Todo
+///   `mah todo update <id> --status <status>`   改 Todo 状态 (pending/in_progress/done/cancelled)
+///   `mah todo delete <id>`                     删 Todo
+#[derive(Subcommand, Debug)]
+enum TodoAction {
+    /// 列出所有 Todo (按 priority 升序)
+    List,
+    /// 写一条 Todo
+    ///
+    /// Example:
+    ///   `mah todo write --content "Fix bug #123"`
+    ///   `mah todo write --content "Refactor auth" --priority 1 --status in_progress`
+    Write {
+        /// Todo 内容
+        #[arg(long)]
+        content: String,
+        /// 优先级 (数字越小越优先, 默认 0)
+        #[arg(long, default_value = "0")]
+        priority: i32,
+        /// 初始状态 (默认 pending)
+        #[arg(long, value_enum, default_value = "pending")]
+        status: TodoStatusArg,
+    },
+    /// 改 Todo 状态 (带状态机校验, Pending→InProgress→Done, 终态不可改)
+    ///
+    /// Example:
+    ///   `mah todo update <id> --status in_progress`
+    ///   `mah todo update <id> --status done`
+    Update {
+        /// Todo ID
+        id: String,
+        /// 新状态
+        #[arg(long, value_enum)]
+        status: TodoStatusArg,
+    },
+    /// 删 Todo
+    Delete {
+        /// Todo ID
+        id: String,
+    },
+}
+
+/// **P14.7.2**: Todo status CLI enum (跟 ma-harness-todo::TodoStatus 平行).
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+enum TodoStatusArg {
+    /// 还没开始
+    Pending,
+    /// 进行中
+    InProgress,
+    /// 已完成
+    Done,
+    /// 已取消
+    Cancelled,
+}
+
+impl From<TodoStatusArg> for ma_harness_todo::TodoStatus {
+    fn from(s: TodoStatusArg) -> Self {
+        match s {
+            TodoStatusArg::Pending => ma_harness_todo::TodoStatus::Pending,
+            TodoStatusArg::InProgress => ma_harness_todo::TodoStatus::InProgress,
+            TodoStatusArg::Done => ma_harness_todo::TodoStatus::Done,
+            TodoStatusArg::Cancelled => ma_harness_todo::TodoStatus::Cancelled,
+        }
+    }
+}
+
+/// **P14.7.2**: Plan CLI sub-actions
+#[derive(Subcommand, Debug)]
+enum PlanAction {
+    /// 列出所有 Plan
+    List,
+    /// 写一个 Plan (空 steps 起步, 业务方后续 P15+ 可加 step 子命令)
+    Write {
+        /// Plan 标题
+        #[arg(long)]
+        title: String,
+    },
+    /// 改 Plan 状态
+    Update {
+        /// Plan ID
+        id: String,
+        /// 新状态 (draft/approved/in_progress/completed/rejected)
+        #[arg(long, value_enum)]
+        status: PlanStatusArg,
+    },
+    /// 删 Plan
+    Delete {
+        /// Plan ID
+        id: String,
+    },
+}
+
+/// **P14.7.2**: Plan status CLI enum (跟 ma-harness-todo::PlanStatus 平行).
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+enum PlanStatusArg {
+    /// 草稿 (业务方写 plan, 还没 execute)
+    Draft,
+    /// 已批准
+    Approved,
+    /// 执行中
+    InProgress,
+    /// 已完成
+    Completed,
+    /// 已拒绝
+    Rejected,
+}
+
+impl From<PlanStatusArg> for ma_harness_todo::PlanStatus {
+    fn from(s: PlanStatusArg) -> Self {
+        match s {
+            PlanStatusArg::Draft => ma_harness_todo::PlanStatus::Draft,
+            PlanStatusArg::Approved => ma_harness_todo::PlanStatus::Approved,
+            PlanStatusArg::InProgress => ma_harness_todo::PlanStatus::InProgress,
+            PlanStatusArg::Completed => ma_harness_todo::PlanStatus::Completed,
+            PlanStatusArg::Rejected => ma_harness_todo::PlanStatus::Rejected,
+        }
+    }
 }
 
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
@@ -846,6 +996,22 @@ async fn main() -> Result<()> {
                 timeout_secs,
             } => web_fetch(&url, user_agent.as_deref(), timeout_secs).await,
             WebAction::Info => web_info(),
+        },
+        Commands::Todo { action } => match action {
+            TodoAction::List => todo_list().await,
+            TodoAction::Write {
+                content,
+                priority,
+                status,
+            } => todo_write(&content, priority, status.into()).await,
+            TodoAction::Update { id, status } => todo_update_status(&id, status.into()).await,
+            TodoAction::Delete { id } => todo_delete(&id).await,
+        },
+        Commands::Plan { action } => match action {
+            PlanAction::List => plan_list().await,
+            PlanAction::Write { title } => plan_write(&title).await,
+            PlanAction::Update { id, status } => plan_update_status(&id, status.into()).await,
+            PlanAction::Delete { id } => plan_delete(&id).await,
         },
         Commands::RunStream {
             prompt,
@@ -2710,6 +2876,148 @@ fn web_info() -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// P14.7.2: `mah todo` / `mah plan` CLI
+//
+// **设计**: CLI 进程内 singleton in-memory store, 进程退出清空. P15+ 业务方可以
+// 注入 SqlTodoStore / RedisTodoStore (走 ctx.todo / ctx.plan 抽象) 持久化.
+//
+// 这里直接持有 `Arc<InMemoryTodoStore>` / `Arc<InMemoryPlanStore>` 在
+// `tokio::sync::OnceCell` 里, 业务方多次调子命令复用同一 store.
+// ============================================================================
+
+use ma_harness_todo::{
+    InMemoryPlanStore, InMemoryTodoStore, Plan, PlanStore, TodoItem, TodoList, TodoStore,
+};
+
+/// 全局 Todo store (CLI 进程内 singleton, P14.7.2: in-memory)
+static TODO_STORE: tokio::sync::OnceCell<Arc<InMemoryTodoStore>> =
+    tokio::sync::OnceCell::const_new();
+
+/// 全局 Plan store (CLI 进程内 singleton, P14.7.2: in-memory)
+static PLAN_STORE: tokio::sync::OnceCell<Arc<InMemoryPlanStore>> =
+    tokio::sync::OnceCell::const_new();
+
+/// 拿 Todo store (首次访问 lazy init)
+async fn todo_store() -> &'static Arc<InMemoryTodoStore> {
+    TODO_STORE
+        .get_or_init(|| async { Arc::new(InMemoryTodoStore::new()) })
+        .await
+}
+
+/// 拿 Plan store (首次访问 lazy init)
+async fn plan_store() -> &'static Arc<InMemoryPlanStore> {
+    PLAN_STORE
+        .get_or_init(|| async { Arc::new(InMemoryPlanStore::new()) })
+        .await
+}
+
+/// `mah todo list` — 列出所有 Todo (按 priority 升序)
+async fn todo_list() -> Result<()> {
+    let store = todo_store().await;
+    let list: TodoList = store.read_all().await?;
+    if list.is_empty() {
+        println!("(no todos)");
+        return Ok(());
+    }
+    println!("Todo list ({} items, sorted by priority):", list.len());
+    println!();
+    for item in list.sorted_by_priority() {
+        println!(
+            "  [{:>8}] pri={:>3} | {}",
+            item.status.as_str(),
+            item.priority,
+            item.content
+        );
+        println!("             id: {}", item.id);
+    }
+    Ok(())
+}
+
+/// `mah todo write --content <text>` — 写一条 Todo
+async fn todo_write(
+    content: &str,
+    priority: i32,
+    status: ma_harness_todo::TodoStatus,
+) -> Result<()> {
+    let store = todo_store().await;
+    let item = TodoItem::new(content)
+        .with_priority(priority)
+        .with_status(status);
+    let id = store.write(&item).await?;
+    println!("todo written: id={}", id);
+    println!("  content:  {}", item.content);
+    println!("  status:   {}", item.status);
+    println!("  priority: {}", item.priority);
+    Ok(())
+}
+
+/// `mah todo update <id> --status <status>` — 改 Todo 状态
+async fn todo_update_status(id: &str, status: ma_harness_todo::TodoStatus) -> Result<()> {
+    let store = todo_store().await;
+    store.update_status(id, status).await?;
+    println!("todo updated: id={} -> status={}", id, status);
+    Ok(())
+}
+
+/// `mah todo delete <id>` — 删 Todo
+async fn todo_delete(id: &str) -> Result<()> {
+    let store = todo_store().await;
+    store.delete(id).await?;
+    println!("todo deleted: id={}", id);
+    Ok(())
+}
+
+/// `mah plan list` — 列出所有 Plan
+async fn plan_list() -> Result<()> {
+    let store = plan_store().await;
+    let plans = store.read_all().await?;
+    if plans.is_empty() {
+        println!("(no plans)");
+        return Ok(());
+    }
+    println!("Plan list ({} plans):", plans.len());
+    println!();
+    for plan in &plans {
+        println!(
+            "  [{:>10}] steps={:>2} | {}",
+            plan.status,
+            plan.steps.len(),
+            plan.title
+        );
+        println!("             id: {}", plan.id);
+    }
+    Ok(())
+}
+
+/// `mah plan write --title <text>` — 写一个空 Plan
+async fn plan_write(title: &str) -> Result<()> {
+    let store = plan_store().await;
+    let plan = Plan::new(title);
+    let id = store.write(&plan).await?;
+    println!("plan written: id={}", id);
+    println!("  title:  {}", plan.title);
+    println!("  status: {}", plan.status);
+    println!("  steps:  0 (业务方可注入 step, P15+ 加 `mah plan step add` 子命令)");
+    Ok(())
+}
+
+/// `mah plan update <id> --status <status>` — 改 Plan 状态
+async fn plan_update_status(id: &str, status: ma_harness_todo::PlanStatus) -> Result<()> {
+    let store = plan_store().await;
+    store.update_status(id, status).await?;
+    println!("plan updated: id={} -> status={}", id, status);
+    Ok(())
+}
+
+/// `mah plan delete <id>` — 删 Plan
+async fn plan_delete(id: &str) -> Result<()> {
+    let store = plan_store().await;
+    store.delete(id).await?;
+    println!("plan deleted: id={}", id);
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -3166,6 +3474,138 @@ steps:
         assert_eq!(q.url, "https://example.com");
         assert_eq!(q.user_agent.as_deref(), Some("mah-test/0.1"));
         assert_eq!(q.timeout, Some(std::time::Duration::from_secs(15)));
+    }
+
+    // ----- P14.7.2: `mah todo` / `mah plan` CLI -----
+
+    /// helper: 拿一个 in-memory todo store 直接走底层 API, 跟 todo_* CLI 同等行为
+    /// (绕开 process-singleton TODO_STORE, 测独立)
+    fn todo_test_store() -> std::sync::Arc<InMemoryTodoStore> {
+        std::sync::Arc::new(InMemoryTodoStore::new())
+    }
+
+    fn plan_test_store() -> std::sync::Arc<InMemoryPlanStore> {
+        std::sync::Arc::new(InMemoryPlanStore::new())
+    }
+
+    /// TodoStatusArg → TodoStatus 转换 roundtrip (4 状态全过)
+    #[test]
+    fn todo_status_arg_to_todo_status_roundtrip() {
+        for (arg, expected) in [
+            (TodoStatusArg::Pending, ma_harness_todo::TodoStatus::Pending),
+            (
+                TodoStatusArg::InProgress,
+                ma_harness_todo::TodoStatus::InProgress,
+            ),
+            (TodoStatusArg::Done, ma_harness_todo::TodoStatus::Done),
+            (
+                TodoStatusArg::Cancelled,
+                ma_harness_todo::TodoStatus::Cancelled,
+            ),
+        ] {
+            assert_eq!(ma_harness_todo::TodoStatus::from(arg), expected);
+        }
+    }
+
+    /// PlanStatusArg → PlanStatus 转换 roundtrip (5 状态全过)
+    #[test]
+    fn plan_status_arg_to_plan_status_roundtrip() {
+        for (arg, expected) in [
+            (PlanStatusArg::Draft, ma_harness_todo::PlanStatus::Draft),
+            (
+                PlanStatusArg::Approved,
+                ma_harness_todo::PlanStatus::Approved,
+            ),
+            (
+                PlanStatusArg::InProgress,
+                ma_harness_todo::PlanStatus::InProgress,
+            ),
+            (
+                PlanStatusArg::Completed,
+                ma_harness_todo::PlanStatus::Completed,
+            ),
+            (
+                PlanStatusArg::Rejected,
+                ma_harness_todo::PlanStatus::Rejected,
+            ),
+        ] {
+            assert_eq!(ma_harness_todo::PlanStatus::from(arg), expected);
+        }
+    }
+
+    /// CLI 业务流程: write → update → list (走底层 store, 测 happy path)
+    #[tokio::test]
+    async fn cli_todo_write_update_list_workflow() {
+        let store = todo_test_store();
+        let item = TodoItem::new("Fix bug").with_priority(1);
+        let id = store.write(&item).await.expect("write");
+        store
+            .update_status(&id, ma_harness_todo::TodoStatus::InProgress)
+            .await
+            .expect("update");
+        let list = store.read_all().await.expect("read_all");
+        assert_eq!(list.len(), 1);
+        let sorted = list.sorted_by_priority();
+        assert_eq!(sorted[0].content, "Fix bug");
+        assert_eq!(sorted[0].status, ma_harness_todo::TodoStatus::InProgress);
+    }
+
+    /// CLI 业务流程: write → delete → read 返回 NotFound
+    #[tokio::test]
+    async fn cli_todo_write_then_delete_works() {
+        let store = todo_test_store();
+        let id = store.write(&TodoItem::new("x")).await.expect("write");
+        store.delete(&id).await.expect("delete");
+        let err = store.read(&id).await.unwrap_err();
+        assert!(matches!(err, ma_harness_todo::TodoError::NotFound(_)));
+    }
+
+    /// CLI 业务流程: write → update 到 Done → 再 update 回 Pending 应失败 (终态)
+    #[tokio::test]
+    async fn cli_todo_done_is_terminal() {
+        let store = todo_test_store();
+        let id = store.write(&TodoItem::new("x")).await.expect("write");
+        store
+            .update_status(&id, ma_harness_todo::TodoStatus::InProgress)
+            .await
+            .expect("to in_progress");
+        store
+            .update_status(&id, ma_harness_todo::TodoStatus::Done)
+            .await
+            .expect("to done");
+        let err = store
+            .update_status(&id, ma_harness_todo::TodoStatus::Pending)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ma_harness_todo::TodoError::InvalidTransition { .. }
+        ));
+    }
+
+    /// CLI 业务流程: plan write → update status → list
+    #[tokio::test]
+    async fn cli_plan_write_and_approve_works() {
+        let store = plan_test_store();
+        let plan = Plan::new("Refactor auth");
+        let id = store.write(&plan).await.expect("write");
+        store
+            .update_status(&id, ma_harness_todo::PlanStatus::Approved)
+            .await
+            .expect("approve");
+        let read = store.read(&id).await.expect("read");
+        assert_eq!(read.status, ma_harness_todo::PlanStatus::Approved);
+        assert_eq!(read.title, "Refactor auth");
+    }
+
+    /// CLI 业务流程: plan write (空 steps) → list 显示
+    #[tokio::test]
+    async fn cli_plan_empty_steps_works() {
+        let store = plan_test_store();
+        let plan = Plan::new("Empty plan");
+        let id = store.write(&plan).await.expect("write");
+        let read = store.read(&id).await.expect("read");
+        assert_eq!(read.steps.len(), 0, "P14.7.2 限制: 只能写空 plan");
     }
 }
 
