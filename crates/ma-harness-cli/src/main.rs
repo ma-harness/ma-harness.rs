@@ -281,6 +281,17 @@ enum Commands {
         #[command(subcommand)]
         action: SelfAction,
     },
+    /// **P14.4.2**: Compaction CLI — 业务方能手动跑 / 预览 session 压缩
+    ///
+    /// 业务方:
+    ///   `mah compaction run --input <jsonl>`         跑 BasicCompactionProvider, 打印 stats
+    ///   `mah compaction info`                        打印默认 CompactionContext 配置
+    ///
+    /// **P14.4.2 限制**: 仅支持 BasicCompactionProvider, LLM-based 是 P14.4.3+
+    Compaction {
+        #[command(subcommand)]
+        action: CompactionAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -371,6 +382,37 @@ enum SelfAction {
     },
     /// 查 audit log (谁在什么时候 enabled/disabled 了哪个 plugin)
     Audit,
+}
+
+/// **P14.4.2**: Compaction CLI sub-actions
+///
+/// 业务方:
+///   `mah compaction run --input <jsonl>`         跑 BasicCompactionProvider, 打印 stats
+///   `mah compaction info`                        打印默认 CompactionContext 配置
+#[derive(Subcommand, Debug)]
+enum CompactionAction {
+    /// 跑 BasicCompactionProvider 在一个 JSONL SessionEvent file 上
+    ///
+    /// Example:
+    ///   `mah compaction run --input session.jsonl`
+    ///   `mah compaction run --input session.jsonl --max-tokens 4000`
+    ///   `mah compaction run --input session.jsonl --keep-recent 5`
+    Run {
+        /// 输入 JSONL 文件 (每行一个 SessionEvent JSON)
+        #[arg(long)]
+        input: PathBuf,
+        /// 输出 JSONL 文件 (压缩后 events, 默认 stdout)
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Token 阈值 (超过触发压缩, 默认 8000 = 80% of 10k context)
+        #[arg(long, default_value = "8000")]
+        max_tokens: usize,
+        /// 保留最近 N 步 (run_id distinct, 默认 3)
+        #[arg(long, default_value = "3")]
+        keep_recent: usize,
+    },
+    /// 打印默认 CompactionContext 配置 (max_tokens / keep_recent / always_keep)
+    Info,
 }
 
 /// **P15.4.3**: Engine CLI enum (跟 `WorkflowEngine` trait 解耦, 业务方字面量选).
@@ -655,6 +697,15 @@ async fn main() -> Result<()> {
             SelfAction::Enable { name } => self_enable(&name).await,
             SelfAction::Disable { name } => self_disable(&name).await,
             SelfAction::Audit => self_audit().await,
+        },
+        Commands::Compaction { action } => match action {
+            CompactionAction::Run {
+                input,
+                output,
+                max_tokens,
+                keep_recent,
+            } => compaction_run(&input, output.as_deref(), max_tokens, keep_recent).await,
+            CompactionAction::Info => compaction_info(),
         },
         Commands::RunStream {
             prompt,
@@ -2206,6 +2257,109 @@ fn epoch_to_ymdhms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
     (year, m, d, hour, min, sec)
 }
 
+// ============================================================================
+// P14.4.2: `mah compaction run` / `info`
+// ============================================================================
+
+/// `mah compaction run --input <jsonl>` — 跑 BasicCompactionProvider 在 JSONL events 上
+///
+/// **P14.4.2 限制**: 简单 read JSONL → run compaction → write JSONL (默认 stdout).
+/// 不引 ma-harness-session-store (那是 session log 的 Sqlite 集成, P15+).
+async fn compaction_run(
+    input: &std::path::Path,
+    output: Option<&std::path::Path>,
+    max_tokens: usize,
+    keep_recent: usize,
+) -> Result<()> {
+    use ma_harness_compaction::{BasicCompactionProvider, CompactionContext, CompactionStrategy};
+    use ma_harness_core::SessionEvent;
+
+    // 1. 读 JSONL (每行一个 SessionEvent JSON)
+    let input_text = std::fs::read_to_string(input)
+        .with_context(|| format!("read input {}", input.display()))?;
+    let events: Vec<SessionEvent> = input_text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .enumerate()
+        .map(|(i, line)| {
+            serde_json::from_str(line)
+                .with_context(|| format!("parse JSONL line {}: {}", i + 1, line))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    eprintln!(
+        "[compaction] loaded {} events from {}",
+        events.len(),
+        input.display()
+    );
+
+    // 2. 跑 BasicCompactionProvider
+    let provider = BasicCompactionProvider;
+    let ctx = CompactionContext::default()
+        .with_max_tokens(max_tokens)
+        .with_keep_recent_steps(keep_recent);
+    let (compacted, stats) = provider
+        .compact(&events, &ctx)
+        .await
+        .map_err(|e| anyhow::anyhow!("compaction failed: {}", e))?;
+
+    // 3. 打印 stats
+    println!("[compaction] provider: {}", provider.provider_name());
+    println!("[compaction] max_tokens: {}", max_tokens);
+    println!("[compaction] keep_recent_steps: {}", keep_recent);
+    println!(
+        "[compaction] before: {} events, {} tokens",
+        stats.original_count, stats.tokens_before
+    );
+    println!(
+        "[compaction] after:  {} events, {} tokens",
+        stats.kept_count, stats.tokens_after
+    );
+    let ratio_pct = (stats.compression_ratio() * 100.0).round() as u32;
+    println!(
+        "[compaction] removed: {} events ({}% reduction){}",
+        stats.removed_count,
+        ratio_pct,
+        if stats.triggered {
+            ""
+        } else {
+            " (not triggered, already < max_tokens)"
+        }
+    );
+
+    // 4. 写输出 (默认 stdout, 否则写文件)
+    let mut out: Box<dyn std::io::Write> = match output {
+        Some(path) => {
+            let file = std::fs::File::create(path)
+                .with_context(|| format!("create output {}", path.display()))?;
+            Box::new(file)
+        }
+        None => Box::new(std::io::stdout().lock()),
+    };
+    for ev in &compacted {
+        writeln!(out, "{}", serde_json::to_string(ev)?)?;
+    }
+
+    // 5. exit code: 0 if 压缩生效或不需要压缩, 1 if 任何 IO/parse 错 (已在 ? 路径处理)
+    Ok(())
+}
+
+/// `mah compaction info` — 打印默认 CompactionContext 配置
+fn compaction_info() -> Result<()> {
+    use ma_harness_compaction::CompactionContext;
+    let ctx = CompactionContext::default();
+    println!("default CompactionContext (P14.4.1 BasicCompactionProvider):");
+    println!("  max_tokens:        {}", ctx.max_tokens);
+    println!("  keep_recent_steps:  {}", ctx.keep_recent_steps);
+    println!("  always_keep:        {:?}", ctx.always_keep);
+    println!();
+    println!("  provider: BasicCompactionProvider (P14.4.1)");
+    println!("  algorithm: rule-based truncate (oldest ModelResponse, keep recent + always_keep)");
+    println!();
+    println!("Tune with: `mah compaction run --input <jsonl> --max-tokens 4000 --keep-recent 5`");
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -2477,6 +2631,76 @@ steps:
         let yaml = serde_yaml::to_string(&config).expect("yaml serialize");
         // 不 strict assert content (config 可能空), 至少不是空字符串
         let _ = yaml.len(); // 用 _ 避免 unused warning
+    }
+
+    // ----- P14.4.2: `mah compaction` CLI -----
+
+    /// helper: 写一个临时 JSONL events file 走 compaction run (跟 workflow tests 一样)
+    fn write_events_jsonl(dir: &std::path::Path, name: &str, lines: &[&str]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, lines.join("\n")).expect("write jsonl");
+        path
+    }
+
+    #[tokio::test]
+    async fn compaction_info_prints_defaults() {
+        // 不 IO, 纯打印 default CompactionContext
+        // 走 sync 函数, 但 #[tokio::test] 也行
+        compaction_info().expect("info");
+    }
+
+    #[tokio::test]
+    async fn compaction_run_with_empty_jsonl_errors() {
+        // 空文件 → parse 时 0 events, 但不会 panic. 实际上 should_err 也行 (空 input)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_events_jsonl(dir.path(), "empty.jsonl", &[]);
+        let result = compaction_run(&path, None, 8000, 3).await;
+        // 空 input 是 Ok (events=0, stats 全 0)
+        // 主要是不 panic + 走完路径
+        assert!(result.is_ok(), "empty input should be Ok, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn compaction_run_with_minimal_event_succeeds() {
+        // 写 1 个 UserInput event, 跑 compression, expect stats printed
+        // SessionEvent 字段: id/session_id/event_type/ts/severity/model_visible/run_id/plugin_name/payload_json/error_message
+        // ts 是 DateTime<Utc> (RFC 3339), event_type/severity 是 unit variant (字符串)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let event_json = r#"{"id":"00000000-0000-0000-0000-000000000001","session_id":"test","event_type":"UserInput","ts":"2026-01-01T00:00:00Z","severity":"Info","model_visible":true,"run_id":null,"plugin_name":null,"payload_json":null,"error_message":null}"#;
+        let path = write_events_jsonl(dir.path(), "one.jsonl", &[event_json]);
+        let result = compaction_run(&path, None, 8000, 3).await;
+        assert!(
+            result.is_ok(),
+            "single event should be Ok, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_run_to_output_file() {
+        // 测 --output 写到文件
+        let dir = tempfile::tempdir().expect("tempdir");
+        let in_path = dir.path().join("in.jsonl");
+        let out_path = dir.path().join("out.jsonl");
+        let event_json = r#"{"id":"00000000-0000-0000-0000-000000000001","session_id":"test","event_type":"RunStart","ts":"2026-01-01T00:00:00Z","severity":"Info","model_visible":true,"run_id":null,"plugin_name":null,"payload_json":null,"error_message":null}"#;
+        std::fs::write(&in_path, event_json).expect("write");
+        let result = compaction_run(&in_path, Some(&out_path), 8000, 3).await;
+        assert!(result.is_ok());
+        assert!(out_path.exists(), "output file should be created");
+        let content = std::fs::read_to_string(&out_path).expect("read out");
+        // 至少 1 行 (RunStart 永保留)
+        assert!(
+            !content.trim().is_empty(),
+            "output should have at least 1 event line"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_run_with_missing_input_errors() {
+        // 不存在的 input file → IO 错 (via ?), CLI exit 1
+        let path = std::path::PathBuf::from("Z:/__nope__/nope.jsonl");
+        let result = compaction_run(&path, None, 8000, 3).await;
+        assert!(result.is_err(), "missing input should error");
     }
 }
 
