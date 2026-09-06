@@ -92,8 +92,8 @@ tonic-web = "0.12"
 
 # HTTP (server only) — 2026-08-18 axum → salvo (宪法规格变更, 见 decision-log §12)
 # salvo 自带 hyper 1, 编译比 axum 快, 内置 OpenAPI 导出 (#[endpoint] macro)
-# 2026-08-19 (Day 101): salvo 0.79 → 0.95 升级 (P6-7), 跳 16 minor, 0 break
-salvo = { version = "0.95", features = ["test", "oapi", "sse"] }
+# 2026-09-07 (Day 101+33): salvo 0.95 → 0.96 升级 (P6-8), 跳 1 minor, 0 break
+salvo = { version = "0.96", features = ["test", "oapi", "sse"] }
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
