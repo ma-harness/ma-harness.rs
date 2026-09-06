@@ -34,6 +34,7 @@ ma-harness-hooks = { path = "../ma-harness-hooks", version = "0.1.0" }  # 2026-0
 ma-harness-workflow = { path = "../ma-harness-workflow", version = "0.1.0" }  # 2026-09-05 (P15.4.3): `mah workflow run` CLI
 ma-harness-self-modification = { path = "../ma-harness-self-modification", version = "0.1.0" }  # 2026-09-05 (P15.6.2): `mah self` CLI
 ma-harness-compaction = { path = "../ma-harness-compaction", version = "0.1.0" }  # 2026-09-05 (P14.4.2): `mah compaction` CLI
+ma-harness-lsp = { path = "../ma-harness-lsp", version = "0.1.0" }  # 2026-09-05 (P14.5.2): `mah lsp` CLI
 ma-harness-plugin-hello = { path = "../../plugins/ma-harness-plugin-hello", version = "0.1.1" }
 ma-harness-plugin-dsh-adapter = { path = "../../plugins/ma-harness-plugin-dsh-adapter", version = "0.1.1" }  # 2026-08-21 (P13.5): mah dsh info/doctor 命令
 # 外部

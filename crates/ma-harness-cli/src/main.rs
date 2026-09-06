@@ -292,6 +292,17 @@ enum Commands {
         #[command(subcommand)]
         action: CompactionAction,
     },
+    /// **P14.5.2**: LSP CLI — 业务方能从命令行跑 LSP request (e.g. 调 rust-analyzer 查 definition)
+    ///
+    /// 业务方:
+    ///   `mah lsp request --server rust-analyzer --method textDocument/definition --params <json>`
+    ///
+    /// **P14.5.2 限制**: 只支持 single request (no persistent session, no notify auto),
+    /// 高级 LSP 用法 (definition / references / hover) 业务方自己 wrap params JSON
+    Lsp {
+        #[command(subcommand)]
+        action: LspAction,
+    },
 }
 
 /// **P15.4.3**: Workflow CLI sub-actions
@@ -412,6 +423,38 @@ enum CompactionAction {
         keep_recent: usize,
     },
     /// 打印默认 CompactionContext 配置 (max_tokens / keep_recent / always_keep)
+    Info,
+}
+
+/// **P14.5.2**: LSP CLI sub-actions
+///
+/// 业务方:
+///   `mah lsp request --server rust-analyzer --method textDocument/definition --params <json>`
+///   跑 1 次 LSP request, 打印 response (JSON), exit 0
+#[derive(Subcommand, Debug)]
+enum LspAction {
+    /// 跑 1 次 LSP request (spawn server, send request, print response)
+    ///
+    /// Example:
+    ///   `mah lsp request --server rust-analyzer --args --stdio \
+    ///       --method textDocument/definition \
+    ///       --params '{"textDocument":{"uri":"file:///foo.rs"},"position":{"line":10,"character":5}}'`
+    Request {
+        /// LSP server 程序 (e.g. "rust-analyzer", "typescript-language-server", "pyright-langserver")
+        #[arg(long)]
+        server: String,
+        /// 启动参数 (可重复 `--args <value>`, e.g. `--args --stdio`)
+        #[arg(long, action = clap::ArgAction::Append)]
+        args: Vec<String>,
+        /// LSP method (e.g. "initialize", "textDocument/definition", "textDocument/hover")
+        #[arg(long)]
+        method: String,
+        /// LSP params (JSON object string)
+        #[arg(long)]
+        params: String,
+    },
+    /// 打印可用 LSP server 提示 (rust-analyzer / typescript-language-server / pyright-langserver)
+    /// 跟具体 `lsp request` 无关, 仅给业务方 quick reference
     Info,
 }
 
@@ -706,6 +749,15 @@ async fn main() -> Result<()> {
                 keep_recent,
             } => compaction_run(&input, output.as_deref(), max_tokens, keep_recent).await,
             CompactionAction::Info => compaction_info(),
+        },
+        Commands::Lsp { action } => match action {
+            LspAction::Request {
+                server,
+                args,
+                method,
+                params,
+            } => lsp_request(&server, &args, &method, &params).await,
+            LspAction::Info => lsp_info(),
         },
         Commands::RunStream {
             prompt,
@@ -2360,6 +2412,106 @@ fn compaction_info() -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// P14.5.2: `mah lsp request` / `info`
+// ============================================================================
+
+/// `mah lsp request` — spawn LSP server, send 1 request, print response (JSON)
+///
+/// **P14.5.2 限制**: single shot, 不维持 session, no notify (init handshake).
+/// 业务方要 advanced 用法自己 wrap. `--server rust-analyzer --args --stdio` 是常用模式.
+async fn lsp_request(server: &str, args: &[String], method: &str, params_json: &str) -> Result<()> {
+    use ma_harness_lsp::{LspService, LspSpec};
+
+    // 1. parse params JSON
+    let params: serde_json::Value = serde_json::from_str(params_json)
+        .with_context(|| format!("parse params JSON: {}", params_json))?;
+
+    // 2. spawn LocalLspProvider (note: takes &[&str] not &[String])
+    let args_str: Vec<&str> = args.iter().map(String::as_str).collect();
+    let provider = ma_harness_lsp::LocalLspProvider::new(server, &args_str);
+    eprintln!("[lsp] spawned server: {} {:?}", server, args);
+
+    // 3. send request
+    let id = ma_harness_lsp::next_id();
+    let spec = LspSpec::request(id, method, params);
+    let response = provider
+        .request(&spec)
+        .await
+        .map_err(|e| anyhow::anyhow!("lsp request failed: {}", e))?;
+
+    // 4. print response (LspResponse 没 impl Serialize, 手 build JSON)
+    // 业务方看 result / error 哪个 Some
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "id".to_string(),
+        serde_json::Value::Number(response.id.into()),
+    );
+    match (&response.result, &response.error) {
+        (Some(result), None) => {
+            out.insert("result".to_string(), result.clone());
+        }
+        (None, Some(err)) => {
+            // LspServerError: code, message, data (Option<Value>)
+            let mut err_obj = serde_json::Map::new();
+            err_obj.insert(
+                "code".to_string(),
+                serde_json::Value::Number(err.code.into()),
+            );
+            err_obj.insert(
+                "message".to_string(),
+                serde_json::Value::String(err.message.clone()),
+            );
+            if let Some(data) = &err.data {
+                err_obj.insert("data".to_string(), data.clone());
+            }
+            out.insert("error".to_string(), serde_json::Value::Object(err_obj));
+        }
+        _ => {
+            // 协议错误: result + error 都 Some / 都 None
+            return Err(anyhow::anyhow!(
+                "malformed response: result={:?} error={:?}",
+                response.result,
+                response.error
+            ));
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::Value::Object(out))
+            .map_err(|e| anyhow::anyhow!("serialize response: {}", e))?
+    );
+
+    Ok(())
+}
+
+/// `mah lsp info` — 打印常用 LSP server 提示 (rust-analyzer / tsserver / pyright)
+fn lsp_info() -> Result<()> {
+    println!("Common LSP servers (业务方装一个, `mah lsp request` 才能 spawn):");
+    println!();
+    println!("  rust-analyzer             (Rust)         `cargo install rust-analyzer`");
+    println!("  typescript-language-server (TypeScript)  `npm i -g typescript-language-server`");
+    println!("  pyright                   (Python)       `pip install pyright`");
+    println!(
+        "  gopls                     (Go)           `go install golang.org/x/tools/gopls@latest`"
+    );
+    println!("  rust-analyzer             (auto-detected) usually at ~/.cargo/bin/rust-analyzer");
+    println!();
+    println!("常用 LSP method:");
+    println!("  initialize                (server handshake, P14.5.2 不自动发, 业务方自己 wrap)");
+    println!("  textDocument/definition   (跳到定义)");
+    println!("  textDocument/references   (查找引用)");
+    println!("  textDocument/hover        (悬停文档)");
+    println!();
+    println!("Example:");
+    println!("  mah lsp request --server rust-analyzer --args --stdio \\");
+    println!("      --method textDocument/definition \\");
+    println!(
+        "      --params '{{\"textDocument\":{{\"uri\":\"file:///foo.rs\"}},\"position\":{{\"line\":10,\"character\":5}}}}'"
+    );
+    Ok(())
+}
+
 /// CLI 用 logging step runner (P15.4.3)。
 ///
 /// 跟 ma-harness-workflow::LoggingStepRunner 一样的行为, 但放 CLI 里避免给 workflow crate
@@ -2701,6 +2853,59 @@ steps:
         let path = std::path::PathBuf::from("Z:/__nope__/nope.jsonl");
         let result = compaction_run(&path, None, 8000, 3).await;
         assert!(result.is_err(), "missing input should error");
+    }
+
+    // ----- P14.5.2: `mah lsp` CLI -----
+
+    #[test]
+    fn lsp_info_prints_known_servers() {
+        // 不 IO, 纯打印
+        lsp_info().expect("info");
+    }
+
+    #[tokio::test]
+    async fn lsp_request_with_invalid_params_json_errors() {
+        // 故意 invalid JSON (缺少引号) → serde_json parse 错
+        let result = lsp_request(
+            "rust-analyzer",
+            &["--stdio".to_string()],
+            "initialize",
+            "{not json",
+        )
+        .await;
+        assert!(result.is_err(), "invalid params should error");
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("parse params JSON") || err.contains("JSON"),
+            "expected parse error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_request_with_nonexistent_server_errors() {
+        // server 不存在 → spawn 失败 → LspError → CLI 返 Err
+        let result = lsp_request(
+            "Z:/__nonexistent_server__/nope.exe",
+            &[],
+            "initialize",
+            "{}",
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "nonexistent server should error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn lsp_request_args_string_to_str_slice() {
+        // 验证 args 转换: &[String] → &[&str] (在 lsp_request 内部)
+        // 这里只测转换逻辑 (lsp_request 内部用), 不真 spawn
+        let args: Vec<String> = vec!["--stdio".to_string(), "--quiet".to_string()];
+        let args_str: Vec<&str> = args.iter().map(String::as_str).collect();
+        assert_eq!(args_str, vec!["--stdio", "--quiet"]);
     }
 }
 
