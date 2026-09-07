@@ -1,0 +1,154 @@
+[package]
+name = "ma-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+# Note: re-enable `publish = true` once all P14+P15 sub-crates are
+# on crates.io. As of 2026-09-07, 7 of the 24 crates are
+# SSL-blocked (cargo publish fails on crates.io from the
+# 业务方本机); the umbrella depends on 16 sub-crates and can't be
+# packaged until those 7 land. Until then, this is a
+# workspace-internal umbrella — `cargo build` / `cargo test` /
+# `cargo run -p ma-harness-cli` all work in-repo via path deps.
+homepage = "https://gitee.com/yifenma/ma-harness.rs"
+keywords = ["agent", "session", "llm", "plugin-registry", "sandbox"]
+categories = ["development-tools", "api-bindings", "asynchronous"]
+description = "ma-harness umbrella crate: one `use ma_harness::*` for the full ma-harness SDK. Re-exports core, cordis, seam, model, registry, bundle, sandbox, dag, artifact, server, tui, and the P14+P15 sub-crates under feature flags. See README for the feature matrix."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Foundation (always present as features, not direct deps)
+ma-harness-cordis = { path = "../ma-harness-cordis", version = "0.1.1", optional = true }
+ma-harness-core = { path = "../ma-harness-core", version = "0.1.1", optional = true }
+ma-harness-seam = { path = "../ma-harness-seam", version = "0.1.1", optional = true }
+ma-harness-plugin-macro = { path = "../ma-harness-plugin-macro", version = "0.1.1", optional = true }
+
+# LLM
+ma-harness-model = { path = "../ma-harness-model", version = "0.1.1", optional = true }
+
+# P11-P12 features
+ma-harness-registry = { path = "../ma-harness-registry", version = "0.1.1", optional = true }
+ma-harness-bundle = { path = "../ma-harness-bundle", version = "0.1.1", optional = true }
+ma-harness-sandbox = { path = "../ma-harness-sandbox", version = "0.1.1", optional = true }
+ma-harness-code = { path = "../ma-harness-code", version = "0.1.1", optional = true }
+ma-harness-dag = { path = "../ma-harness-dag", version = "0.1.1", optional = true }
+ma-harness-artifact = { path = "../ma-harness-artifact", version = "0.1.1", optional = true }
+ma-harness-server = { path = "../ma-harness-server", version = "0.1.1", optional = true }
+ma-harness-tui = { path = "../ma-harness-tui", version = "0.1.1", optional = true }
+
+# P14 batch
+ma-harness-subprocess = { path = "../ma-harness-subprocess", version = "0.1.1", optional = true }
+ma-harness-shell = { path = "../ma-harness-shell", version = "0.1.1", optional = true }
+ma-harness-skill = { path = "../ma-harness-skill", version = "0.1.1", optional = true }
+ma-harness-compaction = { path = "../ma-harness-compaction", version = "0.1.1", optional = true }
+ma-harness-lsp = { path = "../ma-harness-lsp", version = "0.1.1", optional = true }
+ma-harness-web = { path = "../ma-harness-web", version = "0.1.1", optional = true }
+ma-harness-todo = { path = "../ma-harness-todo", version = "0.1.1", optional = true }
+ma-harness-session = { path = "../ma-harness-session", version = "0.1.1", optional = true }
+ma-harness-profile = { path = "../ma-harness-profile", version = "0.1.1", optional = true }
+ma-harness-context = { path = "../ma-harness-context", version = "0.1.1", optional = true }
+ma-harness-guard = { path = "../ma-harness-guard", version = "0.1.1", optional = true }
+
+# P15 batch
+ma-harness-workflow = { path = "../ma-harness-workflow", version = "0.1.1", optional = true }
+ma-harness-webhook = { path = "../ma-harness-webhook", version = "0.1.1", optional = true }
+ma-harness-settings = { path = "../ma-harness-settings", version = "0.1.1", optional = true }
+ma-harness-credentials = { path = "../ma-harness-credentials", version = "0.1.1", optional = true }
+ma-harness-hooks = { path = "../ma-harness-hooks", version = "0.1.1", optional = true }
+ma-harness-self-modification = { path = "../ma-harness-self-modification", version = "0.1.1", optional = true }
+
+# Internal-only (P15.1 / P15.2 future work — kept for completeness when full feature is enabled)
+ma-harness-web-ui = { path = "../ma-harness-web-ui", version = "0.1.1", optional = true }
+ma-harness-terminal = { path = "../ma-harness-terminal", version = "0.1.1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+# ----------------------------------------------------------------------------
+# Feature matrix
+# ----------------------------------------------------------------------------
+# Default SDK: types + LLM. Most library users want exactly this.
+# `cargo add ma-harness` gives the same as the old
+# `ma-harness-core + ma-harness-cordis + ma-harness-model` triple.
+#
+# Layered features (additive):
+#   core     — types + DI + plugin facade + proc-macro
+#   model    — LLM adapters (depends on core)
+#   plugin   — plugin registry (depends on core)
+#   bundle   — lockfile install (depends on plugin)
+#   sandbox  — Landlock/Seatbelt/Stub enforcer
+#   code     — wasmtime Code Mode
+#   dag      — DAG orchestration
+#   artifact — vibe coding viewer
+#   server   — salvo HTTP server (depends on core)
+#   tui      — ratatui TUI dashboard (depends on core)
+#   p14      — P14 ctx.* sub-crates (depends on core)
+#   p15      — P15 features (depends on core)
+#   full     — everything
+# ----------------------------------------------------------------------------
+[features]
+default = ["core", "model"]
+
+# Foundation
+core = [
+    "dep:ma-harness-cordis",
+    "dep:ma-harness-core",
+    "dep:ma-harness-seam",
+    "dep:ma-harness-plugin-macro",
+]
+model = ["dep:ma-harness-model", "core"]
+
+# P11-P12 features
+plugin = ["core", "dep:ma-harness-registry"]
+bundle = ["plugin", "dep:ma-harness-bundle"]
+sandbox = ["core", "dep:ma-harness-sandbox"]
+code = ["core", "dep:ma-harness-code"]
+dag = ["core", "dep:ma-harness-dag"]
+artifact = ["core", "dep:ma-harness-artifact"]
+server = ["core", "dep:ma-harness-server"]
+tui = ["core", "dep:ma-harness-tui"]
+
+# P14 batch — ctx.* seams
+p14 = [
+    "core",
+    "dep:ma-harness-subprocess",
+    "dep:ma-harness-shell",
+    "dep:ma-harness-skill",
+    "dep:ma-harness-compaction",
+    "dep:ma-harness-lsp",
+    "dep:ma-harness-web",
+    "dep:ma-harness-todo",
+    "dep:ma-harness-session",
+    "dep:ma-harness-profile",
+    "dep:ma-harness-context",
+    "dep:ma-harness-guard",
+]
+
+# P15 batch — workflow / webhook / settings / credentials / hooks / self-mod
+p15 = [
+    "core",
+    "dep:ma-harness-workflow",
+    "dep:ma-harness-webhook",
+    "dep:ma-harness-settings",
+    "dep:ma-harness-credentials",
+    "dep:ma-harness-hooks",
+    "dep:ma-harness-self-modification",
+]
+
+# Future work (P15.1 / P15.2)
+web-ui = ["core", "dep:ma-harness-web-ui"]
+pty = ["core", "dep:ma-harness-terminal"]
+
+# Convenience: all features
+full = [
+    "core", "model",
+    "plugin", "bundle", "sandbox", "code", "dag", "artifact", "server", "tui",
+    "p14", "p15",
+    "web-ui", "pty",
+]

@@ -9,7 +9,8 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](#)
 [![crates.io](https://img.shields.io/badge/crates.io-24%20crates-orange)](#cratesio)
 
-`mah` is the binary; `mah-py` is the Python SDK; 36 first-party Rust crates (24 published to crates.io).
+`mah` is the binary; `mah-py` is the Python SDK; 37 first-party Rust crates (24 published to crates.io).
+**`ma-harness`** is the umbrella crate — one `use ma_harness::*` for the full SDK (workspace-internal until the 7 SSL-blocked sub-crates land).
 
 ---
 
@@ -143,7 +144,8 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 ### Test coverage (~1500 tests, 0 failed)
 
 ```
-~1500 tests across 36 first-party Rust crates + mah-py (Python)
+~1500 tests across 37 first-party Rust crates + mah-py (Python)
+(ma-harness umbrella adds 35 compile-time re-export smoke tests)
 
 Top contributors:
   ma-harness-core:                ~107
@@ -301,6 +303,34 @@ tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 ```
 
+### Rust umbrella (full SDK, one dep)
+
+For in-workspace use, depend on the umbrella crate to get the full
+SDK with a single import path:
+
+```toml
+# Cargo.toml (within the ma-harness.rs workspace)
+[dependencies]
+ma-harness = { path = "ma-harness" }  # path relative to your crate
+```
+
+```rust
+use ma_harness::*;
+
+// Foundation: types + DI + LLM (default features: core + model)
+let ctx = Context::new();
+let adapter = OpenaiAdapter::new("sk-...");
+let req = ModelRequest::new(vec![ModelMessage::user("hi")]);
+
+// Turn on features for what you need:
+//   ma-harness = { path = "ma-harness", features = ["p14", "p15", "server"] }
+```
+
+See [`crates/ma-harness/README.md`](crates/ma-harness/README.md)
+for the full feature matrix. Note: the umbrella is currently
+`publish = false` (workspace-internal) until the 7 SSL-blocked
+sub-crates land on crates.io.
+
 ```rust
 use ma_harness_model::{OpenaiAdapter, ModelAdapter, Message};
 use futures::StreamExt;
@@ -349,7 +379,7 @@ mah hook run --event PreToolUse
 
 ---
 
-## 🏗️ Architecture (36 first-party Rust crates + mah-py)
+## 🏗️ Architecture (37 first-party Rust crates + mah-py)
 
 ### Core (P7-P10) — 9 crates
 
@@ -404,13 +434,17 @@ crates/
 └── ma-harness-hooks          (P15.7  Claude Code wire-protocol) internal
 ```
 
-### Misc / P15.1-2 / demo — 4 crates
+### Misc / P15.1-2 / demo / umbrella — 5 crates
 
 ```
 ├── ma-harness-terminal       (P15.2  PTY backend, future)      internal
 ├── ma-harness-web-ui         (P15.1  Web UI, future)            internal
 ├── ma-harness-demo           (CLI binary, integration demo)    internal
-└── ma-harness-cli            (CLI binary, all 14 subcommands)  internal
+├── ma-harness-cli            (CLI binary, all 14 subcommands)  internal
+└── ma-harness                (umbrella: re-exports all above   internal (workspace)
+                              under feature flags — `use ma_harness::*`
+                              for the full SDK; `publish = false`
+                              until the 7 SSL-blocked sub-crates land)
 ```
 
 ### First-party plugin (P13) — 1 plugin
@@ -434,7 +468,7 @@ See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full de
 ## 📚 Documentation
 
 - **[Docs index](docs/README.md)** — entry point for all markdown docs
-- **[Architecture overview](docs/ma-harness-arch-map.md)** — 36-crate dependency map
+- **[Architecture overview](docs/ma-harness-arch-map.md)** — 37-crate dependency map
 - **[dsh feature parity](docs/en/dsh-feature-parity.md)** — full dsh ↔ ma-harness comparison (12 sections, prose form)
 - **[dsh feature parity table](docs/en/dsh-feature-parity-table.md)** — compact table form, status column, 114 items
 - **[Development plan](_local/dsh-planning/dsh-development-plan.en.md)** — P14-P17+ 4-phase roadmap (local-only)
