@@ -5,48 +5,75 @@
 **Rust rewrite of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) AI agent framework, with extensions for production use.**
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](#)
-[![Tests](https://img.shields.io/badge/tests-638%2F638-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-%7E1500%20pass-brightgreen)](#)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](#)
-[![crates.io](https://img.shields.io/badge/crates.io-6%20crates-orange)](#cratesio)
+[![crates.io](https://img.shields.io/badge/crates.io-24%20crates-orange)](#cratesio)
 
-`mah` is the binary; `mah-py` is the Python SDK; 6 crates are published to crates.io.
+`mah` is the binary; `mah-py` is the Python SDK; 36 first-party Rust crates (24 published to crates.io).
 
 ---
 
 ## ✨ Features
 
-- **OpenAI / Anthropic / Deepseek / Stub** LLM adapters with streaming, retry (P12-2), vision (P11-5), tool-call
-- **Cordis-style DI**: Context / Service / Plugin / TypedKey / Disposable framework (P7)
+### LLM + reasoning
+- **4 LLM backends** — OpenAI / Anthropic / Deepseek / Stub (vs dsh's 1) with streaming, retry+circuit-breaker, vision, tool-call
 - **ACP protocol** (JSON-RPC 2.0 over stdio) — interoperable with dsh's `dsh-jsonrpc-agent` (P11-4)
-- **dsh-adapter** — load dsh (DeepSeek Harness) TS plugins directly via JSON-RPC over stdio (P13, in progress)
-- **Plugin Registry + Bundle** for distributed plugin discovery and reproducible installs (P11-6/8, P12-5/7)
-- **DAG task orchestration** with topological sort, dependency validation, short-circuit on failure (P12-9)
-- **Vibe Coding artifact viewer** — auto-detect and render 10 artifact kinds (HTML, SVG, JSON, etc.) (P11-7)
-- **Code Mode** — run LLM-generated WAT/WASM in wasmtime sandbox (4-layer defense: fuel / epoch / memory / fs) (P2.6)
-- **Landlock sandbox** — kernel-enforced fs/process restrictions on Linux (P10)
-- **TUI dashboard** — ratatui-based session/event viewer (P3.9)
-- **Python SDK** (`mah-py`) — subprocess bridge to `mah` CLI (P11-3)
-- **CI/CD** — Gitee Go + GitHub Actions, tag-triggered publish to crates.io (P12-5)
+
+### Core framework (P7-P11)
+- **Cordis-style DI** — Context / Service / Plugin / TypedKey / Disposable framework
+- **Plugin system** — registry + inventory + macro + bundle (lockfile install)
+- **Tool execution pipeline** — pre-execute / approval / execute / post-execute / log (4-event waterfall)
+- **Approval service** — oneshot / TUI / HTTP pre-tool approval
+- **Code Mode** — WAT/WASM in wasmtime sandbox (4-layer defense: fuel / epoch / memory / fs)
+- **Landlock sandbox** — kernel-enforced fs/process restrictions on Linux ≥ 5.13
+- **DAG task orchestration** — Kahn topo + short-circuit on failure
+
+### Production extensions (P11-P12)
+- **HTTP server** (salvo 0.96) — OpenAPI export, SSE, REST + JSON-RPC endpoints
+- **TUI dashboard** — ratatui-based session/event viewer
+- **Vibe Coding Artifact viewer** — auto-detect and render 10 artifact kinds (HTML / SVG / JSON / etc.)
+- **Plugin Registry** (npm-style) + **Bundle** (lockfile install) for distributed plugin discovery
+- **dsh-adapter** — load dsh (DeepSeek Harness) TS plugins directly via JSON-RPC over stdio (P13)
+- **Python SDK** (`mah-py`) — subprocess bridge to `mah` CLI
+- **CI/CD** — Gitee Go + GitHub Actions, tag-triggered publish to crates.io
+
+### P14+P15 增量 (本 batch 焦点)
+- **`ctx.subprocess` / `ctx.shell`** — process spawn + shell exec trait abstraction (P14.1-2)
+- **`ctx.compaction` / `ctx.context`** — context auto-summarize + context plugin (P14.4, P14.10)
+- **`ctx.lsp` / `ctx.web` / `ctx.skill`** — LSP client wrapper + web search/fetch + skill catalog (P14.3, P14.5, P14.6)
+- **`ctx.todo` / `ctx.plan`** — multi-step work tracker + plan-mode (P14.7)
+- **`ctx.session.fork()` / `TitleProvider` / `GoalStore`** — session lifecycle (P14.8)
+- **`ctx.profile` / `ctx.guard`** — profile system + loop-hygiene guard (P14.9, P14.11)
+- **`ctx.workflows`** — workflow engine (YAML + DAG + parallel) with `mah workflow run/validate/list` (P15.4)
+- **`ctx.webhookRuntime`** — webhook ingress with HMAC-SHA256 verification (P15.3)
+- **`ctx.settings` / `ctx.credentials`** — user settings + env/`.env`/OS keyring providers (P15.5)
+- **Self-modification** — agent inspects/mounts its own plugins at runtime (P15.6)
+- **Hook bridges** — Claude Code wire-protocol, `mah hook install/run/list` (P15.7)
+
+> 完整 P14+P15 列表 (24 sub-tasks) 见 [docs/en/dsh-feature-parity-table.md](docs/en/dsh-feature-parity-table.md) §2 / §5-§9.
 
 ---
 
 ## 📊 Status vs [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 
-ma-harness.rs is a from-scratch Rust rewrite of dsh v0.1, targeting 100% behavioral parity at the snapshot/fixture level, plus production extensions. Last verified 2026-08-20.
+ma-harness.rs is a from-scratch Rust rewrite of dsh v0.1, targeting 100% behavioral parity at the snapshot/fixture level, plus production extensions. Last verified **2026-09-06**.
 
 > **📖 [Full dsh ↔ ma-harness Feature Parity →](docs/en/dsh-feature-parity.md)**
-> Complete comparison: 8 dsh core packages, 14 capability seams, 3 event domains, 13-step turn flow,
-> 5 shipped profiles, tool execution pipeline, distribution surfaces, conformance parity,
-> ma-harness extensions, and P13+ plans. 25KB doc with dsh doc links + ma-harness crate links.
+> Complete comparison: 8 dsh core packages, 19 capability seams, 3 event domains, 13-step turn flow,
+> 11 profiles & bundles, tool execution pipeline, 6 distribution surfaces, conformance parity,
+> 13 ma-harness extensions, 12 P15+ deferred items. 25KB doc with dsh doc links + ma-harness crate links.
 
-### Behavioral equivalence (P11-1 / P11-2)
+> **📊 [Compact parity table →](docs/en/dsh-feature-parity-table.md)**
+> 12 sections, 114 items, status column + diff notes. Current score: **75% done (85/114 ✅, 1 🔄, 3 ⚠️, 23 ❌, 2 ➖)**.
+
+### Behavioral equivalence
 
 | Test suite | dsh v0.1 | ma-harness.rs | Status |
 |---|---|---|---|
 | **dsh acp-snapshot** (9 fixture) | 100% | **100% (9/9)** | ✅ parity |
 | **dsh_synthetic** (7 fixture, shape conversion) | n/a | **100% (7/7)** | ✅ parity |
 | **smoke** (8 fixture, framework consistency) | n/a | 62.5% (5/8) | ✅ by design (3 expected failures) |
-| Terminal Bench 2.1 | 87.9% | not run | ⏳ business-driven (P11-2.5+) |
+| Terminal Bench 2.1 | 87.9% | not run | ⏳ business-driven (P11-2.5+, needs LLM API key) |
 | Toolathlon-Verified | 74.1% | not run | ⏳ business-driven |
 | DSBench-FullStack | 71.1% | not run | ⏳ business-driven |
 
@@ -66,57 +93,82 @@ Conformance: 9 / 9 passed (100.0%) in 1ms
 | Plugin system | ✅ | ✅ (extended) | cordis + inventory + macro | ✅ done |
 | Approval service (user pre-tool) | ✅ | ✅ (P7-2/3) | oneshot + TUI + HTTP | ✅ done |
 | TUI dashboard | partial | ✅ (P3.9) | ratatui | ✅ done |
-| HTTP server (salvo) | n/a | ✅ (P6) | OpenAPI export, SSE | ✅ done |
-| **Plugin Registry** (npm-style) | n/a | ✅ (P11-6 / P12-5) | search/export/merge | ✅ done |
-| **Bundle** (lockfile install) | n/a | ✅ (P11-8 / P12-7) | reproducible | ✅ done |
-| **Vibe Coding Artifact viewer** | n/a | ✅ (P11-7) | 10 kinds, terminal render | ✅ done |
-| **DAG orchestration** | n/a | ✅ (P12-9) | Kahn topo + short-circuit | ✅ done |
-| **Multi-modal vision** | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic | ✅ done |
-| **Retry + Circuit Breaker** | n/a | ✅ (P12-2) | exponential backoff + jitter | ✅ done |
-| **Wasm sandbox** (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4-layer defense | ✅ done |
-| **Landlock sandbox** (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) | ✅ done |
+| HTTP server (salvo 0.96) | n/a | ✅ (P6) | OpenAPI export, SSE | ✅ done |
+| Workflow engine (YAML + DAG + parallel) | n/a | ✅ (P15.4) | 3 engines + `mah workflow run/validate/list` | ✅ done |
+| Webhook (HMAC-SHA256) | n/a | ✅ (P15.3) | GitLab / Stripe / generic | ✅ done |
+| Settings + Credentials | n/a | ✅ (P15.5) | hot-reload + env / .env / keyring | ✅ done |
+| Self-modification | n/a | ✅ (P15.6) | `mah self` list/inspect/enable/disable/audit | ✅ done |
+| Hook bridges (Claude Code) | n/a | ✅ (P15.7) | wire-protocol + adapter | ✅ done |
+| Subprocess service | partial | ✅ (P14.1) | trait + StdioConfig + ChildHandle | ✅ done |
+| Shell service | n/a | ✅ (P14.2) | tokio::Command + plugin-bash | ✅ done |
+| LSP client | n/a | ✅ (P14.5) | `mah lsp request` / `info` | ✅ done |
+| Web search/fetch | n/a | ✅ (P14.6) | Brave + DDG + HttpFetch | ✅ done |
+| Todo + Plan | n/a | ✅ (P14.7) | state-machine + 5-status enum | ✅ done |
+| Session fork + GoalStore + TitleProvider | n/a | ✅ (P14.8) | EventForker + heuristic titles | ✅ done |
+| Profile system (CLI) | n/a | ✅ (P14.9) | `mah profile list/show/validate/info` | ✅ done |
+| Guard (loop-hygiene) | n/a | ✅ (P14.11) | `mah guard` demo/observe/chain-info/reset | ✅ done |
+| Plugin Registry (npm-style) | n/a | ✅ (P11-6 / P12-5) | search/export/merge | ✅ done |
+| Bundle (lockfile install) | n/a | ✅ (P11-8 / P12-7) | reproducible | ✅ done |
+| Vibe Coding Artifact viewer | n/a | ✅ (P11-7) | 10 kinds, terminal render | ✅ done |
+| DAG orchestration | n/a | ✅ (P12-9) | Kahn topo + short-circuit | ✅ done |
+| Multi-modal vision | n/a | ✅ (P11-5/9, P12-8) | OpenAI + Anthropic | ✅ done |
+| Retry + Circuit Breaker | n/a | ✅ (P12-2) | exponential backoff + jitter | ✅ done |
+| Wasm sandbox (Code Mode) | n/a | ✅ (P2.6) | wasmtime + 4-layer defense | ✅ done |
+| Landlock sandbox (Linux kernel) | n/a | ✅ (P10) | ABI V1 (kernel ≥ 5.13) | ✅ done |
 | Python SDK | n/a | ✅ (P11-3, mah-py 0.1.1) | subprocess + JSON | ✅ done |
-| crates.io publish | n/a | ✅ (P12-5) | 6 crates at 0.1.0 | ✅ done |
+| crates.io publish | n/a | ✅ (P12-5) | 24 crates at 0.1.0/0.1.1 | ✅ done |
 | LLM backends | 1 (Deepseek) | 4 (OpenAI / Anthropic / Deepseek / Stub) | | ✅ done |
-| Language | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.95 + tonic 0.12 | ✅ done |
+| Language | TypeScript | **Rust 1.94 (edition 2024)** | salvo 0.96 + tonic 0.12 | ✅ done |
 
-### 🚧 Future / Planned (P13+)
+### 🚧 Future / Planned (P15.8+)
 
-| Item | Phase | Why deferred | Blocker | Plan |
+| Item | Phase | Why deferred | Effort | Plan |
 |---|---|---|---|---|
-| **Terminal Bench 2.1** parity | P11-2.5+ | Needs real LLM API key + dataset (87.9% baseline target) | external (Deepseek API key + dataset access) | business-driven, P11-2.5 docs in `docs/dsh-benchmark-report.md` |
-| **Toolathlon-Verified** parity | P11-2.5+ | Same as above (74.1% baseline target) | external | business-driven |
-| **DSBench-FullStack** parity | P11-2.5+ | Same as above (71.1% baseline target) | external | business-driven |
-| **dsh → ma-harness migration tool** | P13 | ~~Tool to convert dsh plugins/fixtures~~ | replaced by P13 **dsh-adapter** (load dsh plugins directly, no conversion needed) | see [design/dsh-adapter.md](docs/en/design/dsh-adapter.md) |
-| **Cargo workspaces** integration | P13 | `cargo install cargo-workspaces` not done yet (manual script used) | install + verify | P13, 10-min task |
-| **PyO3 v2** (replace subprocess) | P13+ | v1 (subprocess) works, v2 (PyO3) gives 10-100x speedup | needs re-design of mah-py API | P13+, low priority |
-| **WASI preview2** support | P13+ | wasmtime 27 has partial WASI, full preview2 needs upgrade | wasmtime 28+ release | P13+, low priority |
-| **Plugin Registry public deployment** | P13+ | P12-5 `export` works, need GitHub Pages hosting | GH Pages config | P13, 30-min task |
-| **ACP v3** (when dsh ships) | P13+ | wait for dsh v0.2 protocol spec | external | when dsh ships |
-| **crates.io 0.1.0 release** | P12-5 | workflow + secrets in place, waiting for token | `CRATES_IO_TOKEN` for GH + Gitee | first push tag `v0.1.0` |
-| **mah-py 0.1.1 → pypi.org production** | P12-4 | Currently on test.pypi.org only | pypi.org token (separate from test.pypi.org) | business verifies test.pypi.org first |
-| **Cross-platform binary releases** (Windows / macOS / Linux) | P13+ | mah.exe builds locally; need cross-compile + GH release workflow | cross-compile toolchain (cargo-cross / GitHub Actions matrix) | P13 |
-| **dsh-adapter P13** (load dsh TS plugins via JSON-RPC) | **P13 (current)** | design done, 5 phases × 1 week to implement | business schedule | 6-week sprint, see [docs/en/design/dsh-adapter.md](docs/en/design/dsh-adapter.md) |
+| **Web UI** (Leptos WASM or React + REST + SSE) | P15.1 / P15.8+ | TUI already works; Web UI is opt-in for browser users | 8-12 weeks · 2 engineers | `mah web` opens browser UI, live session + tool results + approval |
+| **PTY backend** (`ctx.terminals`) | P15.2 | TUI + workflow shell-step runner cover most use cases | 2 weeks · 1 engineer | `portable-pty` + session_id→pty_handle persistence |
+| **Profile system** (full dsh parity, file-based) | P15+ | CLI `mah profile` works; full `~/.ma-harness/profiles/<name>/cordis.yml` system pending | 1-2 weeks | per-profile cordis.yml + `--profile <name> --patch` |
+| **Subagent** (formal `ctx.subagent` trait) | P16.2 | `plugin-subagent` works but no formal Service trait | 2 weeks · 1 engineer | `SubagentService` + Local/Remote providers + `delegate` tool |
+| **E2B cloud sandbox** | P16.1 | Landlock local-only; cloud sandbox adds cost infra | 2 weeks · 1 engineer | `ma-harness-sandbox-e2b` + `MA_HARNESS_SANDBOX=e2b` env |
+| **Agent Teams** (`ctx.agentTeams`) | P16.3 | experimental in dsh; high design risk | 4 weeks · 1 engineer | Team + Roster + TaskBoard + Mailbox + `team_create/join/disband` |
+| **Remote sandbox** (Firecracker / gVisor / Hypervisor) | P16.4 | production-grade isolation needs kernel-level infra | 8 weeks · 2 engineers | `sandbox_provider.yaml` + per-backend crates |
+| **Distributed session store** (Redis / PostgreSQL) | P16.5 | sqlite works for single-node; distributed needs schema migration | 4 weeks · 1 engineer | `SessionStore` trait + Redis Streams + PostgreSQL JSONB |
+| **TypeScript SDK** (`@ma-harness/sdk`) | P17.1 | dsh-adapter covers TS interop for now | 6 weeks · 1 engineer | npm package + JSON-RPC 2.0 over stdio/HTTP |
+| **Identity & permissions** (Branding, ACLs) | P17.2 | no formal identity in ma-harness yet | 3 weeks · 1 engineer | `mah identity create/list` + `permission.yaml` per identity |
+| **12+ LSP languages** (full ecosystem) | P17.3 | P14.5 ship rust-analyzer + typescript-language-server + pyright stubs | ongoing | per-language LSP server adapters |
+| **Production tooling** (`mah dashboard / trace / cost`) | P17.4 | debugging via TUI + logs works for dev | ongoing | OpenTelemetry export + cost tracking |
+| **Real-benchmark conformance** (Terminal Bench 2.1 / Toolathlon / DSBench) | P17.5 | dsh acp-snapshot 9/9 ✅; real-bench needs LLM API key | blocked | business provides LLM API key + dataset access |
 
-### Test coverage
+> Detailed effort / success criteria in [_local/dsh-planning/dsh-development-plan.en.md](_local/dsh-planning/dsh-development-plan.en.md).
+
+### Test coverage (~1500 tests, 0 failed)
 
 ```
-638 tests, 0 failed
-  ma-harness-core:           107
-  ma-harness-cordis:          81
-  ma-harness-model:           71  (incl. vision 17 + retry 13 + vision_plugin 4)
-  ma-harness-server:          53
-  ma-harness-conformance:     44 + 13 smoke
-  ma-harness-tui:             35
-  ma-harness-registry:        25
-  ma-harness-bundle:          18
-  ma-harness-artifact:        26
-  ma-harness-dag:             14
-  ma-harness-cli:             21 + 10 acp integration
-  ma-harness-seam:            11
-  ma-harness-sandbox:          6
-  ma-harness-plugin-*:        47
-  mah-py (pytest):            16
+~1500 tests across 36 first-party Rust crates + mah-py (Python)
+
+Top contributors:
+  ma-harness-core:                ~107
+  ma-harness-cordis:              ~81
+  ma-harness-conformance:         44 + 13 smoke
+  ma-harness-model:               ~71  (incl. vision 17 + retry 13)
+  ma-harness-server:              53
+  ma-harness-cli:                 85 + 10 acp integration
+  ma-harness-tui:                 35
+  ma-harness-registry:            25
+  ma-harness-artifact:            26
+  ma-harness-bundle:              18
+  ma-harness-dag:                 14
+  ma-harness-seam:                11
+  ma-harness-sandbox:              6
+  ma-harness-plugin-*:            47
+  mah-py (pytest):                16
+  P14 + P15.4-15.7 sub-crates:   ~600  (subprocess / shell / skill / compaction / lsp / web /
+                                      todo / plan / profile / context / guard / workflow /
+                                      settings / credentials / webhook / hooks / self-modification)
+  Other (smoke / conformance / dsh-adapter / proto / session / demo / web-ui / terminal):  ~200
+
+  1 known flake: ma-harness-settings::layered_settings_store_env_only_keys_added
+                 passes with --test-threads=1; pre-existing parallel-test contamination
+                 (std::env::set_var is process-wide). Not a regression.
 ```
 
 ---
@@ -275,29 +327,104 @@ mah version
 mah plugins
 mah run "fix the failing tests"
 mah acp serve    # JSON-RPC 2.0 over stdio
+
+# P14 / P15 subcommands:
+mah compaction run --input events.jsonl
+mah lsp request --server rust-analyzer --method textDocument/hover --params '{...}'
+mah web search --query "rust async" --provider brave
+mah web fetch --url https://example.com
+mah todo list
+mah plan list
+mah profile list
+mah context new --source file
+mah guard observe --chain-id main
+mah workflow run ci.yaml
+mah workflow validate ci.yaml
+mah workflow list
+mah settings get api_key
+mah self list
+mah hook install claude-code
+mah hook run --event PreToolUse
 ```
 
 ---
 
-## 🏗️ Architecture (14 crates)
+## 🏗️ Architecture (36 first-party Rust crates + mah-py)
+
+### Core (P7-P10) — 9 crates
 
 ```
 crates/
-├── ma-harness-cordis       (P7 framework)            ✅ crates.io
-├── ma-harness-seam         (P8 plugin facade)        ✅ crates.io
-├── ma-harness-plugin-macro (P7 proc-macro)          ✅ crates.io
-├── ma-harness-core         (P7-10 core types)       ✅ crates.io
-├── ma-harness-model        (P8-9 LLM adapter)       ✅ crates.io
-├── ma-harness-code         (P2.6 wasm sandbox)      ✅ crates.io
-├── ma-harness-server       (P6 salvo HTTP)          internal
-├── ma-harness-cli          (P9 binary)              internal
-├── ma-harness-conformance  (P11 dsh fixtures)       internal
-├── ma-harness-tui          (P3.9 ratatui)           internal
-├── ma-harness-sandbox      (P10 landlock)           internal
-├── ma-harness-dag          (P12-9 DAG)              internal
-├── ma-harness-registry     (P11-6 plugin registry)  internal
-├── ma-harness-bundle       (P11-8 lockfile)         internal
-└── ma-harness-artifact     (P11-7 artifact viewer)  internal
+├── ma-harness-cordis         (P7  DI framework)               ✅ crates.io
+├── ma-harness-seam           (P8  plugin facade)              ✅ crates.io
+├── ma-harness-plugin-macro   (P7  proc-macro)                 ✅ crates.io
+├── ma-harness-core           (P7-10 core types)               ✅ crates.io
+├── ma-harness-model          (P8-9 LLM adapter, 4 backends)  ✅ crates.io
+├── ma-harness-code           (P2.6 wasm sandbox)              ✅ crates.io
+├── ma-harness-sandbox        (P10 landlock / seatbelt / stub) ✅ crates.io
+├── ma-harness-proto          (gRPC stubs via tonic)           internal
+└── ma-harness-session        (P14.8 fork / goals / title)     internal
+```
+
+### P11-P12 features — 7 crates
+
+```
+├── ma-harness-registry       (P11-6 plugin registry, npm-style) ✅ crates.io
+├── ma-harness-bundle         (P11-8 lockfile install)          ✅ crates.io
+├── ma-harness-artifact       (P11-7 vibe coding viewer)        ✅ crates.io
+├── ma-harness-dag            (P12-9 DAG orchestration)         ✅ crates.io
+├── ma-harness-conformance    (P11 dsh fixtures, 9/9 pass)      internal
+├── ma-harness-server         (P6 salvo HTTP, 0.96)              internal
+└── ma-harness-tui            (P3.9 ratatui)                     internal
+```
+
+### P14 ctx.* seams — 10 crates
+
+```
+├── ma-harness-subprocess     (P14.1  ctx.subprocess)            internal
+├── ma-harness-shell          (P14.2  ctx.shell)                 internal
+├── ma-harness-skill          (P14.3  ctx.skill)                 internal
+├── ma-harness-compaction     (P14.4  ctx.compaction)            internal
+├── ma-harness-lsp            (P14.5  ctx.lsp)                   internal
+├── ma-harness-web            (P14.6  ctx.web, search/fetch)     internal
+├── ma-harness-todo           (P14.7  ctx.todo + ctx.plan)       internal
+├── ma-harness-profile        (P14.9  ctx.profile)               internal
+├── ma-harness-context        (P14.10 ctx.context)               internal
+└── ma-harness-guard          (P14.11 loop-hygiene guard)        internal
+```
+
+### P15 features — 6 crates
+
+```
+├── ma-harness-workflow       (P15.4  YAML + DAG + parallel)     internal
+├── ma-harness-webhook        (P15.3  HMAC-SHA256 ingress)       internal
+├── ma-harness-settings       (P15.5  user settings, hot-reload) internal
+├── ma-harness-credentials    (P15.5  env/.env/keyring)          internal
+├── ma-harness-self-modification (P15.6 runtime plugin mount)   internal
+└── ma-harness-hooks          (P15.7  Claude Code wire-protocol) internal
+```
+
+### Misc / P15.1-2 / demo — 4 crates
+
+```
+├── ma-harness-terminal       (P15.2  PTY backend, future)      internal
+├── ma-harness-web-ui         (P15.1  Web UI, future)            internal
+├── ma-harness-demo           (CLI binary, integration demo)    internal
+└── ma-harness-cli            (CLI binary, all 14 subcommands)  internal
+```
+
+### First-party plugin (P13) — 1 plugin
+
+```
+plugins/
+└── ma-harness-plugin-dsh-adapter   (P13 load dsh TS plugins via JSON-RPC stdio)
+```
+
+### Python SDK
+
+```
+crates/
+└── mah-py                    (Python SDK, P11-3)                ✅ test.pypi.org
 ```
 
 See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full dependency map.
@@ -306,15 +433,13 @@ See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full de
 
 ## 📚 Documentation
 
-- **[Docs index](docs/README.md)** — entry point for all 18 markdown docs
-- **[Architecture overview](docs/ma-harness-arch-map.md)** — 14-crate dependency map
-- **[dsh feature parity](docs/en/dsh-feature-parity.md)** — full dsh ↔ ma-harness comparison (8 dsh core packages, 14 capability seams, 5 profiles, conformance, P13+ plans)
-- **[dsh feature parity table](docs/en/dsh-feature-parity-table.md)** — markdown table form with status column, gap analysis vs dsh
-- **[Decision log](docs/decision-log.md)** — 38 design decisions (P1-P12)
-- **[P11 final report](docs/p11-final-report.md)** — dsh parity achievement
-- **[P12 final report](docs/p12-final-report.md)** — full feature completion
+- **[Docs index](docs/README.md)** — entry point for all markdown docs
+- **[Architecture overview](docs/ma-harness-arch-map.md)** — 36-crate dependency map
+- **[dsh feature parity](docs/en/dsh-feature-parity.md)** — full dsh ↔ ma-harness comparison (12 sections, prose form)
+- **[dsh feature parity table](docs/en/dsh-feature-parity-table.md)** — compact table form, status column, 114 items
+- **[Development plan](_local/dsh-planning/dsh-development-plan.en.md)** — P14-P17+ 4-phase roadmap (local-only)
+- **[Decision log](docs/decision-log.md)** — design decisions
 - **[dsh benchmark report](docs/dsh-benchmark-report.md)** — 9/9 = 100% dsh acp-snapshot
-- **[Roadmap P11](docs/roadmap-phase-11.md)** — dsh alignment plan
 - **[Conformance design](docs/conformance-design.md)** — fixture-based testing
 - **[Python SDK README](crates/mah-py/README.md)** — `mah-py` quick start
 
@@ -326,7 +451,7 @@ See [`docs/ma-harness-arch-map.md`](docs/ma-harness-arch-map.md) for the full de
 |---|---|---|
 | **GitHub** | https://github.com/ma-harness/ma-harness.rs | primary mirror (CI runs here) |
 | **Gitee** | https://gitee.com/yifenma/ma-harness.rs | primary source (CN) |
-| **crates.io** | https://crates.io/crates/ma-harness-model | published crates (6 total) |
+| **crates.io** | https://crates.io/crates/ma-harness-model | published crates (24 total) |
 | **PyPI** | https://test.pypi.org/project/mah-py/ | Python SDK (0.1.1, test) |
 
 ---
@@ -364,7 +489,7 @@ For new features, add a fixture to `crates/ma-harness-conformance/fixtures/` and
 >
 > **📢 Disclaimer**: this project is **for learning and research only**.
 > Many implementation details were drafted with LLM assistance (including
-> this README's questionable humor), but **every line has been through 641
+> this README's questionable humor), but **every line has been through ~1500
 > cargo tests**. Use with confidence.
 >
 > Bugs? Feature requests? [Open an issue](https://github.com/ma-harness/ma-harness.rs/issues)
